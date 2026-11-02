@@ -128,13 +128,17 @@ body {
 }
 
 .mehedi-primary-btn {
-  background: linear-gradient(135deg, #8b5cf6, #6366f1);
+  background: #0d74e7;
   color: #fff;
   border: none;
   border-radius: 8px;
   padding: 6px 14px;
   font-weight: 600;
   cursor: pointer;
+}
+
+.mehedi-primary-btn:hover {
+  background: #1b82f6;
 }
 
 .shihab-sec-head {
@@ -182,7 +186,7 @@ body {
 }
 
 .mehedi-count {
-  background: linear-gradient(135deg, #8b5cf6, #6366f1);
+  background: #0d74e7;
   color: #ffffff;
   border-radius: 10px;
   padding: 1px 8px;
@@ -305,7 +309,7 @@ body {
 
 .mehedi-wide-btn {
   width: 100%;
-  background: linear-gradient(135deg, #8b5cf6, #6366f1);
+  background: #0d74e7;
   color: #fff;
   border: none;
   border-radius: 8px;
@@ -314,15 +318,31 @@ body {
   cursor: pointer;
 }
 
+.mehedi-wide-btn:hover {
+  background: #1b82f6;
+}
+
 .mehedi-hint {
-  margin-top: 7px;
-  text-align: center;
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
   font-size: 11px;
   color: #848ca6;
 }
 
+.shihab-author-avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1.5px solid #2b4c7e;
+  flex-shrink: 0;
+}
+
 .mehedi-hint a {
-  color: #a5b4fc;
+  color: #60a5fa;
   text-decoration: none;
   font-weight: 600;
 }

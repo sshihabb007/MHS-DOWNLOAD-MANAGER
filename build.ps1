@@ -1,16 +1,20 @@
+param(
+    [string]$OutDir = ''
+)
 $ErrorActionPreference = 'Stop'
-$shihabAppVersion = '1.0.2'
+$shihabAppVersion = '1.0.3'
 $shihabProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$mehediBinDir = Join-Path $shihabProjectRoot 'bin'
+$mehediBinDir = if ([string]::IsNullOrWhiteSpace($OutDir)) { Join-Path $shihabProjectRoot 'bin' } else { $OutDir }
 $shihabObjDir = Join-Path $shihabProjectRoot 'obj'
 $shihabAssetsDir = Join-Path $shihabProjectRoot 'assets'
 $mehediIconIco = Join-Path $shihabAssetsDir 'mdm.ico'
 $shihabIconPng = Join-Path $shihabAssetsDir 'mdm.png'
+$shihabAuthorJpg = Join-Path $shihabAssetsDir 'author_shihab.jpg'
 
 New-Item -ItemType Directory -Force -Path $mehediBinDir, $shihabObjDir | Out-Null
 
-if (-not (Test-Path $mehediIconIco) -or -not (Test-Path $shihabIconPng)) {
-    throw "Required official icon assets missing in $shihabAssetsDir"
+if (-not (Test-Path $mehediIconIco) -or -not (Test-Path $shihabIconPng) -or -not (Test-Path $shihabAuthorJpg)) {
+    throw "Required official icon or author portrait assets missing in $shihabAssetsDir"
 }
 
 # 1. Compile x64 mdm.exe (MHS Download Manager) using .NET Framework 4.8 csc.exe with embedded Win32 & managed icons
@@ -37,6 +41,7 @@ $shihabSources = @(
     "/win32icon:$mehediIconIco" `
     "/resource:$mehediIconIco,ShihabMehediIDM.mdm_icon.ico" `
     "/resource:$shihabIconPng,ShihabMehediIDM.mdm_icon.png" `
+    "/resource:$shihabAuthorJpg,ShihabMehediIDM.author_shihab.jpg" `
     "/out:$mehediOutExe" `
     @shihabSources
 
@@ -90,7 +95,8 @@ try {
         'extension/shihab_background.js',
         'extension/shihab_popup.html',
         'extension/mehedi_popup.js',
-        'extension/images/shihab_logo128.png'
+        'extension/images/shihab_logo128.png',
+        'extension/images/author_shihab.jpg'
     )) {
         if ($shihabZipNames -notcontains $mehediExpected) {
             throw "Installer payload zip missing required entry: $mehediExpected"
@@ -100,7 +106,7 @@ try {
     $mehediPayloadInspect.Dispose()
 }
 
-# 3. Compile x64 Setup Wizard (MHS-Download-Manager-Setup-1.0.2-x64.exe)
+# 3. Compile x64 Setup Wizard (MHS-Download-Manager-Setup-1.0.3-x64.exe)
 Get-ChildItem -Path $mehediBinDir -Filter 'MHS-Download-Manager-Setup-*-x64.exe' -ErrorAction SilentlyContinue | Remove-Item -Force
 $mehediSetupOutExe = Join-Path $mehediBinDir "MHS-Download-Manager-Setup-$shihabAppVersion-x64.exe"
 $shihabInstallerSrc = Join-Path $shihabProjectRoot 'src\installer\ShihabSetupWizard.cs'

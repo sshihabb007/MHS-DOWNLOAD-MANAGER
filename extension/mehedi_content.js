@@ -65,7 +65,7 @@
   let mehediLastSelectedVideoEl = null;
   let shihabHoveredUntilMs = 0;
   let mehediPointerInsideBar = false;
-  let shihabLastMeasuredFullBarW = 152;
+  let shihabLastMeasuredFullBarW = 178;
   let mehediSubframeHoveredUntilMs = 0;
   let shihabTopFrameActiveUntilMs = 0;
   let mehediLastTopFrameNotifyMs = 0;
@@ -1453,6 +1453,16 @@
       shihabUniqueQualities.push(shihabCandidate);
     }
 
+    const mehediRawDedupe = [];
+    const shihabSeenRawUrls = new Set();
+    for (const mehediRawItem of mehediCombined) {
+      if (!mehediRawItem || !mehediRawItem.shihabStreamUrl) continue;
+      if (shihabSeenRawUrls.has(mehediRawItem.shihabStreamUrl)) continue;
+      shihabSeenRawUrls.add(mehediRawItem.shihabStreamUrl);
+      mehediRawDedupe.push(mehediRawItem);
+    }
+    shihabUniqueQualities.mehediRawSniffed = mehediRawDedupe;
+
     return shihabUniqueQualities;
   }
 
@@ -1680,52 +1690,38 @@
           display: inline-flex;
           flex-direction: column;
           align-items: flex-end;
-          font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+          font-family: 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
         }
         .shihab-bar {
           display: inline-flex;
           align-items: center;
-          gap: 4px;
-          background: linear-gradient(135deg, rgba(15, 23, 42, 0.56), rgba(30, 41, 59, 0.60));
-          border: 1px solid rgba(148, 163, 184, 0.36);
-          border-radius: 6px;
-          padding: 3px 6px;
-          color: rgba(248, 250, 252, 0.92);
-          font-size: 11.5px;
+          background: rgba(18, 20, 26, 0.86);
+          border: 1px solid rgba(255, 255, 255, 0.14);
+          border-radius: 999px;
+          padding: 4px 8px 4px 11px;
+          color: #f8fafc;
+          font-size: 12px;
           font-weight: 600;
           line-height: 1.2;
-          box-shadow: 0 3px 10px rgba(0, 0, 0, 0.25);
-          backdrop-filter: blur(6px);
-          -webkit-backdrop-filter: blur(6px);
-          opacity: 0.62;
-          transition: opacity 0.18s ease, background 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+          box-shadow: 0 4px 16px rgba(0, 0, 0, 0.48);
+          backdrop-filter: blur(10px);
+          -webkit-backdrop-filter: blur(10px);
+          opacity: 0.84;
+          transition: opacity 0.16s ease, background 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
           user-select: none;
         }
         .shihab-bar:hover,
         .shihab-bar.mehedi-open {
-          opacity: 0.96;
-          border-color: rgba(96, 165, 250, 0.85);
-          background: linear-gradient(135deg, rgba(15, 23, 42, 0.90), rgba(30, 41, 59, 0.93));
-          box-shadow: 0 6px 20px rgba(0, 0, 0, 0.52);
-          color: #f8fafc;
+          opacity: 1;
+          border-color: rgba(255, 255, 255, 0.24);
+          background: rgba(20, 23, 30, 0.96);
+          box-shadow: 0 8px 24px rgba(0, 0, 0, 0.65);
         }
         .shihab-bar.shihab-compact:not(:hover):not(.mehedi-open) {
-          padding: 4px 5px;
-          gap: 0;
+          padding: 4px 7px;
         }
-        .shihab-bar.shihab-compact:not(:hover):not(.mehedi-open) .shihab-count,
-        .shihab-bar.shihab-compact:not(:hover):not(.mehedi-open) .mehedi-sep,
-        .shihab-bar.shihab-compact:not(:hover):not(.mehedi-open) .mehedi-retrack,
-        .shihab-bar.shihab-compact:not(:hover):not(.mehedi-open) .mehedi-expand-btn,
-        .shihab-bar.shihab-compact:not(:hover):not(.mehedi-open) .shihab-close {
+        .shihab-bar.shihab-compact:not(:hover):not(.mehedi-open) .mehedi-pill-label {
           display: none;
-        }
-        .mehedi-logo {
-          width: 17px;
-          height: 17px;
-          flex-shrink: 0;
-          object-fit: contain;
-          display: block;
         }
         .mehedi-btn {
           background: transparent;
@@ -1735,182 +1731,180 @@
           cursor: pointer;
           display: inline-flex;
           align-items: center;
-          gap: 5px;
-          padding: 1px 2px;
+          gap: 7px;
+          padding: 1px 0;
           white-space: nowrap;
+          outline: none;
         }
-        .mehedi-btn:hover { color: #93c5fd; }
-        .mehedi-retrack {
-          background: rgba(56, 189, 248, 0.14);
-          border: 1px solid rgba(56, 189, 248, 0.40);
-          border-radius: 4px;
-          color: #bae6fd;
+        .mehedi-shield-icon {
+          width: 14px;
+          height: 14px;
+          flex-shrink: 0;
+          display: block;
+          color: #1d8cf8;
+        }
+        .mehedi-pill-label {
+          color: #f8fafc;
           font-size: 12px;
           font-weight: 700;
-          line-height: 1;
-          padding: 2px 4px;
-          cursor: pointer;
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
-        }
-        .mehedi-retrack:hover {
-          background: rgba(56, 189, 248, 0.30);
-          border-color: #38bdf8;
-          color: #ffffff;
-        }
-        .mehedi-retrack.mehedi-spinning {
-          animation: shihabSpin360 0.38s linear infinite;
+          letter-spacing: 0.1px;
         }
         .shihab-count {
-          background: linear-gradient(135deg, rgba(37, 99, 235, 0.88), rgba(219, 39, 119, 0.88));
+          background: #0d74e7;
           color: #ffffff;
-          border-radius: 10px;
-          padding: 1px 6px;
-          font-size: 10px;
+          border-radius: 999px;
+          padding: 1.5px 8px;
+          font-size: 10.5px;
           font-weight: 700;
+          min-width: 22px;
+          text-align: center;
+          line-height: 1.25;
         }
-        .mehedi-sep {
-          width: 1px;
-          height: 13px;
-          background: rgba(148, 163, 184, 0.38);
-        }
-        .shihab-close {
-          color: #cbd5e1;
-          font-weight: 700;
-          font-size: 13.5px;
-          cursor: pointer;
-          padding: 0 2px;
-          line-height: 1;
-        }
-        .shihab-close:hover { color: #f87171; }
         .mehedi-toast {
           position: absolute;
-          top: calc(100% + 4px);
+          top: calc(100% + 6px);
           right: 0;
-          background: rgba(15, 23, 42, 0.94);
-          border: 1px solid rgba(96, 165, 250, 0.6);
-          border-radius: 6px;
-          padding: 5px 10px;
+          background: rgba(18, 20, 27, 0.96);
+          border: 1px solid rgba(255, 255, 255, 0.14);
+          border-radius: 8px;
+          padding: 6px 11px;
           font-size: 11px;
           font-weight: 600;
           white-space: nowrap;
-          box-shadow: 0 6px 18px rgba(0, 0, 0, 0.55);
-          backdrop-filter: blur(8px);
+          box-shadow: 0 8px 22px rgba(0, 0, 0, 0.62);
+          backdrop-filter: blur(10px);
           display: none;
           max-width: 380px;
           z-index: 2;
         }
         .mehedi-menu {
           position: absolute;
-          top: calc(100% + 4px);
+          top: calc(100% + 7px);
           right: 0;
-          background: rgba(11, 18, 34, 0.95);
-          border: 1px solid rgba(96, 165, 250, 0.7);
-          border-radius: 8px;
-          min-width: 340px;
-          max-width: 455px;
-          max-height: 315px;
+          background: rgba(21, 23, 29, 0.97);
+          border: 1px solid rgba(255, 255, 255, 0.10);
+          border-radius: 12px;
+          width: 356px;
+          max-width: calc(100vw - 16px);
+          max-height: 370px;
           overflow-y: auto;
           overflow-x: hidden;
-          box-shadow: 0 16px 34px rgba(0, 0, 0, 0.72);
-          backdrop-filter: blur(10px);
+          padding: 9px 6px 8px 6px;
+          box-shadow: 0 18px 42px rgba(0, 0, 0, 0.78);
+          backdrop-filter: blur(14px);
+          -webkit-backdrop-filter: blur(14px);
           display: none;
           z-index: 3;
         }
-        .mehedi-menu::-webkit-scrollbar { width: 6px; }
+        .mehedi-menu::-webkit-scrollbar { width: 5px; }
         .mehedi-menu::-webkit-scrollbar-thumb {
-          background: rgba(100, 116, 139, 0.65);
+          background: rgba(120, 130, 152, 0.45);
           border-radius: 4px;
         }
         .shihab-menu-head {
-          padding: 6px 10px;
-          background: rgba(30, 41, 59, 0.85);
-          border-bottom: 1px solid rgba(71, 85, 105, 0.75);
-          color: #cbd5e1;
-          font-size: 11px;
-          font-weight: 600;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 8px;
+          padding: 3px 10px 9px 10px;
+          margin-bottom: 3px;
+          border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+          color: #8b93a7;
+          font-size: 10.5px;
+          font-weight: 700;
+          letter-spacing: 0.65px;
+          text-transform: uppercase;
+        }
+        .mehedi-head-right {
+          display: inline-flex;
+          align-items: center;
+          gap: 7px;
+        }
+        .mehedi-mini-tool {
+          background: transparent;
+          border: none;
+          color: #7c8599;
+          font-size: 12px;
+          font-weight: 700;
+          line-height: 1;
+          padding: 1px 3px;
+          border-radius: 4px;
+          cursor: pointer;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+        }
+        .mehedi-mini-tool:hover {
+          color: #e2e8f0;
+          background: rgba(255, 255, 255, 0.08);
+        }
+        .mehedi-mini-tool.mehedi-spinning {
+          animation: shihabSpin360 0.38s linear infinite;
         }
         .shihab-item {
-          padding: 7px 10px;
-          color: #f1f5f9;
-          font-size: 11.5px;
-          font-weight: 500;
+          padding: 8px 10px;
+          border-radius: 8px;
+          color: #eef2f7;
+          font-size: 12.2px;
+          font-weight: 600;
           cursor: pointer;
-          border-bottom: 1px solid rgba(51, 65, 85, 0.68);
           display: flex;
           justify-content: space-between;
           align-items: center;
-          gap: 8px;
+          gap: 10px;
+          transition: background 0.12s ease;
         }
-        .shihab-item:last-child { border-bottom: none; }
-        .shihab-item:hover { background: rgba(37, 99, 235, 0.34); }
+        .shihab-item:hover {
+          background: rgba(255, 255, 255, 0.06);
+        }
+        .shihab-item:hover .shihab-dl-action {
+          color: #60a5fa;
+        }
         .mehedi-left-group {
           display: flex;
           align-items: center;
-          gap: 7px;
+          gap: 10px;
           min-width: 0;
           flex: 1;
         }
         .shihab-kind-pill {
-          font-size: 9.5px;
-          font-weight: 800;
-          letter-spacing: 0.4px;
-          padding: 2px 5px;
-          border-radius: 4px;
+          font-size: 10px;
+          font-weight: 700;
+          letter-spacing: 0.3px;
+          padding: 3px 7px;
+          border-radius: 5px;
           flex-shrink: 0;
           text-transform: uppercase;
+          text-align: center;
+          line-height: 1.15;
         }
         .mehedi-kind-video {
-          background: rgba(37, 99, 235, 0.28);
-          color: #93c5fd;
-          border: 1px solid rgba(96, 165, 250, 0.55);
+          background: rgba(29, 140, 248, 0.16);
+          color: #4db8ff;
         }
         .mehedi-kind-audio {
-          background: rgba(168, 85, 247, 0.26);
-          color: #e9d5ff;
-          border: 1px solid rgba(192, 132, 252, 0.55);
+          background: rgba(139, 92, 246, 0.20);
+          color: #a78bfa;
         }
         .mehedi-name {
+          color: #eef2f7;
+          font-weight: 600;
+          font-size: 12.2px;
+          line-height: 1.3;
+          min-width: 0;
           overflow: hidden;
           text-overflow: ellipsis;
-          white-space: nowrap;
-          color: #f8fafc;
-          font-weight: 500;
-          min-width: 0;
+          display: -webkit-box;
+          -webkit-line-clamp: 2;
+          -webkit-box-orient: vertical;
         }
-        .shihab-right-group {
-          display: flex;
-          align-items: center;
-          gap: 6px;
-          flex-shrink: 0;
-        }
-        .mehedi-res-pill {
-          background: rgba(16, 185, 129, 0.18);
-          color: #6ee7b7;
-          border: 1px solid rgba(52, 211, 153, 0.45);
-          border-radius: 4px;
-          padding: 1px 6px;
-          font-weight: 700;
-          font-size: 10.5px;
-          white-space: nowrap;
-        }
-        .mehedi-res-audio {
-          background: rgba(245, 158, 11, 0.18);
-          color: #fcd34d;
-          border: 1px solid rgba(251, 191, 36, 0.42);
-        }
-        .shihab-size-pill {
-          color: #94a3b8;
+        .shihab-dl-action {
+          color: #7c8599;
           font-weight: 600;
-          font-size: 10.5px;
+          font-size: 11.2px;
           white-space: nowrap;
-          min-width: 48px;
-          text-align: right;
+          flex-shrink: 0;
+          transition: color 0.12s ease;
         }
       `;
 
@@ -1923,45 +1917,46 @@
       const shihabPrimaryBtn = document.createElement("button");
       shihabPrimaryBtn.className = "mehedi-btn";
       shihabPrimaryBtn.type = "button";
-      shihabPrimaryBtn.title = "Download selected video with MHS Download Manager";
+      shihabPrimaryBtn.title = "Select quality or download video with MHS Download Manager";
 
-      const mehediLogoImg = document.createElement("img");
-      mehediLogoImg.className = "mehedi-logo";
-      mehediLogoImg.src = SHIHAB_MHS_ICON_DATA_URI;
-      mehediLogoImg.alt = "MHS";
+      const shihabSvgNs = "http://www.w3.org/2000/svg";
+      const mehediShieldSvg = document.createElementNS(shihabSvgNs, "svg");
+      mehediShieldSvg.setAttribute("class", "mehedi-shield-icon");
+      mehediShieldSvg.setAttribute("viewBox", "0 0 24 24");
+      mehediShieldSvg.setAttribute("fill", "none");
+      mehediShieldSvg.setAttribute("stroke", "currentColor");
+      mehediShieldSvg.setAttribute("stroke-width", "2.1");
+      mehediShieldSvg.setAttribute("stroke-linecap", "round");
+      mehediShieldSvg.setAttribute("stroke-linejoin", "round");
+      const shihabShieldPath = document.createElementNS(shihabSvgNs, "path");
+      shihabShieldPath.setAttribute("d", "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z");
+      mehediShieldSvg.appendChild(shihabShieldPath);
+
+      const mehediLabelSpan = document.createElement("span");
+      mehediLabelSpan.className = "mehedi-pill-label";
+      mehediLabelSpan.textContent = "Download Video";
 
       const mehediCountPill = document.createElement("span");
       mehediCountPill.className = "shihab-count";
-      mehediCountPill.textContent = "⬇";
+      mehediCountPill.textContent = "0";
 
-      shihabPrimaryBtn.appendChild(mehediLogoImg);
+      shihabPrimaryBtn.appendChild(mehediShieldSvg);
+      shihabPrimaryBtn.appendChild(mehediLabelSpan);
       shihabPrimaryBtn.appendChild(mehediCountPill);
 
-      const shihabSep = document.createElement("span");
-      shihabSep.className = "mehedi-sep";
+      mehediBar.appendChild(shihabPrimaryBtn);
 
       const mehediRetrackBtn = document.createElement("button");
-      mehediRetrackBtn.className = "mehedi-retrack";
+      mehediRetrackBtn.className = "mehedi-mini-tool";
       mehediRetrackBtn.type = "button";
       mehediRetrackBtn.title = "Re-track active video on this page";
       mehediRetrackBtn.textContent = "↻";
 
-      const mehediExpandBtn = document.createElement("button");
-      mehediExpandBtn.className = "mehedi-btn mehedi-expand-btn";
-      mehediExpandBtn.type = "button";
-      mehediExpandBtn.title = "Select resolution / audio quality";
-      mehediExpandBtn.textContent = "▾";
-
-      const shihabCloseSpan = document.createElement("span");
-      shihabCloseSpan.className = "shihab-close";
-      shihabCloseSpan.title = "Hide on this video";
-      shihabCloseSpan.textContent = "×";
-
-      mehediBar.appendChild(shihabPrimaryBtn);
-      mehediBar.appendChild(shihabSep);
-      mehediBar.appendChild(mehediRetrackBtn);
-      mehediBar.appendChild(mehediExpandBtn);
-      mehediBar.appendChild(shihabCloseSpan);
+      const shihabCloseBtn = document.createElement("button");
+      shihabCloseBtn.className = "mehedi-mini-tool";
+      shihabCloseBtn.type = "button";
+      shihabCloseBtn.title = "Hide download pill on this page";
+      shihabCloseBtn.textContent = "×";
 
       const mehediToastEl = document.createElement("div");
       mehediToastEl.className = "mehedi-toast";
@@ -1980,6 +1975,7 @@
         mehediBar,
         mehediCountPill,
         mehediRetrackBtn,
+        shihabCloseBtn,
         mehediToastEl,
         shihabMenuEl
       };
@@ -2001,27 +1997,20 @@
       shihabPrimaryBtn.addEventListener("click", async (mehediEv) => {
         mehediEv.preventDefault();
         mehediEv.stopPropagation();
+        if (shihabDropdownOpen) {
+          shihabDropdownOpen = false;
+          mehediLockedDropdownVideoEl = null;
+          shihabRenderFloatingIdmVideoPanel();
+          return;
+        }
         const shihabActiveVid = mehediFindPrimaryVisibleVideo();
+        mehediLockedDropdownVideoEl = shihabActiveVid;
         if (shihabActiveVid) {
           mehediEnsureVideoUidAndInspect(shihabActiveVid, true);
         }
         await shihabRefreshBackgroundStreamsThrottled(true);
-        const mehediStreams = shihabCollectMediaFromDomAndSniffer(shihabActiveVid);
-        if (mehediStreams.length === 0) {
-          mehediShowPanelStatusToast("Protected DRM/SABR stream — direct HTTP stream not exposed by site.", true);
-          return;
-        }
-        if (mehediStreams.length === 1 || shihabDropdownOpen) {
-          shihabDropdownOpen = false;
-          mehediLockedDropdownVideoEl = null;
-          mehediTriggerStreamDownload(mehediStreams[0], shihabActiveVid);
-          shihabRenderFloatingIdmVideoPanel();
-        } else {
-          // Multiple qualities available: lock onto THIS selected <video> and open the resolution picker!
-          mehediLockedDropdownVideoEl = shihabActiveVid;
-          shihabDropdownOpen = true;
-          shihabRenderFloatingIdmVideoPanel();
-        }
+        shihabDropdownOpen = true;
+        shihabRenderFloatingIdmVideoPanel();
       });
 
       mehediRetrackBtn.addEventListener("click", async (shihabRetrackEv) => {
@@ -2030,24 +2019,7 @@
         await mehediTriggerActiveVideoRetrack(true);
       });
 
-      mehediExpandBtn.addEventListener("click", async (shihabEv) => {
-        shihabEv.preventDefault();
-        shihabEv.stopPropagation();
-        shihabDropdownOpen = !shihabDropdownOpen;
-        if (shihabDropdownOpen) {
-          const mehediSelVid = mehediFindPrimaryVisibleVideo();
-          mehediLockedDropdownVideoEl = mehediSelVid;
-          if (mehediSelVid) {
-            mehediEnsureVideoUidAndInspect(mehediSelVid, true);
-          }
-          await shihabRefreshBackgroundStreamsThrottled(true);
-        } else {
-          mehediLockedDropdownVideoEl = null;
-        }
-        shihabRenderFloatingIdmVideoPanel();
-      });
-
-      shihabCloseSpan.addEventListener("click", (mehediEv) => {
+      shihabCloseBtn.addEventListener("click", (mehediEv) => {
         mehediEv.preventDefault();
         mehediEv.stopPropagation();
         shihabPanelDismissedUrl = location.href;
@@ -2068,6 +2040,123 @@
     while (mehediContainer.firstChild) {
       mehediContainer.removeChild(mehediContainer.firstChild);
     }
+  }
+
+  function mehediDetectStreamEndpointTag(shihabStream) {
+    const mehediUrl = String((shihabStream && shihabStream.shihabStreamUrl) || "").toLowerCase();
+    const shihabExt = String((shihabStream && shihabStream.shihabExt) || "").toLowerCase();
+    if (mehediUrl.includes("videoplayback")) return { tag: "VIDEOPLAYBACK", sub: "videoplayback" };
+    if (shihabExt === "m3u8" || mehediUrl.includes(".m3u8")) return { tag: "HLS", sub: "m3u8" };
+    if (mehediUrl.includes(".mpd")) return { tag: "DASH", sub: "mpd" };
+    if (shihabExt === "webm" || mehediUrl.includes(".webm")) return { tag: "WEBM", sub: "webm" };
+    if (shihabExt === "m4a" || shihabStream.shihabIsAudioOnly) return { tag: "AUDIO", sub: "audio" };
+    return { tag: "MP4", sub: shihabExt || "mp4" };
+  }
+
+  function mehediCloneStreamWithQuality(shihabBaseStream, mehediQualityLabel, shihabForceAudioOnly) {
+    const mehediClone = Object.assign({}, shihabBaseStream);
+    if (shihabForceAudioOnly) {
+      if (shihabBaseStream.mehediAudioCompanionUrl) {
+        mehediClone.shihabStreamUrl = shihabBaseStream.mehediAudioCompanionUrl;
+        mehediClone.shihabSizeBytes = shihabBaseStream.shihabAudioCompanionBytes || -1;
+        mehediClone.mehediAudioCompanionUrl = "";
+        mehediClone.shihabAudioCompanionBytes = -1;
+      }
+      mehediClone.shihabIsAudioOnly = true;
+      mehediClone.mehediMediaKind = "AUDIO";
+      mehediClone.shihabExt = "mp3";
+      mehediClone.shihabQualityLabel = "Audio";
+    } else if (mehediQualityLabel) {
+      mehediClone.shihabQualityLabel = mehediQualityLabel;
+    }
+    return mehediClone;
+  }
+
+  function shihabPickClosestVideoStreamForTier(mehediVideoStreams, shihabTargetHeightNum) {
+    if (!mehediVideoStreams || mehediVideoStreams.length === 0) return null;
+    for (const shihabSt of mehediVideoStreams) {
+      if (shihabNumericResRank(shihabSt.shihabResolution) === shihabTargetHeightNum) {
+        return shihabSt;
+      }
+    }
+    for (const mehediSt of mehediVideoStreams) {
+      const shihabRank = shihabNumericResRank(mehediSt.shihabResolution);
+      if (shihabRank > 0 && shihabRank <= shihabTargetHeightNum) {
+        return mehediSt;
+      }
+    }
+    return mehediVideoStreams[0];
+  }
+
+  function shihabBuildStreamSnifferEntries(shihabStreams) {
+    if (!Array.isArray(shihabStreams) || shihabStreams.length === 0) {
+      return [];
+    }
+    const mehediEntries = [];
+    const shihabVideoStreams = shihabStreams.filter((mehediIt) => !mehediIt.shihabIsAudioOnly && mehediIt.mehediMediaKind !== "AUDIO");
+    const mehediAudioStreams = shihabStreams.filter((shihabIt) => Boolean(shihabIt.shihabIsAudioOnly || shihabIt.mehediMediaKind === "AUDIO"));
+    const shihabBestVideo = shihabVideoStreams.length > 0 ? shihabVideoStreams[0] : null;
+
+    if (shihabBestVideo) {
+      const mehediBestRes = shihabBestVideo.shihabResolution || "Best";
+      mehediEntries.push({
+        shihabBadge: "MAX",
+        mehediIsAudio: false,
+        shihabLabel: "Best Available (4K / 1080p)",
+        mehediStream: mehediCloneStreamWithQuality(shihabBestVideo, mehediBestRes, false)
+      });
+
+      const shihabStandardTiers = [
+        { badge: "1080p", rank: 1080, title: "1080p Full HD" },
+        { badge: "720p", rank: 720, title: "720p HD" },
+        { badge: "480p", rank: 480, title: "480p Standard" }
+      ];
+
+      for (const mehediTier of shihabStandardTiers) {
+        const shihabChosenVid = shihabPickClosestVideoStreamForTier(shihabVideoStreams, mehediTier.rank);
+        if (shihabChosenVid) {
+          mehediEntries.push({
+            shihabBadge: mehediTier.badge,
+            mehediIsAudio: false,
+            shihabLabel: mehediTier.title,
+            mehediStream: mehediCloneStreamWithQuality(shihabChosenVid, mehediTier.badge, false)
+          });
+        }
+      }
+    }
+
+    const shihabAudioCandidate = mehediAudioStreams.length > 0
+      ? mehediCloneStreamWithQuality(mehediAudioStreams[0], "Audio", true)
+      : (shihabBestVideo ? mehediCloneStreamWithQuality(shihabBestVideo, "Audio", true) : null);
+
+    if (shihabAudioCandidate) {
+      mehediEntries.push({
+        shihabBadge: "AUDIO",
+        mehediIsAudio: true,
+        shihabLabel: "Audio Only (MP3)",
+        mehediStream: shihabAudioCandidate
+      });
+    }
+
+    const mehediRawPool = Array.isArray(shihabStreams.mehediRawSniffed) && shihabStreams.mehediRawSniffed.length > 0
+      ? shihabStreams.mehediRawSniffed
+      : shihabStreams;
+
+    let shihabSniffIdx = 1;
+    for (const mehediRaw of mehediRawPool.slice(0, 5)) {
+      const shihabEndpoint = mehediDetectStreamEndpointTag(mehediRaw);
+      const mehediIsAudRaw = Boolean(mehediRaw.shihabIsAudioOnly || mehediRaw.mehediMediaKind === "AUDIO");
+      const shihabResSuffix = mehediRaw.shihabResolution ? ` · ${mehediRaw.shihabResolution}` : "";
+      mehediEntries.push({
+        shihabBadge: shihabEndpoint.tag,
+        mehediIsAudio: mehediIsAudRaw,
+        shihabLabel: `Sniffed Stream #${shihabSniffIdx} (${shihabEndpoint.sub}${shihabResSuffix})`,
+        mehediStream: mehediRaw
+      });
+      shihabSniffIdx++;
+    }
+
+    return mehediEntries;
   }
 
   function shihabRenderFloatingIdmVideoPanel() {
@@ -2124,12 +2213,8 @@
     if (!mehediHost || !shihabRefs) return;
 
     const shihabStreams = shihabCollectMediaFromDomAndSniffer(shihabTargetVideo);
-    const mehediTopRes = shihabStreams.length > 0 && shihabStreams[0].shihabResolution
-      ? shihabStreams[0].shihabResolution
-      : "";
-    shihabRefs.mehediCountPill.textContent = shihabStreams.length > 0
-      ? (mehediTopRes ? `${mehediTopRes} · ${shihabStreams.length}` : String(shihabStreams.length))
-      : "⬇";
+    const mehediSnifferRows = shihabBuildStreamSnifferEntries(shihabStreams);
+    shihabRefs.mehediCountPill.textContent = String(mehediSnifferRows.length);
 
     shihabRefs.mehediBar.classList.toggle("mehedi-open", shihabDropdownOpen);
 
@@ -2144,7 +2229,7 @@
     }
 
     const mehediBarBox = shihabRefs.mehediBar.getBoundingClientRect();
-    const mehediBarH = Math.max(24, Math.ceil(mehediBarBox.height) || 26);
+    const mehediBarH = Math.max(26, Math.ceil(mehediBarBox.height) || 28);
     if (!shihabRefs.mehediBar.classList.contains("shihab-compact") && mehediBarBox.width > 80) {
       shihabLastMeasuredFullBarW = Math.ceil(mehediBarBox.width);
     }
@@ -2166,11 +2251,11 @@
       if ((location.hostname || "").toLowerCase().includes("youtube.com") && shihabTopPx < 56 && shihabSpaceRight < 40) {
         mehediDesiredRightX = Math.min(mehediDesiredRightX, shihabViewportW - 168);
       }
-      const shihabMinRightX = Math.min(shihabViewportW - MEHEDI_VIEWPORT_PAD, (shihabUseCompact ? 32 : shihabFullBarW) + MEHEDI_VIEWPORT_PAD);
+      const shihabMinRightX = Math.min(shihabViewportW - MEHEDI_VIEWPORT_PAD, (shihabUseCompact ? 56 : shihabFullBarW) + MEHEDI_VIEWPORT_PAD);
       const mehediClampedRightX = Math.min(shihabViewportW - MEHEDI_VIEWPORT_PAD, Math.max(shihabMinRightX, mehediDesiredRightX));
       shihabRightCss = Math.max(MEHEDI_VIEWPORT_PAD, shihabViewportW - mehediClampedRightX) + "px";
       mehediLeftCss = "auto";
-    } else if (shihabSpaceRight >= (shihabUseCompact ? 34 : shihabFullBarW) + SHIHAB_OUTSIDE_GAP + MEHEDI_VIEWPORT_PAD) {
+    } else if (shihabSpaceRight >= (shihabUseCompact ? 58 : shihabFullBarW) + SHIHAB_OUTSIDE_GAP + MEHEDI_VIEWPORT_PAD) {
       // 2) Outside TO THE RIGHT of the video's top-right corner (e.g. Instagram Reels, Facebook Reels, YouTube Shorts, TikTok)
       shihabTopPx = Math.round(
         Math.min(
@@ -2180,8 +2265,8 @@
       );
       mehediLeftCss = Math.round(mehediRect.right + SHIHAB_OUTSIDE_GAP) + "px";
       shihabRightCss = "auto";
-    } else if (shihabSpaceRight >= 34) {
-      // 3) Narrow right margin (e.g. split-screen Reels): auto-compact icon sits 100% outside to the right of the video and expands leftward on hover
+    } else if (shihabSpaceRight >= 58) {
+      // 3) Narrow right margin: auto-compact pill sits 100% outside to the right of the video and expands leftward on hover
       shihabUseCompact = true;
       shihabTopPx = Math.round(
         Math.min(
@@ -2189,7 +2274,7 @@
           Math.max(MEHEDI_VIEWPORT_PAD, mehediRect.bottom - mehediBarH - MEHEDI_VIEWPORT_PAD)
         )
       );
-      const mehediCompactW = 30;
+      const mehediCompactW = 54;
       const shihabDesiredRightX = Math.min(
         shihabViewportW - MEHEDI_VIEWPORT_PAD,
         Math.round(mehediRect.right + SHIHAB_OUTSIDE_GAP + mehediCompactW)
@@ -2197,7 +2282,7 @@
       shihabRightCss = Math.max(MEHEDI_VIEWPORT_PAD, shihabViewportW - shihabDesiredRightX) + "px";
       mehediLeftCss = "auto";
     } else {
-      // 4) True 100vw x 100vh fullscreen or zero-margin edge-to-edge player: compact icon tucked at extreme top-right corner
+      // 4) True 100vw x 100vh fullscreen or zero-margin edge-to-edge player: compact pill tucked at extreme top-right corner
       shihabUseCompact = true;
       shihabTopPx = mehediSpaceAbove >= 14
         ? 2
@@ -2220,15 +2305,15 @@
     const shihabMenuEl = shihabRefs.shihabMenuEl;
     const mehediToastEl = shihabRefs.mehediToastEl;
     const mehediPlacedLeft = mehediLeftCss !== "auto" ? parseInt(mehediLeftCss, 10) : -1;
-    const shihabAlignPopupLeft = mehediPlacedLeft >= 0 && (mehediPlacedLeft + 420 <= shihabViewportW - 8);
+    const shihabAlignPopupLeft = mehediPlacedLeft >= 0 && (mehediPlacedLeft + 370 <= shihabViewportW - 8);
     shihabMenuEl.style.left = shihabAlignPopupLeft ? "0px" : "auto";
     shihabMenuEl.style.right = shihabAlignPopupLeft ? "auto" : "0px";
     mehediToastEl.style.left = shihabAlignPopupLeft ? "0px" : "auto";
     mehediToastEl.style.right = shihabAlignPopupLeft ? "auto" : "0px";
 
-    const mehediOpenUpward = (mehediViewportH - (shihabTopPx + mehediBarH) < 220) && shihabTopPx > 240;
-    shihabMenuEl.style.top = mehediOpenUpward ? "auto" : "calc(100% + 4px)";
-    shihabMenuEl.style.bottom = mehediOpenUpward ? "calc(100% + 4px)" : "auto";
+    const mehediOpenUpward = (mehediViewportH - (shihabTopPx + mehediBarH) < 240) && shihabTopPx > 260;
+    shihabMenuEl.style.top = mehediOpenUpward ? "auto" : "calc(100% + 7px)";
+    shihabMenuEl.style.bottom = mehediOpenUpward ? "calc(100% + 7px)" : "auto";
 
     shihabMenuEl.style.display = shihabDropdownOpen ? "block" : "none";
     if (shihabDropdownOpen) {
@@ -2237,20 +2322,38 @@
 
       const shihabHeaderDiv = document.createElement("div");
       shihabHeaderDiv.className = "shihab-menu-head";
-      shihabHeaderDiv.title = mehediLiveCaption;
-      shihabHeaderDiv.textContent = "🎬 " + mehediLiveCaption;
+      shihabHeaderDiv.title = mehediLiveCaption || "MHS Stream Sniffer";
+
+      const mehediHeadLeft = document.createElement("span");
+      mehediHeadLeft.textContent = "MHS STREAM SNIFFER";
+
+      const shihabHeadRight = document.createElement("div");
+      shihabHeadRight.className = "mehedi-head-right";
+      const mehediQualTxt = document.createElement("span");
+      mehediQualTxt.textContent = "SELECT QUALITY";
+      shihabHeadRight.appendChild(mehediQualTxt);
+      shihabHeadRight.appendChild(shihabRefs.mehediRetrackBtn);
+      shihabHeadRight.appendChild(shihabRefs.shihabCloseBtn);
+
+      shihabHeaderDiv.appendChild(mehediHeadLeft);
+      shihabHeaderDiv.appendChild(shihabHeadRight);
       shihabMenuEl.appendChild(shihabHeaderDiv);
 
-      if (shihabStreams.length === 0) {
+      if (mehediSnifferRows.length === 0) {
         const mehediEmptyRow = document.createElement("div");
         mehediEmptyRow.className = "shihab-item";
         const shihabEmptySpan = document.createElement("span");
         shihabEmptySpan.className = "mehedi-name";
         shihabEmptySpan.textContent = "No direct HTTP stream exposed — click ↻ to re-track";
         mehediEmptyRow.appendChild(shihabEmptySpan);
-        shihabMenuEl.appendChild(shihabEmptyRow);
+        mehediEmptyRow.addEventListener("click", async (shihabEv) => {
+          shihabEv.preventDefault();
+          shihabEv.stopPropagation();
+          await mehediTriggerActiveVideoRetrack(true);
+        });
+        shihabMenuEl.appendChild(mehediEmptyRow);
       } else {
-        for (const mehediStream of shihabStreams.slice(0, 14)) {
+        for (const shihabEntry of mehediSnifferRows) {
           const shihabRow = document.createElement("div");
           shihabRow.className = "shihab-item";
 
@@ -2258,49 +2361,38 @@
           mehediLeftGrp.className = "mehedi-left-group";
 
           const shihabKindPill = document.createElement("span");
-          const mehediIsAudio = Boolean(mehediStream.shihabIsAudioOnly || mehediStream.mehediMediaKind === "AUDIO");
-          shihabKindPill.className = "shihab-kind-pill " + (mehediIsAudio ? "mehedi-kind-audio" : "mehedi-kind-video");
-          shihabKindPill.textContent = mehediIsAudio ? "AUDIO" : "VIDEO";
+          shihabKindPill.className = "shihab-kind-pill " + (shihabEntry.mehediIsAudio ? "mehedi-kind-audio" : "mehedi-kind-video");
+          shihabKindPill.textContent = shihabEntry.shihabBadge;
 
           const mehediNameSpan = document.createElement("span");
           mehediNameSpan.className = "mehedi-name";
-          const shihabRowTitle = mehediLiveCaption || mehediCleanCaptionText(mehediStream.shihabDisplayName) || "Video";
-          mehediNameSpan.textContent = shihabRowTitle;
-          mehediNameSpan.title = shihabRowTitle;
+          mehediNameSpan.textContent = shihabEntry.shihabLabel;
+
+          const mehediStreamObj = shihabEntry.mehediStream;
+          const shihabBytes = mehediStreamObj.mehediDisplaySizeBytes > 0
+            ? mehediStreamObj.mehediDisplaySizeBytes
+            : mehediStreamObj.shihabSizeBytes;
+          const mehediSizeHint = shihabFormatBytesHuman(shihabBytes);
+          mehediNameSpan.title = mehediLiveCaption
+            ? (mehediSizeHint ? `${mehediLiveCaption} (${mehediSizeHint})` : mehediLiveCaption)
+            : shihabEntry.shihabLabel;
 
           mehediLeftGrp.appendChild(shihabKindPill);
           mehediLeftGrp.appendChild(mehediNameSpan);
 
-          const shihabRightGrp = document.createElement("div");
-          shihabRightGrp.className = "shihab-right-group";
-
-          const mehediResPill = document.createElement("span");
-          mehediResPill.className = "mehedi-res-pill" + (mehediIsAudio ? " mehedi-res-audio" : "");
-          mehediResPill.textContent = mehediStream.mehediBadge || (mehediIsAudio ? "M4A Audio" : "MP4 HD");
-          if (!mehediIsAudio && mehediStream.mehediAudioCompanionUrl) {
-            mehediResPill.title = "Video + Audio (Losslessly muxed with full sound)";
-          }
-
-          const shihabSizeSpan = document.createElement("span");
-          shihabSizeSpan.className = "shihab-size-pill";
-          const mehediBytesToShow = mehediStream.mehediDisplaySizeBytes > 0
-            ? mehediStream.mehediDisplaySizeBytes
-            : mehediStream.shihabSizeBytes;
-          const shihabSizeTxt = shihabFormatBytesHuman(mehediBytesToShow);
-          shihabSizeSpan.textContent = shihabSizeTxt || (mehediStream.shihabExt === "m3u8" ? "HLS" : "Ready");
-
-          shihabRightGrp.appendChild(mehediResPill);
-          shihabRightGrp.appendChild(shihabSizeSpan);
+          const shihabDlSpan = document.createElement("span");
+          shihabDlSpan.className = "shihab-dl-action";
+          shihabDlSpan.textContent = "Download";
 
           shihabRow.appendChild(mehediLeftGrp);
-          shihabRow.appendChild(shihabRightGrp);
+          shihabRow.appendChild(shihabDlSpan);
 
           shihabRow.addEventListener("click", (mehediClickEv) => {
             mehediClickEv.preventDefault();
             mehediClickEv.stopPropagation();
             shihabDropdownOpen = false;
             mehediLockedDropdownVideoEl = null;
-            mehediTriggerStreamDownload(mehediStream, shihabTargetVideo);
+            mehediTriggerStreamDownload(mehediStreamObj, shihabTargetVideo);
             shihabRenderFloatingIdmVideoPanel();
           });
           shihabMenuEl.appendChild(shihabRow);
@@ -2714,6 +2806,30 @@
     }
   }
 
+  function mehediCloseDropdownOnOutsideEvent(shihabEv) {
+    if (!shihabDropdownOpen || mehediInstanceDisposed) return;
+    if (shihabEv.type === "keydown") {
+      if (shihabEv.key === "Escape") {
+        shihabDropdownOpen = false;
+        mehediLockedDropdownVideoEl = null;
+        shihabRenderFloatingIdmVideoPanel();
+      }
+      return;
+    }
+    const mehediPath = typeof shihabEv.composedPath === "function" ? shihabEv.composedPath() : [shihabEv.target];
+    if (
+      mehediShadowHost &&
+      (shihabEv.target === mehediShadowHost ||
+       mehediPath.includes(mehediShadowHost) ||
+       mehediShadowHost.contains(shihabEv.target))
+    ) {
+      return;
+    }
+    shihabDropdownOpen = false;
+    mehediLockedDropdownVideoEl = null;
+    shihabRenderFloatingIdmVideoPanel();
+  }
+
   function mehediOnSupersedeEvent(shihabEv) {
     const mehediIncomingOwner = shihabEv && shihabEv.detail ? shihabEv.detail.shihabOwnerToken : "";
     if (mehediIncomingOwner && mehediIncomingOwner !== shihabInstanceToken) {
@@ -2748,6 +2864,8 @@
     for (const shihabGestureEvt of ["pointerdown", "mousedown", "click", "auxclick", "contextmenu", "keydown"]) {
       window.removeEventListener(shihabGestureEvt, mehediReportTrustedUserGesture, true);
     }
+    window.removeEventListener("pointerdown", mehediCloseDropdownOnOutsideEvent, true);
+    window.removeEventListener("keydown", mehediCloseDropdownOnOutsideEvent, true);
     window.removeEventListener("pointerover", mehediTrackPointerOverVideo, { capture: true });
     window.removeEventListener("pointermove", mehediTrackPointerOverVideo, { capture: true });
     window.removeEventListener("scroll", shihabRenderFloatingIdmVideoPanel, { capture: true });
@@ -2822,6 +2940,8 @@
       document.addEventListener(mehediMediaEvt, mehediMediaLifecycleListener, true);
     }
 
+    window.addEventListener("pointerdown", mehediCloseDropdownOnOutsideEvent, { capture: true, passive: true });
+    window.addEventListener("keydown", mehediCloseDropdownOnOutsideEvent, { capture: true, passive: true });
     window.addEventListener("pointerover", mehediTrackPointerOverVideo, { capture: true, passive: true });
     window.addEventListener("pointermove", mehediTrackPointerOverVideo, { capture: true, passive: true });
     window.addEventListener("scroll", shihabRenderFloatingIdmVideoPanel, { capture: true, passive: true });

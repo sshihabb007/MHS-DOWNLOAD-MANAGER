@@ -102,7 +102,8 @@ jobs:
             "extension\shihab_popup.html",
             "extension\shihab_popup.css",
             "extension\mehedi_popup.js",
-            "extension\images\shihab_logo128.png"
+            "extension\images\shihab_logo128.png",
+            "extension\images\author_shihab.jpg"
           )
 
           foreach ($RelFile in $RequiredInstalledFiles) {
@@ -119,27 +120,34 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          if (Test-Path -LiteralPath "release-dist") {
+            Remove-Item -LiteralPath "release-dist" -Recurse -Force
+          }
           New-Item -ItemType Directory -Force -Path "release-dist" | Out-Null
 
           $Manifest = Get-Content -LiteralPath (Join-Path $PWD "extension\manifest.json") -Raw | ConvertFrom-Json
           $VerClean = if ($env:GITHUB_REF_NAME -like 'v*') { $env:GITHUB_REF_NAME.TrimStart('v') } else { $Manifest.version }
           $TagVer = "v$VerClean"
 
-          $SetupVersionedName = "MHS-Download-Manager-Setup-$VerClean-x64.exe"
-          $SetupEvergreenName = "MHS-Download-Manager-Setup-x64.exe"
+          $SetupExeName = "MHS-Download-Manager-Setup-$VerClean-x64.exe"
+          $PortableExeName = "MHS-Download-Manager-Portable-$VerClean-x64.exe"
           $ExtArchiveName = "MHS-Browser-Extension-$VerClean.zip"
 
           $BuiltSetup = Join-Path $PWD "bin\MHS-Download-Manager-Setup-$VerClean-x64.exe"
           if (-not (Test-Path -LiteralPath $BuiltSetup)) {
             $BuiltSetup = (Get-ChildItem -Path (Join-Path $PWD "bin") -Filter "MHS-Download-Manager-Setup-*-x64.exe" | Select-Object -First 1).FullName
           }
+          $BuiltPortable = Join-Path $PWD "bin\mdm.exe"
+          if (-not (Test-Path -LiteralPath $BuiltPortable)) {
+            throw "Compiled portable binary bin\mdm.exe was not found"
+          }
 
-          $StagedVersionedSetup = Join-Path $PWD "release-dist\$SetupVersionedName"
-          $StagedEvergreenSetup = Join-Path $PWD "release-dist\$SetupEvergreenName"
+          $StagedSetupExe = Join-Path $PWD "release-dist\$SetupExeName"
+          $StagedPortableExe = Join-Path $PWD "release-dist\$PortableExeName"
           $StagedExtZip = Join-Path $PWD "release-dist\$ExtArchiveName"
 
-          Copy-Item -LiteralPath $BuiltSetup -Destination $StagedVersionedSetup -Force
-          Copy-Item -LiteralPath $BuiltSetup -Destination $StagedEvergreenSetup -Force
+          Copy-Item -LiteralPath $BuiltSetup -Destination $StagedSetupExe -Force
+          Copy-Item -LiteralPath $BuiltPortable -Destination $StagedPortableExe -Force
 
           Add-Type -AssemblyName System.IO.Compression.FileSystem
           if (Test-Path -LiteralPath $StagedExtZip) {
@@ -151,46 +159,53 @@ jobs:
             [System.IO.Compression.CompressionLevel]::Optimal,
             $false)
 
-          $VersionedSha = (Get-FileHash -LiteralPath $StagedVersionedSetup -Algorithm SHA256).Hash.ToLowerInvariant()
-          $EvergreenSha = (Get-FileHash -LiteralPath $StagedEvergreenSetup -Algorithm SHA256).Hash.ToLowerInvariant()
+          # Guarantee strictly ONE Setup .exe exists in release-dist
+          $SetupFilesCount = @(Get-ChildItem -Path (Join-Path $PWD "release-dist") -Filter "*Setup*.exe").Count
+          if ($SetupFilesCount -ne 1) {
+            throw "Expected strictly 1 Setup .exe in release-dist, found $SetupFilesCount"
+          }
+
+          $SetupSha = (Get-FileHash -LiteralPath $StagedSetupExe -Algorithm SHA256).Hash.ToLowerInvariant()
+          $PortableSha = (Get-FileHash -LiteralPath $StagedPortableExe -Algorithm SHA256).Hash.ToLowerInvariant()
           $ExtZipSha = (Get-FileHash -LiteralPath $StagedExtZip -Algorithm SHA256).Hash.ToLowerInvariant()
 
           $ShaLines = @(
-            "$VersionedSha  $SetupVersionedName",
-            "$EvergreenSha  $SetupEvergreenName",
+            "$SetupSha  $SetupExeName",
+            "$PortableSha  $PortableExeName",
             "$ExtZipSha  $ExtArchiveName"
           )
           Set-Content -Path (Join-Path $PWD "release-dist\SHA256SUMS.txt") -Value ($ShaLines -join "`n") -Encoding UTF8
 
           $NotesLines = @(
-            "## MHS Download Manager $TagVer — Official Windows x64 Installer & Browser Suite (Mehedi Hasan Shihab)",
+            "## MHS Download Manager $TagVer — Official Windows x64 Release (Mehedi Hasan Shihab)",
             "",
-            "Download and run **``$SetupVersionedName``** (or evergreen **``$SetupEvergreenName``**) to install **MHS Download Manager $VerClean (Mehedi Hasan Shihab)** along with the ready-to-load **``extension\``** folder directly inside your installation directory.",
+            "### Release Downloads",
+            "- **``$SetupExeName``** *(Recommended)* — Official Windows x64 Setup Installer. Installs ``mdm.exe``, ``Uninstall.exe``, shortcuts, Native Messaging host, and keeps the ready-to-load **``extension\``** folder directly inside your installation directory (``<InstallDir>\extension``).",
+            "- **``$PortableExeName``** — Standalone Portable Windows x64 Executable (``mdm.exe``). Run directly from any folder with zero installation.",
+            "- **``$ExtArchiveName``** — Standalone Unpacked Browser Extension ZIP (for Portable users; Setup Installer users already get ``<InstallDir>\extension`` automatically).",
+            "- **``SHA256SUMS.txt``** — Official SHA-256 verification checksums.",
             "",
-            "### What the Setup `.exe` Installs in Your Installation Directory (`<InstallDir>`)",
-            "- **``mdm.exe``** — MHS Download Manager $VerClean (x64 Windows Desktop Application)",
-            "- **``extension\``** — Complete unpacked Manifest V3 Browser Extension kept directly inside `<InstallDir>\extension` for **Google Chrome**, **Brave**, **Microsoft Edge**, and **Opera**",
-            "- **``Uninstall.exe``** — Clean Windows Uninstaller + *Installed Apps* registration, Desktop shortcut, Start Menu shortcuts (including *MHS Browser Extension Folder*), and Startup/Native Messaging integration",
-            "",
-            "### Loading the Browser Extension from Your Installation Directory",
-            "1. Run **``$SetupVersionedName``** and complete the Setup Wizard — on the final screen, Setup automatically copies `<InstallDir>\extension` to your clipboard and provides **Copy Path** & **Open Folder** buttons (you can also open it anytime from the app via **`Help -> Open Browser Extension Folder`**).",
-            "2. Open ``chrome://extensions`` (Chrome), ``brave://extensions`` (Brave), or ``edge://extensions`` (Edge).",
-            "3. Turn **ON** **Developer mode** (top-right toggle).",
-            "4. Click **Load unpacked** and select the **`extension`** folder inside your installation directory (default: ``%LOCALAPPDATA%\Programs\MHS Download Manager\extension``).",
+            "### How to Install & Load the Browser Extension from Your Installation Directory",
+            "1. Download and run **``$SetupExeName``** (default install folder: ``%LOCALAPPDATA%\Programs\MHS Download Manager``).",
+            "2. On the final screen of Setup, the path ``<InstallDir>\extension`` is copied to your clipboard automatically (you can also click **Copy Path** / **Open Folder**, or open it anytime inside the app via **`☰` Menu -> Help -> Open Browser Extension Folder**).",
+            "3. Open ``chrome://extensions`` (Chrome), ``brave://extensions`` (Brave), ``edge://extensions`` (Edge), or ``opera://extensions`` (Opera).",
+            "4. Enable **Developer mode** (top-right toggle).",
+            "5. Click **Load unpacked** and select the **``extension``** folder inside your installation directory:",
+            "   ``%LOCALAPPDATA%\Programs\MHS Download Manager\extension`` *(or ``<YourInstallDir>\extension``)*.",
             "",
             "### What's New in $TagVer",
-            "- **Zero Unsolicited Startup & Background Download Popups**: Added a `chrome.storage.session` browser-startup & user-gesture download guard (`event.isTrusted === true` + per-tab / child-popup gesture propagation + historical download ID seeding) so opening Brave, Chrome, or Edge (including restored tabs and old `brave://downloads` entries) never triggers unwanted `Download File Info` popups without an explicit user click.",
-            "- **Sequential Non-Overlapping Capture Modals & Duplicate Suppression**: Serializes `Download File Info` dialogs into an ordered queue in `mdm.exe`, suppresses duplicate capture bursts within `4s`, and seeds the startup clipboard state so dialogs never stack on top of one another.",
-            "- **Outside Top-Right Corner Semi-Transparent Video Bar**: Positions the single-instance floating download bar cleanly **outside** the top-right corner of the video (`62%` translucent glass finish, `96%` on hover) with zero overlapping icons.",
-            "- **Verified Unpacked `extension\` in Setup `.exe`**: Setup refreshes and verifies every unpacked extension script inside `<InstallDir>\extension` during installation and adds instant **Copy Path** + **Open Folder** actions on the Finish screen.",
-            "- **High-Speed YouTube HD/4K, Unthrottled Companion Audio & Lossless Muxer**: Direct `144p`–`2160p 4K` resolution + parallel burst-sliced HTTP `206` workers + built-in zero-dependency `MP4` / `WebM` / `MKV` muxer.",
+            "- **Dark Transfers Dashboard UI**: Redesigned main window with the ``TRANSFERS`` filter sidebar, live ``Local Storage`` & speed-limit card, rounded pill action bar + instant ``Filter transfers...`` search, 8-column progress grid, and 4-pill live socket/speed footer.",
+            "- **Outside-Corner ``Download Video`` Pill & ``MHS STREAM SNIFFER`` Dropdown**: Floating translucent stadium pill positioned outside the top-right corner of ``<video>`` (never overlapping video playback) with quality selector rows (``MAX``, ``1080p``, ``720p``, ``480p``, ``AUDIO``, and sniffed streams).",
+            "- **Updated About Developer Dialog & Extension Popup**: Circular author portrait and updated Dodger Blue theme accents.",
+            "- **Single-Setup + Portable Release Packaging**: Publishes one clean Setup ``.exe`` (bundling ``<InstallDir>\extension``), one standalone Portable ``.exe``, the unpacked Extension ``.zip``, and ``SHA256SUMS.txt``.",
+            "- **Strict User-Gesture Download Guard & 32-Segment Engine**: Zero unsolicited startup popups in Brave/Chrome/Edge, parallel HTTP ``206`` range acceleration, YouTube HD/4K resolver, and built-in lossless ``MP4`` / ``WebM`` / ``MKV`` muxer.",
             "",
             "### SHA-256 Checksums",
             "| Release File | Purpose | SHA-256 |",
             "| :--- | :--- | :--- |",
-            "| ``$SetupVersionedName`` | Windows x64 Setup Installer (includes ``mdm.exe`` + ``<InstallDir>\extension``) | ``$VersionedSha`` |",
-            "| ``$SetupEvergreenName`` | Evergreen Latest Setup Installer Alias | ``$EvergreenSha`` |",
-            "| ``$ExtArchiveName`` | Standalone Unpacked Browser Extension ZIP (already included inside Setup `.exe`) | ``$ExtZipSha`` |"
+            "| ``$SetupExeName`` | Windows x64 Setup Installer (includes ``mdm.exe`` + ``<InstallDir>\extension``) | ``$SetupSha`` |",
+            "| ``$PortableExeName`` | Standalone Portable x64 Executable (zero-install ``mdm.exe``) | ``$PortableSha`` |",
+            "| ``$ExtArchiveName`` | Unpacked Browser Extension Archive (Chrome / Brave / Edge / Opera) | ``$ExtZipSha`` |"
           )
           Set-Content -Path (Join-Path $PWD "release-dist\RELEASE_NOTES.md") -Value ($NotesLines -join "`r`n") -Encoding UTF8
           Write-Output "TAG_VER=$TagVer" >> $env:GITHUB_ENV
@@ -200,18 +215,23 @@ jobs:
         with:
           name: MHS-Download-Manager-${{ github.ref_name }}-Windows-x64
           path: |
-            release-dist/MHS-Download-Manager-Setup-*.exe
+            release-dist/MHS-Download-Manager-Setup-*-x64.exe
+            release-dist/MHS-Download-Manager-Portable-*-x64.exe
             release-dist/MHS-Browser-Extension-*.zip
             release-dist/SHA256SUMS.txt
             release-dist/RELEASE_NOTES.md
           if-no-files-found: error
 
-      - name: Remove Previous Release Entry for Tag (if re-releasing)
+      - name: Clean Duplicate Setup Assets & Previous Tag Release
         if: startsWith(github.ref, 'refs/tags/v') || inputs.publish_release == true
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          foreach ($OldTag in @("v1.0.1", "v1.0.2")) {
+            gh release delete-asset $OldTag "MHS-Download-Manager-Setup-x64.exe" --yes *> $null
+            $global:LASTEXITCODE = 0
+          }
           gh release view "$env:TAG_VER" *> $null
           if ($LASTEXITCODE -eq 0) {
             gh release delete "$env:TAG_VER" --yes
@@ -227,6 +247,7 @@ jobs:
           body_path: release-dist/RELEASE_NOTES.md
           make_latest: "true"
           files: |
-            release-dist/MHS-Download-Manager-Setup-*.exe
+            release-dist/MHS-Download-Manager-Setup-*-x64.exe
+            release-dist/MHS-Download-Manager-Portable-*-x64.exe
             release-dist/MHS-Browser-Extension-*.zip
             release-dist/SHA256SUMS.txt

@@ -604,6 +604,7 @@ namespace ShihabMehediIDM
         public bool ShihabSortAscending { get; set; }
 
         private bool _shihabSpaciousRows;
+        private bool _mehediTransferGridMode;
         private int _mehediHoveredRowIndex = -1;
         private readonly ImageList _shihabRowHeightScaler;
 
@@ -613,10 +614,26 @@ namespace ShihabMehediIDM
             set
             {
                 _shihabSpaciousRows = value;
-                if (_shihabRowHeightScaler != null)
-                {
-                    _shihabRowHeightScaler.ImageSize = new Size(1, _shihabSpaciousRows ? 38 : 23);
-                }
+                UpdateMehediRowScalerHeight();
+            }
+        }
+
+        public bool ShihabTransferGridMode
+        {
+            get { return _mehediTransferGridMode; }
+            set
+            {
+                _mehediTransferGridMode = value;
+                UpdateMehediRowScalerHeight();
+            }
+        }
+
+        private void UpdateMehediRowScalerHeight()
+        {
+            if (_shihabRowHeightScaler != null)
+            {
+                int shihabRowH = _mehediTransferGridMode ? 34 : (_shihabSpaciousRows ? 38 : 23);
+                _shihabRowHeightScaler.ImageSize = new Size(1, shihabRowH);
             }
         }
 
@@ -685,6 +702,43 @@ namespace ShihabMehediIDM
             mehediG.SmoothingMode = SmoothingMode.AntiAlias;
             mehediG.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
             Rectangle shihabBounds = shihabHdrArgs.Bounds;
+
+            if (_mehediTransferGridMode)
+            {
+                Color shihabGridHdrBg = MehediDarkMode ? Color.FromArgb(24, 27, 33) : Color.FromArgb(238, 242, 247);
+                Color mehediGridBorder = MehediDarkMode ? Color.FromArgb(36, 40, 50) : Color.FromArgb(206, 214, 224);
+                using (SolidBrush shihabHdrFill = new SolidBrush(shihabGridHdrBg))
+                using (Pen mehediHdrLine = new Pen(mehediGridBorder))
+                {
+                    mehediG.FillRectangle(shihabHdrFill, shihabBounds);
+                    mehediG.DrawLine(mehediHdrLine, shihabBounds.Left, shihabBounds.Bottom - 1, shihabBounds.Right, shihabBounds.Bottom - 1);
+                    mehediG.DrawLine(mehediHdrLine, shihabBounds.Right - 1, shihabBounds.Top, shihabBounds.Right - 1, shihabBounds.Bottom - 1);
+                }
+
+                string mehediUpperTitle = (shihabHdrArgs.Header != null && shihabHdrArgs.Header.Text != null)
+                    ? shihabHdrArgs.Header.Text.ToUpperInvariant()
+                    : "";
+                bool shihabSorted = shihabHdrArgs.ColumnIndex == MehediSortedColumnIndex;
+                if (shihabSorted && shihabHdrArgs.ColumnIndex != 0)
+                {
+                    mehediUpperTitle = mehediUpperTitle + (ShihabSortAscending ? " \u2191" : " \u2193");
+                }
+                Color shihabHdrTextCol = MehediDarkMode
+                    ? (shihabSorted ? Color.FromArgb(226, 232, 244) : Color.FromArgb(124, 133, 153))
+                    : Color.FromArgb(71, 85, 105);
+
+                Rectangle mehediCellTxtRect = shihabHdrArgs.ColumnIndex == 0
+                    ? shihabBounds
+                    : new Rectangle(shihabBounds.X + 10, shihabBounds.Y, Math.Max(4, shihabBounds.Width - 14), shihabBounds.Height);
+                TextFormatFlags shihabHdrFlags = TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix |
+                    (shihabHdrArgs.ColumnIndex == 0 ? TextFormatFlags.HorizontalCenter : TextFormatFlags.Left);
+
+                using (Font mehediGridHdrFont = new Font("Segoe UI", 7.8f, FontStyle.Bold))
+                {
+                    TextRenderer.DrawText(mehediG, mehediUpperTitle, mehediGridHdrFont, mehediCellTxtRect, shihabHdrTextCol, shihabHdrFlags);
+                }
+                return;
+            }
 
             Color mehediHdrBg = MehediDarkMode ? Color.FromArgb(24, 26, 36) : Color.FromArgb(236, 240, 246);
             Color shihabBottomLine = MehediDarkMode ? Color.FromArgb(38, 42, 58) : Color.FromArgb(204, 212, 222);
@@ -756,6 +810,12 @@ namespace ShihabMehediIDM
             bool mehediSelected = shihabSubArgs.Item != null && shihabSubArgs.Item.Selected;
             bool shihabHovered = shihabSubArgs.ItemIndex == _mehediHoveredRowIndex && !mehediSelected;
             bool shihabEven = (shihabSubArgs.ItemIndex % 2) == 0;
+
+            if (_mehediTransferGridMode)
+            {
+                DrawShihabTransferGridCell(mehediG, shihabSubArgs, shihabCell, mehediSelected, shihabHovered);
+                return;
+            }
 
             Color mehediCanvasBg = MehediDarkMode
                 ? (_shihabSpaciousRows ? Color.FromArgb(18, 19, 25) : (shihabEven ? Color.FromArgb(20, 22, 30) : Color.FromArgb(23, 25, 34)))
@@ -996,11 +1056,190 @@ namespace ShihabMehediIDM
             TextFormatFlags mehediFlags = TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.Left;
             TextRenderer.DrawText(mehediG, mehediText, Font, shihabTxtRect, shihabTextColor, mehediFlags);
         }
+
+        private void DrawShihabTransferGridCell(
+            Graphics mehediG,
+            DrawListViewSubItemEventArgs shihabSubArgs,
+            Rectangle shihabCell,
+            bool mehediSelected,
+            bool shihabHovered)
+        {
+            Color shihabRowFill;
+            if (mehediSelected)
+            {
+                shihabRowFill = MehediDarkMode ? Color.FromArgb(24, 38, 58) : Color.FromArgb(219, 234, 254);
+            }
+            else if (shihabHovered)
+            {
+                shihabRowFill = MehediDarkMode ? Color.FromArgb(27, 30, 38) : Color.FromArgb(241, 245, 249);
+            }
+            else
+            {
+                shihabRowFill = MehediDarkMode ? Color.FromArgb(22, 24, 29) : Color.White;
+            }
+
+            Color mehediHorizLine = mehediSelected
+                ? (MehediDarkMode ? Color.FromArgb(38, 66, 104) : Color.FromArgb(147, 197, 253))
+                : (MehediDarkMode ? Color.FromArgb(33, 37, 46) : Color.FromArgb(226, 232, 240));
+            Color shihabVertLine = MehediDarkMode ? Color.FromArgb(31, 35, 43) : Color.FromArgb(232, 237, 244);
+
+            using (SolidBrush mehediFillBr = new SolidBrush(shihabRowFill))
+            using (Pen shihabRowPen = new Pen(mehediHorizLine))
+            using (Pen mehediColPen = new Pen(shihabVertLine))
+            {
+                mehediG.FillRectangle(mehediFillBr, shihabCell);
+                mehediG.DrawLine(shihabRowPen, shihabCell.Left, shihabCell.Bottom - 1, shihabCell.Right, shihabCell.Bottom - 1);
+                mehediG.DrawLine(mehediColPen, shihabCell.Right - 1, shihabCell.Top, shihabCell.Right - 1, shihabCell.Bottom - 1);
+            }
+
+            string mehediCellText = shihabSubArgs.SubItem != null ? (shihabSubArgs.SubItem.Text ?? "") : "";
+            ShihabDownloadItem shihabDl = shihabSubArgs.Item != null ? (shihabSubArgs.Item.Tag as ShihabDownloadItem) : null;
+            int shihabCol = shihabSubArgs.ColumnIndex;
+
+            if (shihabCol == 0)
+            {
+                Color mehediIdxCol = MehediDarkMode ? Color.FromArgb(124, 133, 153) : Color.FromArgb(100, 116, 139);
+                using (Font shihabIdxFont = new Font("Segoe UI", 8.6f, FontStyle.Regular))
+                {
+                    TextRenderer.DrawText(
+                        mehediG,
+                        mehediCellText,
+                        shihabIdxFont,
+                        shihabCell,
+                        mehediIdxCol,
+                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+                }
+                return;
+            }
+
+            if (shihabCol == 1)
+            {
+                Color mehediNameCol = MehediDarkMode ? Color.FromArgb(238, 242, 247) : Color.FromArgb(15, 23, 42);
+                Rectangle shihabNameBounds = new Rectangle(shihabCell.X + 10, shihabCell.Y, Math.Max(4, shihabCell.Width - 16), shihabCell.Height);
+                using (Font mehediNameFont = new Font("Segoe UI", 9f, FontStyle.Bold))
+                {
+                    TextRenderer.DrawText(
+                        mehediG,
+                        mehediCellText,
+                        mehediNameFont,
+                        shihabNameBounds,
+                        mehediNameCol,
+                        TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+                }
+                return;
+            }
+
+            if (shihabCol == 3 && shihabDl != null)
+            {
+                ShihabDownloadStatus mehediSt = shihabDl.GetShihabStatusEnum();
+                double shihabPct = shihabDl.GetMehediPercent() / 100.0;
+                if (mehediSt == ShihabDownloadStatus.ShihabDownloading && shihabDl.ShihabTotalBytes <= 0 && shihabDl.MehediDownloadedBytes > 0)
+                {
+                    shihabPct = 0.45;
+                }
+
+                Rectangle mehediTrack = new Rectangle(shihabCell.X + 10, shihabCell.Y + shihabCell.Height - 10, Math.Max(14, shihabCell.Width - 20), 4);
+                Color shihabTrackCol = MehediDarkMode ? Color.FromArgb(35, 40, 50) : Color.FromArgb(220, 226, 236);
+                using (GraphicsPath mehediTrackPath = ShihabThemePalette.CreateShihabRoundedRect(mehediTrack, 2))
+                using (SolidBrush shihabTrackBr = new SolidBrush(shihabTrackCol))
+                {
+                    mehediG.FillPath(shihabTrackBr, mehediTrackPath);
+                }
+
+                if (shihabPct > 0.005)
+                {
+                    int mehediFillW = Math.Max(4, (int)Math.Round(mehediTrack.Width * Math.Min(1.0, shihabPct)));
+                    Rectangle shihabBarFillRect = new Rectangle(mehediTrack.X, mehediTrack.Y, Math.Min(mehediTrack.Width, mehediFillW), mehediTrack.Height);
+                    Color mehediBarCol = mehediSt == ShihabDownloadStatus.ShihabCompleted
+                        ? Color.FromArgb(16, 185, 129)
+                        : (mehediSt == ShihabDownloadStatus.ShihabPaused ? Color.FromArgb(245, 158, 11) : Color.FromArgb(13, 116, 231));
+                    using (GraphicsPath shihabFillPath = ShihabThemePalette.CreateShihabRoundedRect(shihabBarFillRect, 2))
+                    using (SolidBrush mehediProgBr = new SolidBrush(mehediBarCol))
+                    {
+                        mehediG.FillPath(mehediProgBr, shihabFillPath);
+                    }
+                }
+
+                Rectangle mehediPctTxtRect = new Rectangle(shihabCell.X + 10, shihabCell.Y + 3, Math.Max(8, shihabCell.Width - 16), 17);
+                Color shihabPctCol = MehediDarkMode ? Color.FromArgb(146, 155, 174) : Color.FromArgb(71, 85, 105);
+                using (Font mehediPctFont = new Font("Segoe UI", 8.2f, FontStyle.Regular))
+                {
+                    TextRenderer.DrawText(
+                        mehediG,
+                        mehediCellText,
+                        mehediPctFont,
+                        mehediPctTxtRect,
+                        shihabPctCol,
+                        TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+                }
+                return;
+            }
+
+            if (shihabCol == 6 && shihabDl != null)
+            {
+                ShihabDownloadStatus shihabState = shihabDl.GetShihabStatusEnum();
+                Color mehediStatusCol;
+                if (shihabState == ShihabDownloadStatus.ShihabCompleted)
+                {
+                    mehediStatusCol = Color.FromArgb(16, 185, 129);
+                }
+                else if (shihabState == ShihabDownloadStatus.ShihabDownloading || shihabState == ShihabDownloadStatus.ShihabConnecting || shihabState == ShihabDownloadStatus.ShihabRebuilding)
+                {
+                    mehediStatusCol = Color.FromArgb(59, 130, 246);
+                }
+                else if (shihabState == ShihabDownloadStatus.ShihabPaused)
+                {
+                    mehediStatusCol = Color.FromArgb(245, 158, 11);
+                }
+                else if (shihabState == ShihabDownloadStatus.ShihabQueued)
+                {
+                    mehediStatusCol = Color.FromArgb(167, 139, 250);
+                }
+                else if (shihabState == ShihabDownloadStatus.ShihabError)
+                {
+                    mehediStatusCol = Color.FromArgb(239, 68, 68);
+                }
+                else
+                {
+                    mehediStatusCol = MehediDarkMode ? Color.FromArgb(156, 163, 178) : Color.FromArgb(51, 65, 85);
+                }
+
+                Rectangle shihabStatRect = new Rectangle(shihabCell.X + 10, shihabCell.Y, Math.Max(4, shihabCell.Width - 14), shihabCell.Height);
+                using (Font mehediStatFont = new Font("Segoe UI", 8.8f, FontStyle.Bold))
+                {
+                    TextRenderer.DrawText(
+                        mehediG,
+                        mehediCellText,
+                        mehediStatFont,
+                        shihabStatRect,
+                        mehediStatusCol,
+                        TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+                }
+                return;
+            }
+
+            Color shihabDefaultCol = MehediDarkMode ? Color.FromArgb(136, 145, 165) : Color.FromArgb(71, 85, 105);
+            if (shihabCol == 4 && shihabDl != null && shihabDl.ShihabCurrentSpeedBps > 5.0)
+            {
+                shihabDefaultCol = Color.FromArgb(56, 189, 248);
+            }
+            Rectangle mehediGenRect = new Rectangle(shihabCell.X + 10, shihabCell.Y, Math.Max(4, shihabCell.Width - 14), shihabCell.Height);
+            using (Font shihabGenFont = new Font("Segoe UI", 8.6f, FontStyle.Regular))
+            {
+                TextRenderer.DrawText(
+                    mehediG,
+                    mehediCellText,
+                    shihabGenFont,
+                    mehediGenRect,
+                    shihabDefaultCol,
+                    TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+            }
+        }
     }
 
     public static class ShihabThemePalette
     {
-        public const string ShihabMainHeaderTitle = "MHS Download Manager 1.0.2 (Mehedi Hasan Shihab)";
+        public const string ShihabMainHeaderTitle = "MHS Download Manager 1.0.3 (Mehedi Hasan Shihab)";
 
         [DllImport("dwmapi.dll", EntryPoint = "DwmSetWindowAttribute")]
         private static extern int SetMehediDwmWindowAttribute(IntPtr shihabHwnd, int mehediAttr, ref int shihabAttrValue, int mehediAttrSize);
@@ -1257,6 +1496,7 @@ namespace ShihabMehediIDM
 
         private static Icon _shihabCachedOfficialIcon;
         private static Bitmap _mehediCachedOfficialPng;
+        private static Bitmap _shihabCachedAuthorPortrait;
 
         public static Icon CreateShihabAppIcon()
         {
@@ -1328,6 +1568,89 @@ namespace ShihabMehediIDM
                 }
             }
             return shihabScaled;
+        }
+
+        public static Bitmap CreateShihabCircularAuthorBitmap(int shihabDiameterPx)
+        {
+            if (_shihabCachedAuthorPortrait == null)
+            {
+                try
+                {
+                    Stream mehediJpgStream = typeof(ShihabThemePalette).Assembly.GetManifestResourceStream("ShihabMehediIDM.author_shihab.jpg");
+                    if (mehediJpgStream != null)
+                    {
+                        using (mehediJpgStream)
+                        using (Image shihabLoaded = Image.FromStream(mehediJpgStream))
+                        {
+                            _shihabCachedAuthorPortrait = new Bitmap(shihabLoaded);
+                        }
+                    }
+                }
+                catch { }
+
+                if (_shihabCachedAuthorPortrait == null)
+                {
+                    try
+                    {
+                        string mehediLocalAsset = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..\\assets\\author_shihab.jpg");
+                        if (File.Exists(mehediLocalAsset))
+                        {
+                            using (Image shihabDiskImg = Image.FromFile(mehediLocalAsset))
+                            {
+                                _shihabCachedAuthorPortrait = new Bitmap(shihabDiskImg);
+                            }
+                        }
+                    }
+                    catch { }
+                }
+            }
+
+            int mehediDiam = Math.Max(32, shihabDiameterPx);
+            Bitmap shihabResult = new Bitmap(mehediDiam, mehediDiam);
+            if (_shihabCachedAuthorPortrait == null)
+            {
+                return CreateMehediLogoBitmap(mehediDiam);
+            }
+
+            using (Bitmap mehediScaledSquare = new Bitmap(mehediDiam, mehediDiam))
+            {
+                using (Graphics shihabScaleG = Graphics.FromImage(mehediScaledSquare))
+                {
+                    shihabScaleG.SmoothingMode = SmoothingMode.HighQuality;
+                    shihabScaleG.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                    shihabScaleG.PixelOffsetMode = PixelOffsetMode.HighQuality;
+
+                    int mehediSrcW = _shihabCachedAuthorPortrait.Width;
+                    int shihabSrcH = _shihabCachedAuthorPortrait.Height;
+                    int mehediCrop = Math.Min(mehediSrcW, shihabSrcH);
+                    int shihabSrcX = (mehediSrcW - mehediCrop) / 2;
+                    int mehediSrcY = (shihabSrcH - mehediCrop) / 2;
+
+                    shihabScaleG.DrawImage(
+                        _shihabCachedAuthorPortrait,
+                        new Rectangle(0, 0, mehediDiam, mehediDiam),
+                        new Rectangle(shihabSrcX, mehediSrcY, mehediCrop, mehediCrop),
+                        GraphicsUnit.Pixel);
+                }
+
+                using (Graphics mehediOutG = Graphics.FromImage(shihabResult))
+                using (TextureBrush shihabTexBrush = new TextureBrush(mehediScaledSquare, WrapMode.Clamp))
+                using (Pen mehediOuterRing = new Pen(Color.FromArgb(46, 62, 88), 2.2f))
+                using (Pen shihabInnerGlow = new Pen(Color.FromArgb(75, 130, 210, 255), 1f))
+                {
+                    mehediOutG.SmoothingMode = SmoothingMode.AntiAlias;
+                    mehediOutG.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                    mehediOutG.PixelOffsetMode = PixelOffsetMode.HighQuality;
+
+                    RectangleF shihabCircleRect = new RectangleF(1.5f, 1.5f, mehediDiam - 3f, mehediDiam - 3f);
+                    mehediOutG.FillEllipse(shihabTexBrush, shihabCircleRect);
+                    mehediOutG.DrawEllipse(mehediOuterRing, shihabCircleRect);
+
+                    RectangleF mehediInnerRect = new RectangleF(2.8f, 2.8f, mehediDiam - 5.6f, mehediDiam - 5.6f);
+                    mehediOutG.DrawEllipse(shihabInnerGlow, mehediInnerRect);
+                }
+            }
+            return shihabResult;
         }
 
         public static Bitmap DrawMehediLargeToolbarIcon(string shihabKind, bool mehediActive)
@@ -2802,115 +3125,149 @@ namespace ShihabMehediIDM
 
     public class ShihabAboutDeveloperDialog : Form
     {
+        private Bitmap _shihabRoundAuthorImg;
+
         public ShihabAboutDeveloperDialog(bool shihabDark)
         {
             Text = "About — " + ShihabThemePalette.ShihabMainHeaderTitle;
-            Size = new Size(680, 445);
+            ClientSize = new Size(660, 520);
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
             MinimizeBox = false;
             StartPosition = FormStartPosition.CenterParent;
-            BackColor = ShihabThemePalette.GetMehediWindowBg(shihabDark);
+            BackColor = shihabDark ? Color.FromArgb(14, 17, 24) : ShihabThemePalette.GetMehediWindowBg(false);
             ForeColor = ShihabThemePalette.GetShihabPrimaryText(shihabDark);
             Font = new Font("Segoe UI", 9.2f);
             Icon = ShihabThemePalette.CreateShihabAppIcon();
             ShihabThemePalette.ApplyMehediNativeDarkFrame(this, shihabDark);
 
-            PictureBox mehediHeroLogo = new PictureBox
-            {
-                Location = new Point(22, 20),
-                Size = new Size(72, 72),
-                SizeMode = PictureBoxSizeMode.Zoom,
-                Image = ShihabThemePalette.CreateMehediLogoBitmap(72),
-                BackColor = Color.Transparent
-            };
+            _shihabRoundAuthorImg = ShihabThemePalette.CreateShihabCircularAuthorBitmap(128);
 
-            Label shihabAppTitle = new Label
+            Panel mehediHeroBanner = new Panel
             {
-                Text = ShihabThemePalette.ShihabMainHeaderTitle,
-                Location = new Point(108, 18),
-                AutoSize = true,
-                Font = new Font("Segoe UI", 13.5f, FontStyle.Bold),
-                ForeColor = shihabDark ? Color.FromArgb(244, 246, 252) : Color.FromArgb(15, 23, 42)
+                Location = new Point(0, 0),
+                Size = new Size(660, 224),
+                BackColor = shihabDark ? Color.FromArgb(11, 16, 29) : Color.FromArgb(232, 240, 252)
             };
-
-            Label mehediExeTag = new Label
+            mehediHeroBanner.Paint += delegate(object shihabSender, PaintEventArgs mehediE)
             {
-                Text = "Executable: mdm.exe (x64)  •  Dynamic 32-Segment Engine & MV3 Browser Video Suite",
-                Location = new Point(110, 50),
-                AutoSize = true,
-                Font = new Font("Segoe UI Semibold", 8.8f),
-                ForeColor = shihabDark ? Color.FromArgb(165, 180, 252) : Color.FromArgb(79, 70, 229)
-            };
+                Graphics shihabG = mehediE.Graphics;
+                shihabG.SmoothingMode = SmoothingMode.AntiAlias;
+                shihabG.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                shihabG.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
 
-            Label shihabTagline = new Label
-            {
-                Text = "High-speed HTTP/HTTPS multi-connection accelerator, HLS stream grabber & smart scheduler.",
-                Location = new Point(110, 72),
-                AutoSize = true,
-                ForeColor = ShihabThemePalette.GetMehediMutedText(shihabDark)
+                Rectangle mehediHeroRect = mehediHeroBanner.ClientRectangle;
+                Color shihabC1 = shihabDark ? Color.FromArgb(9, 13, 24) : Color.FromArgb(238, 244, 255);
+                Color mehediC2 = shihabDark ? Color.FromArgb(16, 25, 44) : Color.FromArgb(219, 234, 254);
+                using (LinearGradientBrush shihabHeroGrad = new LinearGradientBrush(mehediHeroRect, shihabC1, mehediC2, 35f))
+                using (Pen mehediBotBorder = new Pen(shihabDark ? Color.FromArgb(32, 40, 58) : Color.FromArgb(203, 213, 225)))
+                {
+                    shihabG.FillRectangle(shihabHeroGrad, mehediHeroRect);
+                    shihabG.DrawLine(mehediBotBorder, 0, mehediHeroRect.Height - 1, mehediHeroRect.Width, mehediHeroRect.Height - 1);
+                }
+
+                if (_shihabRoundAuthorImg != null)
+                {
+                    int mehediImgX = (mehediHeroRect.Width - 128) / 2;
+                    shihabG.DrawImage(_shihabRoundAuthorImg, new Rectangle(mehediImgX, 16, 128, 128));
+                }
+
+                Color shihabAuthorTitleCol = shihabDark ? Color.FromArgb(244, 247, 254) : Color.FromArgb(15, 23, 42);
+                Color mehediRoleCol = shihabDark ? Color.FromArgb(96, 165, 250) : Color.FromArgb(29, 78, 216);
+                Color shihabSubTagCol = shihabDark ? Color.FromArgb(142, 152, 175) : Color.FromArgb(71, 85, 105);
+
+                using (Font mehediAuthorFont = new Font("Segoe UI", 13.5f, FontStyle.Bold))
+                using (Font shihabRoleFont = new Font("Segoe UI Semibold", 9.2f, FontStyle.Regular))
+                using (Font mehediAppSubFont = new Font("Segoe UI", 8.5f, FontStyle.Regular))
+                {
+                    TextRenderer.DrawText(
+                        shihabG,
+                        "Mehedi Hasan Shihab",
+                        mehediAuthorFont,
+                        new Rectangle(20, 150, mehediHeroRect.Width - 40, 26),
+                        shihabAuthorTitleCol,
+                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+
+                    TextRenderer.DrawText(
+                        shihabG,
+                        "Senior Software Engineer  \u2022  Author of " + ShihabThemePalette.ShihabMainHeaderTitle,
+                        shihabRoleFont,
+                        new Rectangle(20, 176, mehediHeroRect.Width - 40, 20),
+                        mehediRoleCol,
+                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+
+                    TextRenderer.DrawText(
+                        shihabG,
+                        "Executable: mdm.exe (x64)  \u2022  Dynamic 32-Segment Engine & MV3 Stream Sniffer",
+                        mehediAppSubFont,
+                        new Rectangle(20, 196, mehediHeroRect.Width - 40, 18),
+                        shihabSubTagCol,
+                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+                }
             };
 
             ShihabRoundedCardPanel mehediDevCard = new ShihabRoundedCardPanel
             {
-                Location = new Point(20, 108),
-                Size = new Size(624, 228),
-                MehediFillColor = shihabDark ? Color.FromArgb(24, 26, 36) : Color.White,
-                ShihabBorderColor = shihabDark ? Color.FromArgb(40, 45, 64) : Color.FromArgb(203, 213, 225),
+                Location = new Point(20, 240),
+                Size = new Size(620, 214),
+                MehediFillColor = shihabDark ? Color.FromArgb(20, 23, 31) : Color.White,
+                ShihabBorderColor = shihabDark ? Color.FromArgb(36, 41, 54) : Color.FromArgb(203, 213, 225),
                 MehediCornerRadius = 10
             };
 
             Label shihabCardHdr = new Label
             {
-                Text = "DEVELOPER & AUTHOR INFORMATION",
-                Location = new Point(18, 15),
+                Text = "DEVELOPER & OFFICIAL LINKS",
+                UseMnemonic = false,
+                Location = new Point(18, 14),
                 AutoSize = true,
                 BackColor = mehediDevCard.MehediFillColor,
-                Font = new Font("Segoe UI", 8.5f, FontStyle.Bold),
-                ForeColor = shihabDark ? Color.FromArgb(167, 139, 250) : Color.FromArgb(109, 40, 217)
+                Font = new Font("Segoe UI", 8.3f, FontStyle.Bold),
+                ForeColor = shihabDark ? Color.FromArgb(77, 184, 255) : Color.FromArgb(29, 78, 216)
             };
 
             Label mehediDevNameLbl = new Label
             {
                 Text = "Developer:",
-                Location = new Point(18, 45),
+                Location = new Point(18, 42),
                 AutoSize = true,
                 BackColor = mehediDevCard.MehediFillColor,
-                Font = new Font("Segoe UI Semibold", 9.5f),
+                Font = new Font("Segoe UI Semibold", 9.2f),
                 ForeColor = ShihabThemePalette.GetMehediMutedText(shihabDark)
             };
             Label shihabDevNameVal = new Label
             {
-                Text = "Mehedi Hasan Shihab  (Web & Software Developer)",
-                Location = new Point(128, 45),
+                Text = "Mehedi Hasan Shihab  (Software & Systems Engineer)",
+                UseMnemonic = false,
+                Location = new Point(128, 42),
                 AutoSize = true,
                 BackColor = mehediDevCard.MehediFillColor,
-                Font = new Font("Segoe UI", 10f, FontStyle.Bold),
+                Font = new Font("Segoe UI", 9.6f, FontStyle.Bold),
                 ForeColor = ForeColor
             };
 
-            Color mehediLinkCol = shihabDark ? Color.FromArgb(129, 140, 248) : Color.FromArgb(67, 56, 202);
+            Color mehediLinkCol = shihabDark ? Color.FromArgb(96, 165, 250) : Color.FromArgb(29, 78, 216);
 
-            Label shihabPortLbl = new Label { Text = "Portfolio:", Location = new Point(18, 79), AutoSize = true, BackColor = mehediDevCard.MehediFillColor, ForeColor = ShihabThemePalette.GetMehediMutedText(shihabDark) };
-            LinkLabel mehediPortLink = CreateShihabUrlLink("https://sshihabb007.github.io/", "https://sshihabb007.github.io/", new Point(128, 79), mehediLinkCol);
+            Label shihabPortLbl = new Label { Text = "Portfolio:", Location = new Point(18, 74), AutoSize = true, BackColor = mehediDevCard.MehediFillColor, ForeColor = ShihabThemePalette.GetMehediMutedText(shihabDark) };
+            LinkLabel mehediPortLink = CreateShihabUrlLink("https://sshihabb007.github.io/", "https://sshihabb007.github.io/", new Point(128, 74), mehediLinkCol);
             mehediPortLink.BackColor = mehediDevCard.MehediFillColor;
 
-            Label shihabMailLbl = new Label { Text = "Email Me:", Location = new Point(18, 109), AutoSize = true, BackColor = mehediDevCard.MehediFillColor, ForeColor = ShihabThemePalette.GetMehediMutedText(shihabDark) };
-            LinkLabel mehediMailLink = CreateShihabUrlLink("sshihabb007@gmail.com", "mailto:sshihabb007@gmail.com?subject=MHS%20Download%20Manager", new Point(128, 109), mehediLinkCol);
+            Label shihabMailLbl = new Label { Text = "Email Me:", Location = new Point(18, 103), AutoSize = true, BackColor = mehediDevCard.MehediFillColor, ForeColor = ShihabThemePalette.GetMehediMutedText(shihabDark) };
+            LinkLabel mehediMailLink = CreateShihabUrlLink("sshihabb007@gmail.com", "mailto:sshihabb007@gmail.com?subject=MHS%20Download%20Manager", new Point(128, 103), mehediLinkCol);
             mehediMailLink.BackColor = mehediDevCard.MehediFillColor;
 
-            Label shihabGhLbl = new Label { Text = "GitHub:", Location = new Point(18, 139), AutoSize = true, BackColor = mehediDevCard.MehediFillColor, ForeColor = ShihabThemePalette.GetMehediMutedText(shihabDark) };
-            LinkLabel mehediGhLink = CreateShihabUrlLink("https://github.com/sshihabb007", "https://github.com/sshihabb007", new Point(128, 139), mehediLinkCol);
+            Label shihabGhLbl = new Label { Text = "GitHub:", Location = new Point(18, 132), AutoSize = true, BackColor = mehediDevCard.MehediFillColor, ForeColor = ShihabThemePalette.GetMehediMutedText(shihabDark) };
+            LinkLabel mehediGhLink = CreateShihabUrlLink("https://github.com/sshihabb007", "https://github.com/sshihabb007", new Point(128, 132), mehediLinkCol);
             mehediGhLink.BackColor = mehediDevCard.MehediFillColor;
 
-            Label shihabLiLbl = new Label { Text = "LinkedIn:", Location = new Point(18, 169), AutoSize = true, BackColor = mehediDevCard.MehediFillColor, ForeColor = ShihabThemePalette.GetMehediMutedText(shihabDark) };
-            LinkLabel mehediLiLink = CreateShihabUrlLink("https://www.linkedin.com/in/mehedi-hasan-shihab", "https://www.linkedin.com/in/mehedi-hasan-shihab", new Point(128, 169), mehediLinkCol);
+            Label shihabLiLbl = new Label { Text = "LinkedIn:", Location = new Point(18, 161), AutoSize = true, BackColor = mehediDevCard.MehediFillColor, ForeColor = ShihabThemePalette.GetMehediMutedText(shihabDark) };
+            LinkLabel mehediLiLink = CreateShihabUrlLink("https://www.linkedin.com/in/mehedi-hasan-shihab", "https://www.linkedin.com/in/mehedi-hasan-shihab", new Point(128, 161), mehediLinkCol);
             mehediLiLink.BackColor = mehediDevCard.MehediFillColor;
 
             Label shihabCopyLbl = new Label
             {
-                Text = "Copyright © 2026 Mehedi Hasan Shihab (sshihabb007). All rights reserved.",
-                Location = new Point(18, 198),
+                Text = "Copyright \u00A9 2026 Mehedi Hasan Shihab (sshihabb007). All rights reserved.",
+                Location = new Point(18, 188),
                 AutoSize = true,
                 BackColor = mehediDevCard.MehediFillColor,
                 Font = new Font("Segoe UI", 8.2f),
@@ -2927,20 +3284,20 @@ namespace ShihabMehediIDM
                 shihabCopyLbl
             });
 
-            Button shihabPortfolioBtn = ShihabThemePalette.CreateMehediStyledButton("Visit Portfolio", Color.FromArgb(124, 92, 255), Color.White, 138);
-            shihabPortfolioBtn.Location = new Point(20, 352);
+            Button shihabPortfolioBtn = ShihabThemePalette.CreateMehediStyledButton("Visit Portfolio", Color.FromArgb(13, 116, 231), Color.White, 138);
+            shihabPortfolioBtn.Location = new Point(20, 470);
             shihabPortfolioBtn.Click += delegate { OpenMehediExternalUri("https://sshihabb007.github.io/"); };
 
-            Button mehediEmailBtn = ShihabThemePalette.CreateMehediStyledButton("Email Me", Color.FromArgb(99, 102, 241), Color.White, 120);
-            mehediEmailBtn.Location = new Point(168, 352);
+            Button mehediEmailBtn = ShihabThemePalette.CreateMehediStyledButton("Email Me", Color.FromArgb(33, 39, 52), Color.White, 118);
+            mehediEmailBtn.Location = new Point(168, 470);
             mehediEmailBtn.Click += delegate { OpenMehediExternalUri("mailto:sshihabb007@gmail.com?subject=MHS%20Download%20Manager"); };
 
-            Button shihabGithubBtn = ShihabThemePalette.CreateMehediStyledButton("GitHub", Color.FromArgb(36, 40, 58), Color.White, 110);
-            shihabGithubBtn.Location = new Point(298, 352);
+            Button shihabGithubBtn = ShihabThemePalette.CreateMehediStyledButton("GitHub", Color.FromArgb(33, 39, 52), Color.White, 110);
+            shihabGithubBtn.Location = new Point(296, 470);
             shihabGithubBtn.Click += delegate { OpenMehediExternalUri("https://github.com/sshihabb007"); };
 
             Button mehediOkBtn = ShihabThemePalette.CreateMehediStyledButton("Close", ShihabThemePalette.GetShihabSurfaceBg(shihabDark), ForeColor, 110);
-            mehediOkBtn.Location = new Point(534, 352);
+            mehediOkBtn.Location = new Point(530, 470);
             mehediOkBtn.Click += delegate { Close(); };
 
             AcceptButton = mehediOkBtn;
@@ -2948,9 +3305,19 @@ namespace ShihabMehediIDM
 
             Controls.AddRange(new Control[]
             {
-                mehediHeroLogo, shihabAppTitle, mehediExeTag, shihabTagline,
+                mehediHeroBanner,
                 mehediDevCard, shihabPortfolioBtn, mehediEmailBtn, shihabGithubBtn, mehediOkBtn
             });
+        }
+
+        protected override void Dispose(bool shihabDisposing)
+        {
+            if (shihabDisposing && _shihabRoundAuthorImg != null)
+            {
+                _shihabRoundAuthorImg.Dispose();
+                _shihabRoundAuthorImg = null;
+            }
+            base.Dispose(shihabDisposing);
         }
 
         private static LinkLabel CreateShihabUrlLink(string mehediText, string shihabTargetUri, Point mehediLoc, Color shihabCol)
