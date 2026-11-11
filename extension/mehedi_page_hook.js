@@ -1553,11 +1553,51 @@
     } catch (_) {}
   }
 
+  // Detect Encrypted Media Extensions (EME / Widevine / PlayReady / FairPlay DRM) so UI clearly labels DRM streams
+  function shihabNotifyEmeDrmDetected(mehediKeySystem) {
+    try {
+      window.postMessage(
+        {
+          __shihabMehediPageHook: true,
+          mehediKind: "shihab_eme_drm_detected",
+          shihabPayload: { keySystem: String(mehediKeySystem || "EME") }
+        },
+        "*"
+      );
+    } catch (_) {}
+  }
+
+  try {
+    if (navigator && typeof navigator.requestMediaKeySystemAccess === "function") {
+      const mehediOrigReqKeySys = navigator.requestMediaKeySystemAccess.bind(navigator);
+      navigator.requestMediaKeySystemAccess = function (shihabKeySystem, mehediSupportedConfigs) {
+        const shihabPromise = mehediOrigReqKeySys(shihabKeySystem, mehediSupportedConfigs);
+        if (shihabPromise && typeof shihabPromise.then === "function") {
+          shihabPromise.then(() => shihabNotifyEmeDrmDetected(shihabKeySystem)).catch(() => {});
+        }
+        return shihabPromise;
+      };
+    }
+  } catch (_) {}
+
+  document.addEventListener(
+    "encrypted",
+    (shihabEncEvt) => {
+      if (shihabEncEvt && shihabEncEvt.target && shihabEncEvt.target.tagName === "VIDEO") {
+        shihabNotifyEmeDrmDetected(shihabEncEvt.initDataType || "encrypted-video");
+      }
+    },
+    { capture: true, passive: true }
+  );
+
   for (const mehediEvtName of ["play", "loadedmetadata", "pointerover"]) {
     document.addEventListener(
       mehediEvtName,
       (shihabEvt) => {
         if (shihabEvt.target && shihabEvt.target.tagName === "VIDEO") {
+          if (shihabEvt.target.mediaKeys) {
+            shihabNotifyEmeDrmDetected("video.mediaKeys");
+          }
           mehediInspectLiveDomVideoElement(shihabEvt.target);
         }
       },

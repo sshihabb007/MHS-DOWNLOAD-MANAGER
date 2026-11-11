@@ -18,6 +18,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   const shihabRetrackBtn = document.getElementById("mehediRetrackTabBtn");
   const shihabStreamsBox = document.getElementById("mehediStreamsContainer");
   const mehediGrabAllBtn = document.getElementById("shihabGrabAllLinksBtn");
+  const shihabOpenAppBtn = document.getElementById("shihabOpenDesktopAppBtn");
+  const shihabUpdateBanner = document.getElementById("shihabUpdateBanner");
+  const shihabUpdateBannerText = document.getElementById("shihabUpdateBannerText");
+  const shihabUpdateBannerBtn = document.getElementById("shihabUpdateBannerBtn");
+  let mehediLatestReleaseUrl = "";
 
   const shihabTabs = await chrome.tabs.query({ active: true, currentWindow: true });
   const mehediActiveTab = shihabTabs && shihabTabs[0] ? shihabTabs[0] : null;
@@ -75,6 +80,17 @@ document.addEventListener("DOMContentLoaded", async () => {
       ? `Connected · mdm.exe v${mehediBridgeVer}`
       : "Integration Paused";
     shihabToggleBtn.textContent = shihabRes.shihabEnabled ? "Enabled" : "Paused";
+
+    if (shihabUpdateBanner && shihabRes.shihabBridgeInfo && shihabRes.shihabBridgeInfo.updateAvailable) {
+      const latestVer = shihabRes.shihabBridgeInfo.latestVersion || "";
+      mehediLatestReleaseUrl = shihabRes.shihabBridgeInfo.latestHtmlUrl || "";
+      shihabUpdateBannerText.textContent = latestVer
+        ? `New GitHub Release Ready: v${latestVer}`
+        : "New GitHub Release Available!";
+      shihabUpdateBanner.style.display = "flex";
+    } else if (shihabUpdateBanner) {
+      shihabUpdateBanner.style.display = "none";
+    }
 
     const mehediStreams = await mehediResolveIsolatedSelectedStreams(shihabRes.mehediStreams);
     mehediCountBadge.textContent = String(mehediStreams.length);
@@ -168,7 +184,13 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   shihabSendBtn.addEventListener("click", async () => {
     const mehediVal = (mehediUrlInput.value || "").trim();
-    if (!mehediVal.startsWith("http://") && !mehediVal.startsWith("https://")) {
+    if (
+      !mehediVal.startsWith("http://") &&
+      !mehediVal.startsWith("https://") &&
+      !mehediVal.startsWith("ftp://") &&
+      !mehediVal.startsWith("ftps://") &&
+      !mehediVal.startsWith("magnet:?")
+    ) {
       return;
     }
     await chrome.runtime.sendMessage({
@@ -176,10 +198,28 @@ document.addEventListener("DOMContentLoaded", async () => {
       shihabUrl: mehediVal,
       mehediReferrer: mehediActiveTab ? mehediActiveTab.url : "",
       mehediTabTitle: mehediActiveTab ? mehediActiveTab.title : "",
+      shihabIncognito: Boolean(mehediActiveTab && mehediActiveTab.incognito),
       shihabTabId: shihabActiveTabId
     });
     window.close();
   });
+
+  if (shihabOpenAppBtn) {
+    shihabOpenAppBtn.addEventListener("click", async () => {
+      await chrome.runtime.sendMessage({ shihabCmd: "shihab_show_desktop_app" });
+      window.close();
+    });
+  }
+
+  if (shihabUpdateBannerBtn) {
+    shihabUpdateBannerBtn.addEventListener("click", async () => {
+      await chrome.runtime.sendMessage({ shihabCmd: "shihab_show_desktop_app" });
+      if (mehediLatestReleaseUrl) {
+        chrome.tabs.create({ url: mehediLatestReleaseUrl }).catch(() => {});
+      }
+      window.close();
+    });
+  }
 
   if (shihabRetrackBtn) {
     shihabRetrackBtn.addEventListener("click", async () => {

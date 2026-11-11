@@ -126,13 +126,12 @@ Use **any** of these 3 quick methods to get the exact folder path:
 
 | Capability | Details |
 | :--- | :--- |
-| **⚡ Dynamic Segment Acceleration (`1–32` Connections)** | Splits transfers across concurrent HTTP `206 Partial Content` `Range` workers and dynamically subdivides the largest remaining active chunk in flight whenever a worker finishes early. Includes checkpointed **Pause / Resume**, **Refresh Download Address**, **SHA-256** integrity verification, and per-item or global **Speed Limiters**. |
-| **🖥️ Dark Transfers Dashboard UI (`v1.0.3`)** | Edge-to-edge dark obsidian workspace (`#121418` / `#16181d`) with native Windows 11 DWM dark titlebars, `TRANSFERS` filter pills (`All Downloads`, `Downloading`, `Completed`, `Paused`, `Scheduled`, and file categories), live `Local Storage` & clickable speed-limit card, instant `Filter transfers...` search, 8-column inline-progress grid, and 4-pill live socket/throughput footer. |
-| **🎬 Outside-Corner `Download Video` Pill & Stream Sniffer** | Translucent dark stadium pill (`Download Video` + stream count badge) anchored **outside** the top-right corner of `<video>` so video playback is never covered, with a single-instance DOM coordinator (zero overlapping icons) and the **`MHS STREAM SNIFFER`** quality selector (`MAX`, `1080p Full HD`, `720p HD`, `480p Standard`, `Audio Only`, and sniffed streams). |
-| **🚀 High-Speed YouTube HD/4K & Unthrottled Audio** | Built-in InnerTube stream resolver (`144p` up to `1080p`, `1440p`, and `2160p 4K` + original `M4A`/`Opus` audio) paired with parallel burst-sliced HTTP `206` range workers (`1 MiB` audio / `4 MiB` video slices over warm `KeepAlive` TLS sockets). |
-| **🎞️ Zero-Dependency Lossless Media Muxer** | Pure C# ISO-BMFF & Matroska muxer (`MehediMediaMuxer`) losslessly combines separate adaptive DASH video + audio tracks (`MP4/fMP4 + M4A -> Fast-Start .mp4`, `MP4 + WebM Opus -> .mp4`, `WebM + WebM -> .webm`, `WebM + M4A -> .mkv`) without re-encoding. *(DRM/EME-protected streams are strictly respected and never bypassed.)* |
-| **🛡️ Strict User-Gesture Download Interception** | Intercepts user-clicked downloads (`.mkv`, `.mp4`, `.zip`, `.rar`, `.exe`, `.iso`, `.pdf`, etc.) while blocking unsolicited browser-startup history replays and background auto-popups (`event.isTrusted` + `chrome.storage.session` guard), with `Prevent` (`Alt`) / `Force` (`Ins`) hotkeys and automatic **Browser Fetch Relay** recovery on session-bound `HTTP 403` links. |
-| **🧰 Complete Desktop Toolkit** | Includes **Named Queues**, **Scheduler**, **Site Grabber** web crawler, **Batch Download** generator, `.ef2` / `.txt` **Import & Export**, **9-Tab Options** dialog, **System Tray** integration, and a native **Windows x64 Setup Wizard & Uninstaller**. |
+| **⚡ 1–128 Sparse Dynamic Segment Engine** | Pre-allocates a unified NTFS sparse `.mhs.part` file (`FSCTL_SET_SPARSE`) with `4096`-byte page-aligned dynamic halving, Connection 1 kept-stream reuse, TTFB stall preemption, slow-connection shedding (`< 1/4` peak speed), RFC 9110 `ETag` + `64`-byte resume overlap verification, multi-segment `FTP`/`FTPS` (`REST`), and `CRC32`/`MD5`/`SHA-1`/`SHA-256`/`SHA-512` checksum verification. |
+| **🔔 GitHub Releases Auto-Updater & Popup** | Automatically checks GitHub Releases (`5s` after launch + every `6h`, or `Ctrl+U`), notifies via Tray + themed Update Popup + browser extension banner, verifies `SHA256SUMS.txt` (fail-closed), and performs one-click silent update + restart for both Setup and Portable modes. |
+| **🧲 BitTorrent, Media Suite & Debrid Cloud** | Full BitTorrent & Magnet client (`BEP-3`, `BEP-9/10` magnet metadata, `BEP-15` UDP trackers, `BEP-19` WebSeeds, `.torrent` creator, IP blocklists), managed `yt-dlp` / `ffmpeg` / `gallery-dl` video/playlist/gallery downloaders, Real-Debrid / AllDebrid / Premiumize unlocking, Google Drive/Docs direct export, and hardened Zip-Slip/bomb-safe archive extraction. |
+| **🎬 14-Browser Capture & Lossless Muxer** | Native Messaging auto-registration across 9 Chromium + 5 Firefox browsers (`manifest.json` + `manifest.firefox.json`), outside-corner `Download Video` pill & `MHS STREAM SNIFFER`, DNR inline capture, POST form capture, EME DRM detection badge, InnerTube HD/4K resolver, and pure C# ISO-BMFF/Matroska lossless muxer. |
+| **🛡️ Privacy, Network Kill-Switch & DPAPI Vault** | Encrypted DNS (`DoH` via Cloudflare, Google, Quad9, AdGuard, NextDNS, Custom), authenticated local `SOCKS5` (`RFC 1928/1929`) & WinHTTP `PAC` relay, strict Network Adapter / VPN Kill-Switch with `netwatch` auto-resume, Windows `DPAPI` credential vault, Mark-of-the-Web (`Zone.Identifier`), and offline IP-to-Country flag badges. |
+| **📱 LAN Remote QR Web UI, CLI & MCP Server** | Mobile-responsive LAN Remote Control Web Dashboard (`:8463`) with 8-digit one-time pairing & native ISO/IEC 18004 QR encoder, RSS 2.0/Atom auto-downloader, rolling bandwidth quota, 5 themes + `.toml` custom themes, `100%–200%` scaling, `28` languages, out-of-process `--crash-monitor`, `--headless` daemon, full `--cli`, and 15-tool `--mcp` JSON-RPC server. |
 
 ---
 
@@ -178,24 +177,27 @@ MHS-DOWNLOAD-MANAGER/
 │   ├── mdm.ico                             # Multi-resolution application & installer icon
 │   ├── mdm.png                             # High-resolution brand logo
 │   └── author_shihab.jpg                   # Developer portrait embedded in About dialog
-├── extension/                              # Manifest V3 Browser Extension (bundled into Setup)
-│   ├── manifest.json                       # MV3 manifest (v1.0.3)
-│   ├── mehedi_page_hook.js                 # MSE/XHR/fetch & player stream hook
+├── extension/                              # Manifest V3 Browser Extension (Chromium + Firefox)
+│   ├── manifest.json                       # Chromium MV3 manifest (v1.0.3)
+│   ├── manifest.firefox.json               # Firefox / Gecko MV3 manifest (v1.0.3)
+│   ├── mehedi_page_hook.js                 # MSE/XHR/fetch & EME DRM stream hook
 │   ├── mehedi_content.js                   # Floating Download Video pill & Stream Sniffer menu
-│   ├── shihab_background.js                # User-gesture download guard & Browser Fetch Relay
-│   ├── shihab_popup.html / mehedi_popup.js # Extension toolbar popup
+│   ├── shihab_background.js                # User-gesture guard, DNR, POST & Browser Fetch Relay
+│   ├── shihab_popup.html / mehedi_popup.js # Extension toolbar popup & update banner
 │   └── images/                             # Extension icons & avatar
 ├── src/
-│   ├── MehediProgramEntry.cs               # Entry point, CLI router & Native Host switch
-│   ├── ShihabMainIdmWindow.cs              # Dark Transfers sidebar, pill header, grid & tray
+│   ├── MehediProgramEntry.cs               # Entry point, CLI/MCP/Headless/Watchdog router
+│   ├── ShihabMainIdmWindow.cs              # Transfers dashboard, themes, RSS & update triggers
+│   ├── ShihabAutoUpdaterAndQr.cs           # GitHub Releases Auto-Updater, QR Encoder & Network Relay
+│   ├── ShihabAdvancedSubsystems.cs         # DoH, GeoIP, Checksum, BitTorrent, Debrid, Media, Remote, MCP & Crash
 │   ├── MehediDialogsAndProgress.cs         # Add URL, File Info, Live Segment Progress & About
-│   ├── ShihabToolsWindows.cs               # 9-Tab Options, Scheduler, Queues & Site Grabber
-│   ├── MehediDynamicSegmentEngine.cs       # Multi-segment engine, burst slicer & YT resolver
+│   ├── ShihabToolsWindows.cs               # Options, Torrent, Video/Gallery, RSS, QR Pairing & Grabber
+│   ├── MehediDynamicSegmentEngine.cs       # 1-128 Sparse multi-segment HTTP/FTP/HLS/Torrent engine
 │   ├── MehediMediaMuxer.cs                 # Zero-dependency ISO-BMFF & Matroska muxer
-│   ├── MehediBrowserBridgeAndNativeHost.cs # Loopback HTTP server & Native Messaging host
-│   ├── ShihabDownloadModels.cs             # Persistence models, categories & configuration
+│   ├── MehediBrowserBridgeAndNativeHost.cs # Authenticated loopback bridge & 14-browser Native Host
+│   ├── ShihabDownloadModels.cs             # Persistence models, DPAPI secret vault & configuration
 │   └── installer/
-│       └── ShihabSetupWizard.cs            # Windows x64 Setup Wizard & Uninstaller
+│       └── ShihabSetupWizard.cs            # Windows x64 Setup Wizard, Silent Updater & Uninstaller
 ├── build.ps1                               # Zero-dependency PowerShell build script
 ├── LICENSE                                 # MIT License
 └── README.md                               # Project documentation
@@ -241,6 +243,16 @@ mdm.exe /d <URL> [/p <LocalPath>] [/f <LocalFileName>] [/n] [/q] [/a] [/s]
 | `/q` | Close `mdm.exe` automatically once the download finishes |
 | `/a` | Add the file to the download queue without starting immediately |
 | `/s` | Start the active download queue immediately |
+| `--cli status [--json]` | List all downloads and live progress |
+| `--cli get <URL>` | Queue/start an HTTP, HTTPS, FTP, FTPS, Magnet, or `.torrent` download |
+| `--cli check-update [--json]` | Check GitHub Releases for a newer version |
+| `--cli update [--verify-only]` | Download, verify `SHA256SUMS.txt`, and apply the latest GitHub Release |
+| `--cli pair [--json]` | Generate an 8-digit LAN Remote Control pairing code & terminal QR code |
+| `--cli torrent-info <target>` / `torrent-create <src>` | Inspect `.torrent`/magnet metadata or create a `.torrent` file |
+| `--cli video-get <URL>` / `gallery-get <URL>` | Download media or galleries via managed `yt-dlp` / `gallery-dl` |
+| `--mcp` | Run the Model Context Protocol (`MCP`) JSON-RPC 2.0 stdio server (`15` tools) |
+| `--headless` | Run background download engine, local bridge, and LAN Remote UI without GUI |
+| `--forget-sign-ins` | Purge all DPAPI-encrypted credentials and tokens from the local vault |
 
 ### Setup Installer CLI (`MHS-Download-Manager-Setup-1.0.3-x64.exe`)
 

@@ -2,8 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Runtime.Serialization;
 using System.Runtime.Serialization.Json;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Win32;
@@ -95,10 +97,66 @@ namespace ShihabMehediIDM
         [DataMember] public long ShihabAudioCompanionBytes { get; set; }
         [DataMember] public int ShihabSourceTabId { get; set; }
         [DataMember] public string ShihabQualityLabel { get; set; }
+        [DataMember] public string ShihabETag { get; set; }
+        [DataMember] public string ShihabETagHost { get; set; }
+        [DataMember] public string ShihabExpectedChecksum { get; set; }
+        [DataMember] public string ShihabComputedChecksum { get; set; }
+        [DataMember] public string ShihabChecksumStatus { get; set; }
+        [DataMember] public string ShihabServerIp { get; set; }
+        [DataMember] public string ShihabServerCountryCode { get; set; }
+        [DataMember] public bool ShihabAutoExtract { get; set; }
+        [DataMember] public string ShihabArchivePassword { get; set; }
+        [DataMember] public string ShihabPostBody { get; set; }
+        [DataMember] public bool ShihabIsTorrent { get; set; }
+        [DataMember] public string ShihabTorrentMagnetOrPath { get; set; }
+        [DataMember] public bool ShihabTorrentSequential { get; set; }
+        [DataMember] public bool ShihabTorrentKeepSeeding { get; set; }
+        [DataMember] public List<int> ShihabSelectedTorrentFiles { get; set; }
+        [DataMember] public string ShihabSubtitleLanguages { get; set; }
+        [DataMember] public bool ShihabEmbedSubtitles { get; set; }
+        [DataMember] public string ShihabAudioExtractFormat { get; set; }
+        [DataMember] public bool ShihabIsYtDlpJob { get; set; }
+        [DataMember] public string ShihabYtDlpFormatSelector { get; set; }
+        [DataMember] public bool ShihabIsGalleryJob { get; set; }
+        [DataMember] public int ShihabGalleryMaxItems { get; set; }
+        [DataMember] public bool ShihabBypassDebrid { get; set; }
+        [DataMember] public bool ShihabUseDebridForTorrent { get; set; }
+        [DataMember] public bool ShihabIsPrivateIncognito { get; set; }
+        [DataMember] public string ShihabPartFilePath { get; set; }
         [DataMember] public List<MehediSegmentChunk> MehediSegments { get; set; }
 
         [IgnoreDataMember] public double ShihabCurrentSpeedBps { get; set; }
         [IgnoreDataMember] public long MehediEtaSeconds { get; set; }
+        [IgnoreDataMember] public string ShihabTransientUnlockedUrl { get; set; }
+        [IgnoreDataMember] public int ShihabTransientMaxChunks { get; set; }
+
+        [IgnoreDataMember]
+        public string ShihabSubtitleLangs
+        {
+            get { return ShihabSubtitleLanguages; }
+            set { ShihabSubtitleLanguages = value; }
+        }
+
+        [IgnoreDataMember]
+        public string ShihabAudioOnlyExtractFormat
+        {
+            get { return ShihabAudioExtractFormat; }
+            set { ShihabAudioExtractFormat = value; }
+        }
+
+        [IgnoreDataMember]
+        public bool ShihabAudioOnlyExtract
+        {
+            get { return !string.IsNullOrWhiteSpace(ShihabAudioExtractFormat); }
+            set { ShihabAudioExtractFormat = value ? "mp3" : ""; }
+        }
+
+        [IgnoreDataMember]
+        public bool ShihabIsTorrentOrMagnet
+        {
+            get { return ShihabIsTorrent; }
+            set { ShihabIsTorrent = value; }
+        }
 
         public ShihabDownloadItem()
         {
@@ -137,9 +195,37 @@ namespace ShihabMehediIDM
             ShihabAudioCompanionBytes = -1;
             ShihabSourceTabId = -1;
             ShihabQualityLabel = "";
+            ShihabETag = "";
+            ShihabETagHost = "";
+            ShihabExpectedChecksum = "";
+            ShihabComputedChecksum = "";
+            ShihabChecksumStatus = "";
+            ShihabServerIp = "";
+            ShihabServerCountryCode = "";
+            ShihabAutoExtract = false;
+            ShihabArchivePassword = "";
+            ShihabPostBody = "";
+            ShihabIsTorrent = false;
+            ShihabTorrentMagnetOrPath = "";
+            ShihabTorrentSequential = true;
+            ShihabTorrentKeepSeeding = false;
+            ShihabSelectedTorrentFiles = new List<int>();
+            ShihabSubtitleLanguages = "";
+            ShihabEmbedSubtitles = false;
+            ShihabAudioExtractFormat = "";
+            ShihabIsYtDlpJob = false;
+            ShihabYtDlpFormatSelector = "";
+            ShihabIsGalleryJob = false;
+            ShihabGalleryMaxItems = 0;
+            ShihabBypassDebrid = false;
+            ShihabUseDebridForTorrent = false;
+            ShihabIsPrivateIncognito = false;
+            ShihabPartFilePath = "";
             MehediSegments = new List<MehediSegmentChunk>();
             ShihabCurrentSpeedBps = 0;
             MehediEtaSeconds = -1;
+            ShihabTransientUnlockedUrl = "";
+            ShihabTransientMaxChunks = 0;
         }
 
         public ShihabDownloadStatus GetShihabStatusEnum()
@@ -242,6 +328,16 @@ namespace ShihabMehediIDM
         [DataMember] public bool ShihabStartOnStartup { get; set; }
         [DataMember] public bool MehediExitAppWhenDone { get; set; }
         [DataMember] public int ShihabQuotaMegabytes { get; set; }
+        [DataMember] public string ShihabOnceAtDateYyyyMmDd { get; set; }
+        [DataMember] public string ShihabRunCommandWhenDone { get; set; }
+        [DataMember] public string ShihabSystemPowerActionWhenDone { get; set; }
+
+        [IgnoreDataMember]
+        public bool MehediExitAppWhenQueueFinishes
+        {
+            get { return MehediExitAppWhenDone; }
+            set { MehediExitAppWhenDone = value; }
+        }
 
         [IgnoreDataMember] public bool MehediIsRunningNow { get; set; }
         [IgnoreDataMember] public string ShihabLastAutoStartMinute { get; set; }
@@ -260,6 +356,9 @@ namespace ShihabMehediIDM
             ShihabStartOnStartup = false;
             MehediExitAppWhenDone = false;
             ShihabQuotaMegabytes = 0;
+            ShihabOnceAtDateYyyyMmDd = "";
+            ShihabRunCommandWhenDone = "";
+            ShihabSystemPowerActionWhenDone = "None";
             MehediIsRunningNow = false;
             ShihabLastAutoStartMinute = "";
             MehediLastAutoStopMinute = "";
@@ -275,16 +374,367 @@ namespace ShihabMehediIDM
     }
 
     [DataContract]
+    public class ShihabHostConnectionLimit
+    {
+        [DataMember] public string ShihabHostPattern { get; set; }
+        [DataMember] public int MehediMaxConnections { get; set; }
+
+        public ShihabHostConnectionLimit()
+        {
+            ShihabHostPattern = "";
+            MehediMaxConnections = 4;
+        }
+    }
+
+    [DataContract]
+    public class ShihabDebridAccount
+    {
+        [DataMember] public string ShihabProvider { get; set; }
+        [DataMember] public bool MehediEnabled { get; set; }
+        [DataMember] public string ShihabUsername { get; set; }
+        [DataMember] public string MehediEncryptedApiToken { get; set; }
+        [DataMember] public string ShihabAccountStatus { get; set; }
+        [DataMember] public string MehediExpiresAt { get; set; }
+
+        [IgnoreDataMember]
+        public string ShihabProviderName
+        {
+            get { return ShihabProvider; }
+            set { ShihabProvider = value; }
+        }
+
+        [IgnoreDataMember]
+        public bool ShihabEnabled
+        {
+            get { return MehediEnabled; }
+            set { MehediEnabled = value; }
+        }
+
+        [IgnoreDataMember]
+        public string ShihabApiToken
+        {
+            get { return MehediEncryptedApiToken; }
+            set { MehediEncryptedApiToken = value; }
+        }
+
+        public ShihabDebridAccount()
+        {
+            ShihabProvider = "Real-Debrid";
+            MehediEnabled = false;
+            ShihabUsername = "";
+            MehediEncryptedApiToken = "";
+            ShihabAccountStatus = "Not signed in";
+            MehediExpiresAt = "";
+        }
+    }
+
+    [DataContract]
+    public class ShihabRssFeedConfig
+    {
+        [DataMember] public string ShihabFeedId { get; set; }
+        [DataMember] public string MehediTitle { get; set; }
+        [DataMember] public string ShihabFeedUrl { get; set; }
+        [DataMember] public string MehediFilterPattern { get; set; }
+        [DataMember] public string ShihabSaveDirectory { get; set; }
+        [DataMember] public string MehediCategoryName { get; set; }
+        [DataMember] public bool ShihabAutoDownload { get; set; }
+        [DataMember] public int MehediCheckIntervalMinutes { get; set; }
+        [DataMember] public string ShihabLastChecked { get; set; }
+        [DataMember] public List<string> MehediSeenItemGuids { get; set; }
+        [DataMember] public string ShihabExcludePattern { get; set; }
+        [DataMember] public bool ShihabInitialBacklogSeeded { get; set; }
+        [DataMember] public List<string> ShihabDownloadedEpisodeKeys { get; set; }
+
+        [IgnoreDataMember]
+        public string ShihabFeedTitle
+        {
+            get { return MehediTitle; }
+            set { MehediTitle = value; }
+        }
+
+        [IgnoreDataMember]
+        public string ShihabIncludeRegex
+        {
+            get { return MehediFilterPattern; }
+            set { MehediFilterPattern = value; }
+        }
+
+        public ShihabRssFeedConfig()
+        {
+            ShihabFeedId = Guid.NewGuid().ToString("N");
+            MehediTitle = "RSS Feed";
+            ShihabFeedUrl = "";
+            MehediFilterPattern = "*";
+            ShihabExcludePattern = "";
+            ShihabSaveDirectory = "";
+            MehediCategoryName = "General";
+            ShihabAutoDownload = false;
+            MehediCheckIntervalMinutes = 30;
+            ShihabLastChecked = "";
+            ShihabInitialBacklogSeeded = false;
+            MehediSeenItemGuids = new List<string>();
+            ShihabDownloadedEpisodeKeys = new List<string>();
+        }
+    }
+
+    [DataContract]
+    public class ShihabPairedRemoteDevice
+    {
+        [DataMember] public string ShihabDeviceId { get; set; }
+        [DataMember] public string MehediDeviceName { get; set; }
+        [DataMember] public string ShihabTokenHash { get; set; }
+        [DataMember] public string MehediPairedDate { get; set; }
+        [DataMember] public string ShihabLastSeenIp { get; set; }
+
+        public ShihabPairedRemoteDevice()
+        {
+            ShihabDeviceId = Guid.NewGuid().ToString("N");
+            MehediDeviceName = "Mobile Web Remote";
+            ShihabTokenHash = "";
+            MehediPairedDate = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+            ShihabLastSeenIp = "";
+        }
+    }
+
+    [DataContract]
+    public class ShihabQuotaBucketEntry
+    {
+        [DataMember] public long ShihabHourEpoch { get; set; }
+        [DataMember] public long MehediBytesDownloaded { get; set; }
+    }
+
+    public static class ShihabSecretsVault
+    {
+        private const string DpapiNativePrefix = "dpapi2:";
+        private const string LegacyDpapiPrefix = "dpapi:";
+        private static readonly byte[] VaultEntropy = Encoding.UTF8.GetBytes("MHS.DownloadManager.ShihabSecretsVault.v2");
+
+        public static string ProtectSecret(string plainText)
+        {
+            if (string.IsNullOrEmpty(plainText))
+            {
+                return "";
+            }
+            if (plainText.StartsWith(DpapiNativePrefix, StringComparison.Ordinal))
+            {
+                return plainText;
+            }
+            if (plainText.StartsWith(LegacyDpapiPrefix, StringComparison.Ordinal))
+            {
+                string migrated = UnprotectSecret(plainText);
+                if (!string.IsNullOrEmpty(migrated))
+                {
+                    plainText = migrated;
+                }
+                else
+                {
+                    return plainText;
+                }
+            }
+            try
+            {
+                byte[] raw = Encoding.UTF8.GetBytes(plainText);
+                byte[] cipher = ProtectedData.Protect(raw, VaultEntropy, DataProtectionScope.CurrentUser);
+                return DpapiNativePrefix + Convert.ToBase64String(cipher);
+            }
+            catch
+            {
+                try
+                {
+                    byte[] raw = Encoding.UTF8.GetBytes(plainText);
+                    byte[] cipher = TransformLegacySecret(raw, true);
+                    return LegacyDpapiPrefix + Convert.ToBase64String(cipher);
+                }
+                catch
+                {
+                    return "";
+                }
+            }
+        }
+
+        public static string UnprotectSecret(string storedValue)
+        {
+            if (string.IsNullOrEmpty(storedValue))
+            {
+                return "";
+            }
+            if (storedValue.StartsWith(DpapiNativePrefix, StringComparison.Ordinal))
+            {
+                try
+                {
+                    string b64 = storedValue.Substring(DpapiNativePrefix.Length);
+                    byte[] cipher = Convert.FromBase64String(b64);
+                    byte[] plain = ProtectedData.Unprotect(cipher, VaultEntropy, DataProtectionScope.CurrentUser);
+                    return Encoding.UTF8.GetString(plain);
+                }
+                catch
+                {
+                    return "";
+                }
+            }
+            if (!storedValue.StartsWith(LegacyDpapiPrefix, StringComparison.Ordinal))
+            {
+                return storedValue;
+            }
+            try
+            {
+                string b64 = storedValue.Substring(LegacyDpapiPrefix.Length);
+                byte[] cipher = Convert.FromBase64String(b64);
+                byte[] plain = TransformLegacySecret(cipher, false);
+                return Encoding.UTF8.GetString(plain);
+            }
+            catch
+            {
+                return "";
+            }
+        }
+
+        private static byte[] TransformLegacySecret(byte[] data, bool encrypt)
+        {
+            string seed = Environment.UserName + "|" + Environment.MachineName + "|" + Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            using (SHA256 sha = SHA256.Create())
+            {
+                byte[] key = sha.ComputeHash(Encoding.UTF8.GetBytes(seed + "|MHS_VAULT_KEY"));
+                byte[] ivFull = sha.ComputeHash(VaultEntropy);
+                byte[] iv = new byte[16];
+                Buffer.BlockCopy(ivFull, 0, iv, 0, 16);
+                using (Aes aes = Aes.Create())
+                {
+                    aes.Key = key;
+                    aes.IV = iv;
+                    aes.Mode = CipherMode.CBC;
+                    aes.Padding = PaddingMode.PKCS7;
+                    using (ICryptoTransform xform = encrypt ? aes.CreateEncryptor() : aes.CreateDecryptor())
+                    {
+                        return xform.TransformFinalBlock(data, 0, data.Length);
+                    }
+                }
+            }
+        }
+
+        public static string SealSecret(string plainText)
+        {
+            return ProtectSecret(plainText);
+        }
+
+        public static string UnsealSecret(string storedValue)
+        {
+            return UnprotectSecret(storedValue);
+        }
+
+        public static void SealConfigurationSecrets(MehediAppConfiguration cfg)
+        {
+            if (cfg == null) return;
+            if (!string.IsNullOrEmpty(cfg.MehediProxyPassword))
+            {
+                cfg.MehediProxyPassword = ProtectSecret(cfg.MehediProxyPassword);
+            }
+            if (cfg.ShihabSiteLogins != null)
+            {
+                for (int i = 0; i < cfg.ShihabSiteLogins.Count; i++)
+                {
+                    if (cfg.ShihabSiteLogins[i] != null && !string.IsNullOrEmpty(cfg.ShihabSiteLogins[i].ShihabPassword))
+                    {
+                        cfg.ShihabSiteLogins[i].ShihabPassword = ProtectSecret(cfg.ShihabSiteLogins[i].ShihabPassword);
+                    }
+                }
+            }
+            if (cfg.ShihabDebridAccounts != null)
+            {
+                for (int i = 0; i < cfg.ShihabDebridAccounts.Count; i++)
+                {
+                    if (cfg.ShihabDebridAccounts[i] != null && !string.IsNullOrEmpty(cfg.ShihabDebridAccounts[i].MehediEncryptedApiToken))
+                    {
+                        cfg.ShihabDebridAccounts[i].MehediEncryptedApiToken = ProtectSecret(cfg.ShihabDebridAccounts[i].MehediEncryptedApiToken);
+                    }
+                }
+            }
+        }
+
+        public static void UnsealConfigurationSecrets(MehediAppConfiguration cfg)
+        {
+            if (cfg == null) return;
+            if (!string.IsNullOrEmpty(cfg.MehediProxyPassword))
+            {
+                cfg.MehediProxyPassword = UnprotectSecret(cfg.MehediProxyPassword);
+            }
+            if (cfg.ShihabSiteLogins != null)
+            {
+                for (int i = 0; i < cfg.ShihabSiteLogins.Count; i++)
+                {
+                    if (cfg.ShihabSiteLogins[i] != null && !string.IsNullOrEmpty(cfg.ShihabSiteLogins[i].ShihabPassword))
+                    {
+                        cfg.ShihabSiteLogins[i].ShihabPassword = UnprotectSecret(cfg.ShihabSiteLogins[i].ShihabPassword);
+                    }
+                }
+            }
+        }
+
+        public static int ForgetAllSignIns(ShihabStateStore store)
+        {
+            if (store == null) return 0;
+            int purged = 0;
+            MehediAppConfiguration cfg = store.LoadShihabConfig();
+            if (!string.IsNullOrEmpty(cfg.ShihabProxyUser) || !string.IsNullOrEmpty(cfg.MehediProxyPassword))
+            {
+                purged++;
+            }
+            cfg.ShihabProxyUser = "";
+            cfg.MehediProxyPassword = "";
+            if (cfg.ShihabSiteLogins != null)
+            {
+                purged += cfg.ShihabSiteLogins.Count;
+                cfg.ShihabSiteLogins.Clear();
+            }
+            if (cfg.ShihabDebridAccounts != null)
+            {
+                for (int i = 0; i < cfg.ShihabDebridAccounts.Count; i++)
+                {
+                    if (!string.IsNullOrEmpty(cfg.ShihabDebridAccounts[i].MehediEncryptedApiToken)) purged++;
+                    cfg.ShihabDebridAccounts[i].MehediEnabled = false;
+                    cfg.ShihabDebridAccounts[i].MehediEncryptedApiToken = "";
+                    cfg.ShihabDebridAccounts[i].ShihabAccountStatus = "Not signed in";
+                }
+            }
+            if (cfg.ShihabPairedRemoteDevices != null)
+            {
+                purged += cfg.ShihabPairedRemoteDevices.Count;
+                cfg.ShihabPairedRemoteDevices.Clear();
+            }
+            store.SaveMehediConfig(cfg);
+            try
+            {
+                List<ShihabDownloadItem> items = store.LoadMehediDownloads();
+                bool changed = false;
+                for (int i = 0; i < items.Count; i++)
+                {
+                    if (!string.IsNullOrEmpty(items[i].MehediAuthPassword) || !string.IsNullOrEmpty(items[i].ShihabCookies))
+                    {
+                        items[i].ShihabAuthUser = "";
+                        items[i].MehediAuthPassword = "";
+                        items[i].ShihabCookies = "";
+                        purged++;
+                        changed = true;
+                    }
+                }
+                if (changed) store.SaveShihabDownloads(items);
+            }
+            catch { }
+            return purged;
+        }
+    }
+
+    [DataContract]
     public class MehediAppConfiguration
     {
         public const string DefaultShihabAutoCaptureExtensions =
-            "3GP 7Z AAC ACE AIF APK ARJ ASF AVI BIN BZ2 EXE GZ GZIP IMG ISO LZH M4A M4V MKV MOV MP3 MP4 MPA MPE MPEG MPG MSI MSU OGG OGV PDF PLJ PPS PPT PPTX QT R0* R1* RA RAR RM RMVB SEA SIT SITX TAR TIF TIFF WAV WEBM WMA WMV XZ Z ZIP";
+            "3GP 7Z AAC ACE AIF APK ARJ ASF AVI BIN BZ2 EXE GZ GZIP IMG ISO LZH M4A M4V MKV MOV MP3 MP4 MPA MPE MPEG MPG MSI MSU OGG OGV PDF PLJ PPS PPT PPTX QT R0* R1* RA RAR RM RMVB SEA SIT SITX TAR TIF TIFF TORRENT WAV WEBM WMA WMV XZ Z ZIP";
 
         public const string DefaultMehediExcludedSites =
             "*.update.microsoft.com download.windowsupdate.com *.download.windowsupdate.com siteseal.thawte.com ecom.cimetz.com *.voice2page.com localhost 127.0.0.1 *.local";
 
         public const string DefaultShihabBrowsersCsv =
-            "Apple Safari,Brave Browser,Google Chrome,Internet Explorer,Microsoft Edge,Microsoft Edge Legacy,Mozilla Firefox,Opera,Vivaldi";
+            "Google Chrome,Chromium,Microsoft Edge,Brave Browser,Vivaldi,Opera,Helium,Thorium,Arc,Mozilla Firefox,Zen Browser,LibreWolf,Floorp,Waterfox";
 
         public const string DefaultMehediContextMenuCsv =
             "Download with MHS,Download video with MHS,Download all links with MHS";
@@ -313,6 +763,14 @@ namespace ShihabMehediIDM
         [DataMember] public string ShihabVirusScannerArgs { get; set; }
         [DataMember] public string MehediConnectionProfile { get; set; }
         [DataMember] public int ShihabDefaultMaxConnections { get; set; }
+        [DataMember] public bool ShihabAllowMoreThan32Connections { get; set; }
+        [DataMember] public bool ShihabShedSlowConnections { get; set; }
+        [DataMember] public bool ShihabVerifyResumeOverlap { get; set; }
+        [DataMember] public bool ShihabEnableSparseFiles { get; set; }
+        [DataMember] public bool ShihabWriteZoneIdentifier { get; set; }
+        [DataMember] public bool ShihabPreventSystemSleep { get; set; }
+        [DataMember] public bool ShihabFtpUsePassiveMode { get; set; }
+        [DataMember] public bool ShihabFtpEnableTls { get; set; }
         [DataMember] public int ShihabAutoRetryIntervalSec { get; set; }
         [DataMember] public int MehediMaxRetryAttempts { get; set; }
         [DataMember] public bool MehediGlobalSpeedLimiterEnabled { get; set; }
@@ -322,6 +780,8 @@ namespace ShihabMehediIDM
         [DataMember] public string MehediExcludedAddressesSpaceSeparated { get; set; }
         [DataMember] public string MehediTemporaryDirectory { get; set; }
         [DataMember] public string ShihabDefaultUserAgent { get; set; }
+        [DataMember] public string ShihabProxyMode { get; set; }
+        [DataMember] public string ShihabPacScriptUrl { get; set; }
         [DataMember] public bool MehediUseHttpProxy { get; set; }
         [DataMember] public string ShihabProxyAddress { get; set; }
         [DataMember] public int MehediProxyPort { get; set; }
@@ -330,6 +790,33 @@ namespace ShihabMehediIDM
         [DataMember] public bool ShihabUseSocksProxy { get; set; }
         [DataMember] public string MehediSocksHost { get; set; }
         [DataMember] public int ShihabSocksPort { get; set; }
+        [DataMember] public string ShihabDnsMode { get; set; }
+        [DataMember] public string ShihabDnsProvider { get; set; }
+        [DataMember] public string ShihabCustomDohUrl { get; set; }
+        [DataMember] public bool ShihabDnsFallbackToSystem { get; set; }
+        [DataMember] public string ShihabBoundNetworkAdapter { get; set; }
+        [DataMember] public bool ShihabAutoResumeOnNetworkRestore { get; set; }
+        [DataMember] public bool ShihabAutoExtractArchives { get; set; }
+        [DataMember] public string ShihabExtractSubfolderMode { get; set; }
+        [DataMember] public bool ShihabDeleteArchiveAfterExtract { get; set; }
+        [DataMember] public bool ShihabTorrentSequentialDefault { get; set; }
+        [DataMember] public bool ShihabTorrentKeepSeedingDefault { get; set; }
+        [DataMember] public string ShihabTorrentBlocklistUrl { get; set; }
+        [DataMember] public bool ShihabRemoteWebEnabled { get; set; }
+        [DataMember] public int ShihabRemoteWebPort { get; set; }
+        [DataMember] public string ShihabRemotePairingCode { get; set; }
+        [DataMember] public List<ShihabPairedRemoteDevice> ShihabPairedRemoteDevices { get; set; }
+        [DataMember] public bool ShihabAutomationApiEnabled { get; set; }
+        [DataMember] public bool ShihabQuotaEnabled { get; set; }
+        [DataMember] public int ShihabQuotaLimitMegabytes { get; set; }
+        [DataMember] public int ShihabQuotaWindowHours { get; set; }
+        [DataMember] public List<ShihabQuotaBucketEntry> ShihabQuotaHistory { get; set; }
+        [DataMember] public string ShihabThemeName { get; set; }
+        [DataMember] public int ShihabUiScalePercent { get; set; }
+        [DataMember] public string ShihabLanguageCode { get; set; }
+        [DataMember] public bool ShihabCaptureOpenedFiles { get; set; }
+        [DataMember] public int ShihabCaptureMinSizeKb { get; set; }
+        [DataMember] public bool ShihabCrashMonitorEnabled { get; set; }
         [DataMember] public string MehediDialUpConnectionName { get; set; }
         [DataMember] public bool ShihabRedialIfDisconnected { get; set; }
         [DataMember] public bool MehediHangUpWhenDone { get; set; }
@@ -340,9 +827,26 @@ namespace ShihabMehediIDM
         [DataMember] public bool ShihabSetServerFileTimestamp { get; set; }
         [DataMember] public bool ShihabSetServerCreationDate { get; set; }
         [DataMember] public int MehediLocalBridgePort { get; set; }
+        [DataMember] public string ShihabLocalBridgeToken { get; set; }
+        [DataMember] public bool ShihabAutoCheckUpdates { get; set; }
+        [DataMember] public bool ShihabUpdateIncludePrereleases { get; set; }
+        [DataMember] public string ShihabUpdateRepoSlug { get; set; }
+        [DataMember] public string ShihabUpdateApiOverrideUrl { get; set; }
+        [DataMember] public string ShihabSkippedUpdateVersion { get; set; }
+        [DataMember] public string ShihabLastUpdateCheckUtc { get; set; }
+        [DataMember] public bool ShihabCloseToTray { get; set; }
+        [DataMember] public bool ShihabMinimizeToTray { get; set; }
+        [DataMember] public int ShihabDropTargetX { get; set; }
+        [DataMember] public int ShihabDropTargetY { get; set; }
+        [DataMember] public string ShihabPlainDnsServer { get; set; }
+        [DataMember] public string ShihabNextDnsConfigId { get; set; }
+        [DataMember] public string ShihabRemotePairingExpiresUtc { get; set; }
         [DataMember] public List<ShihabCategoryRule> ShihabCategories { get; set; }
         [DataMember] public List<MehediQueueConfig> MehediQueues { get; set; }
         [DataMember] public List<ShihabSiteLoginCredential> ShihabSiteLogins { get; set; }
+        [DataMember] public List<ShihabHostConnectionLimit> ShihabHostConnectionLimits { get; set; }
+        [DataMember] public List<ShihabDebridAccount> ShihabDebridAccounts { get; set; }
+        [DataMember] public List<ShihabRssFeedConfig> ShihabRssFeeds { get; set; }
 
         [OnDeserializing]
         private void OnMehediConfigDeserializing(StreamingContext shihabCtx)
@@ -364,6 +868,14 @@ namespace ShihabMehediIDM
             ShihabShowDownloadCompleteDialog = true;
             MehediConnectionProfile = "High speed: Direct connection (Ethernet/Cable) / Wi-Fi / Mobile 4G/5G";
             ShihabDefaultMaxConnections = 8;
+            ShihabAllowMoreThan32Connections = false;
+            ShihabShedSlowConnections = true;
+            ShihabVerifyResumeOverlap = true;
+            ShihabEnableSparseFiles = true;
+            ShihabWriteZoneIdentifier = true;
+            ShihabPreventSystemSleep = true;
+            ShihabFtpUsePassiveMode = true;
+            ShihabFtpEnableTls = false;
             ShihabAutoRetryIntervalSec = 10;
             MehediMaxRetryAttempts = 99;
             ShihabGlobalSpeedLimitKb = 1024;
@@ -371,8 +883,40 @@ namespace ShihabMehediIDM
             ShihabExcludedSitesSpaceSeparated = DefaultMehediExcludedSites;
             MehediExcludedAddressesSpaceSeparated = "";
             ShihabDefaultUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+            ShihabProxyMode = "None";
+            ShihabPacScriptUrl = "";
             MehediProxyPort = 8080;
             ShihabSocksPort = 1080;
+            ShihabDnsMode = "System";
+            ShihabDnsProvider = "Cloudflare";
+            ShihabCustomDohUrl = "https://cloudflare-dns.com/dns-query";
+            ShihabDnsFallbackToSystem = true;
+            ShihabPlainDnsServer = "1.1.1.1";
+            ShihabNextDnsConfigId = "";
+            ShihabBoundNetworkAdapter = "";
+            ShihabAutoResumeOnNetworkRestore = true;
+            ShihabAutoExtractArchives = false;
+            ShihabExtractSubfolderMode = "Smart";
+            ShihabDeleteArchiveAfterExtract = false;
+            ShihabTorrentSequentialDefault = true;
+            ShihabTorrentKeepSeedingDefault = false;
+            ShihabTorrentBlocklistUrl = "";
+            ShihabRemoteWebEnabled = false;
+            ShihabRemoteWebPort = 8463;
+            ShihabRemotePairingCode = "48291037";
+            ShihabRemotePairingExpiresUtc = "";
+            ShihabPairedRemoteDevices = new List<ShihabPairedRemoteDevice>();
+            ShihabAutomationApiEnabled = true;
+            ShihabQuotaEnabled = false;
+            ShihabQuotaLimitMegabytes = 10240;
+            ShihabQuotaWindowHours = 24;
+            ShihabQuotaHistory = new List<ShihabQuotaBucketEntry>();
+            ShihabThemeName = "Obsidian Dark";
+            ShihabUiScalePercent = 100;
+            ShihabLanguageCode = "en";
+            ShihabCaptureOpenedFiles = false;
+            ShihabCaptureMinSizeKb = 0;
+            ShihabCrashMonitorEnabled = true;
             MehediVirusScannerExe = "";
             ShihabVirusScannerArgs = "\"%1\"";
             MehediSocksHost = "";
@@ -381,6 +925,20 @@ namespace ShihabMehediIDM
             ShihabSoundErrorWav = "";
             ShihabSetServerFileTimestamp = true;
             MehediLocalBridgePort = 45779;
+            ShihabLocalBridgeToken = "";
+            ShihabAutoCheckUpdates = true;
+            ShihabUpdateIncludePrereleases = false;
+            ShihabUpdateRepoSlug = "sshihabb007/MHS-DOWNLOAD-MANAGER";
+            ShihabUpdateApiOverrideUrl = "";
+            ShihabSkippedUpdateVersion = "";
+            ShihabLastUpdateCheckUtc = "";
+            ShihabCloseToTray = true;
+            ShihabMinimizeToTray = false;
+            ShihabDropTargetX = -1;
+            ShihabDropTargetY = -1;
+            ShihabHostConnectionLimits = new List<ShihabHostConnectionLimit>();
+            ShihabDebridAccounts = new List<ShihabDebridAccount>();
+            ShihabRssFeeds = new List<ShihabRssFeedConfig>();
         }
 
         public static MehediAppConfiguration CreateShihabDefault(string mehediBaseDataDir)
@@ -411,6 +969,14 @@ namespace ShihabMehediIDM
             mehediCfg.ShihabVirusScannerArgs = "\"%1\"";
             mehediCfg.MehediConnectionProfile = "High speed: Direct connection (Ethernet/Cable) / Wi-Fi / Mobile 4G/5G";
             mehediCfg.ShihabDefaultMaxConnections = 8;
+            mehediCfg.ShihabAllowMoreThan32Connections = false;
+            mehediCfg.ShihabShedSlowConnections = true;
+            mehediCfg.ShihabVerifyResumeOverlap = true;
+            mehediCfg.ShihabEnableSparseFiles = true;
+            mehediCfg.ShihabWriteZoneIdentifier = true;
+            mehediCfg.ShihabPreventSystemSleep = true;
+            mehediCfg.ShihabFtpUsePassiveMode = true;
+            mehediCfg.ShihabFtpEnableTls = false;
             mehediCfg.ShihabAutoRetryIntervalSec = 10;
             mehediCfg.MehediMaxRetryAttempts = 99;
             mehediCfg.MehediGlobalSpeedLimiterEnabled = false;
@@ -420,6 +986,8 @@ namespace ShihabMehediIDM
             mehediCfg.MehediExcludedAddressesSpaceSeparated = "";
             mehediCfg.MehediTemporaryDirectory = Path.Combine(mehediBaseDataDir, "DwnlData");
             mehediCfg.ShihabDefaultUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+            mehediCfg.ShihabProxyMode = "None";
+            mehediCfg.ShihabPacScriptUrl = "";
             mehediCfg.MehediUseHttpProxy = false;
             mehediCfg.ShihabProxyAddress = "";
             mehediCfg.MehediProxyPort = 8080;
@@ -428,6 +996,33 @@ namespace ShihabMehediIDM
             mehediCfg.ShihabUseSocksProxy = false;
             mehediCfg.MehediSocksHost = "";
             mehediCfg.ShihabSocksPort = 1080;
+            mehediCfg.ShihabDnsMode = "System";
+            mehediCfg.ShihabDnsProvider = "Cloudflare";
+            mehediCfg.ShihabCustomDohUrl = "https://cloudflare-dns.com/dns-query";
+            mehediCfg.ShihabDnsFallbackToSystem = true;
+            mehediCfg.ShihabBoundNetworkAdapter = "";
+            mehediCfg.ShihabAutoResumeOnNetworkRestore = true;
+            mehediCfg.ShihabAutoExtractArchives = false;
+            mehediCfg.ShihabExtractSubfolderMode = "Smart";
+            mehediCfg.ShihabDeleteArchiveAfterExtract = false;
+            mehediCfg.ShihabTorrentSequentialDefault = true;
+            mehediCfg.ShihabTorrentKeepSeedingDefault = false;
+            mehediCfg.ShihabTorrentBlocklistUrl = "";
+            mehediCfg.ShihabRemoteWebEnabled = false;
+            mehediCfg.ShihabRemoteWebPort = 8463;
+            mehediCfg.ShihabRemotePairingCode = GenerateRandomEightDigitCode();
+            mehediCfg.ShihabPairedRemoteDevices = new List<ShihabPairedRemoteDevice>();
+            mehediCfg.ShihabAutomationApiEnabled = true;
+            mehediCfg.ShihabQuotaEnabled = false;
+            mehediCfg.ShihabQuotaLimitMegabytes = 10240;
+            mehediCfg.ShihabQuotaWindowHours = 24;
+            mehediCfg.ShihabQuotaHistory = new List<ShihabQuotaBucketEntry>();
+            mehediCfg.ShihabThemeName = "Obsidian Dark";
+            mehediCfg.ShihabUiScalePercent = 100;
+            mehediCfg.ShihabLanguageCode = "en";
+            mehediCfg.ShihabCaptureOpenedFiles = false;
+            mehediCfg.ShihabCaptureMinSizeKb = 0;
+            mehediCfg.ShihabCrashMonitorEnabled = true;
             mehediCfg.MehediDialUpConnectionName = "Default System Connection";
             mehediCfg.ShihabRedialIfDisconnected = false;
             mehediCfg.MehediHangUpWhenDone = false;
@@ -438,6 +1033,20 @@ namespace ShihabMehediIDM
             mehediCfg.ShihabSetServerFileTimestamp = true;
             mehediCfg.ShihabSetServerCreationDate = false;
             mehediCfg.MehediLocalBridgePort = 45779;
+            mehediCfg.ShihabLocalBridgeToken = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
+            mehediCfg.ShihabAutoCheckUpdates = true;
+            mehediCfg.ShihabUpdateIncludePrereleases = false;
+            mehediCfg.ShihabUpdateRepoSlug = "sshihabb007/MHS-DOWNLOAD-MANAGER";
+            mehediCfg.ShihabUpdateApiOverrideUrl = "";
+            mehediCfg.ShihabSkippedUpdateVersion = "";
+            mehediCfg.ShihabLastUpdateCheckUtc = "";
+            mehediCfg.ShihabCloseToTray = true;
+            mehediCfg.ShihabMinimizeToTray = false;
+            mehediCfg.ShihabDropTargetX = -1;
+            mehediCfg.ShihabDropTargetY = -1;
+            mehediCfg.ShihabPlainDnsServer = "1.1.1.1";
+            mehediCfg.ShihabNextDnsConfigId = "";
+            mehediCfg.ShihabRemotePairingExpiresUtc = DateTime.UtcNow.AddMinutes(10).ToString("o");
 
             mehediCfg.ShihabCategories = new List<ShihabCategoryRule>
             {
@@ -446,7 +1055,8 @@ namespace ShihabMehediIDM
                 new ShihabCategoryRule { ShihabName = "Documents", MehediExtensionsSpaceSeparated = "pdf doc docx xls xlsx ppt pptx txt rtf csv epub mobi", ShihabDefaultFolder = Path.Combine(shihabDownloadsRoot, "Documents"), MehediRememberLastSavePath = true },
                 new ShihabCategoryRule { ShihabName = "Music", MehediExtensionsSpaceSeparated = "mp3 wav flac aac ogg m4a wma aif opus", ShihabDefaultFolder = Path.Combine(shihabDownloadsRoot, "Music"), MehediRememberLastSavePath = true },
                 new ShihabCategoryRule { ShihabName = "Programs", MehediExtensionsSpaceSeparated = "exe msi msu apk dmg iso img bin deb rpm bat ps1", ShihabDefaultFolder = Path.Combine(shihabDownloadsRoot, "Programs"), MehediRememberLastSavePath = true },
-                new ShihabCategoryRule { ShihabName = "Video", MehediExtensionsSpaceSeparated = "mp4 mkv webm avi mov flv wmv mpg mpeg m4v 3gp ts m3u8 ogv qt rm rmvb asf", ShihabDefaultFolder = Path.Combine(shihabDownloadsRoot, "Video"), MehediRememberLastSavePath = true }
+                new ShihabCategoryRule { ShihabName = "Video", MehediExtensionsSpaceSeparated = "mp4 mkv webm avi mov flv wmv mpg mpeg m4v 3gp ts m3u8 ogv qt rm rmvb asf", ShihabDefaultFolder = Path.Combine(shihabDownloadsRoot, "Video"), MehediRememberLastSavePath = true },
+                new ShihabCategoryRule { ShihabName = "Torrents", MehediExtensionsSpaceSeparated = "torrent magnet", ShihabDefaultFolder = Path.Combine(shihabDownloadsRoot, "Torrents"), MehediRememberLastSavePath = true }
             };
 
             MehediQueueConfig shihabMainQueue = new MehediQueueConfig();
@@ -459,7 +1069,115 @@ namespace ShihabMehediIDM
 
             mehediCfg.MehediQueues = new List<MehediQueueConfig> { shihabMainQueue, mehediSyncQueue };
             mehediCfg.ShihabSiteLogins = new List<ShihabSiteLoginCredential>();
+            mehediCfg.ShihabHostConnectionLimits = new List<ShihabHostConnectionLimit>();
+            mehediCfg.ShihabDebridAccounts = new List<ShihabDebridAccount>
+            {
+                new ShihabDebridAccount { ShihabProvider = "Real-Debrid", MehediEnabled = false },
+                new ShihabDebridAccount { ShihabProvider = "AllDebrid", MehediEnabled = false },
+                new ShihabDebridAccount { ShihabProvider = "Premiumize", MehediEnabled = false }
+            };
+            mehediCfg.ShihabRssFeeds = new List<ShihabRssFeedConfig>();
             return mehediCfg;
+        }
+
+        public static string GenerateRandomEightDigitCode()
+        {
+            byte[] b = new byte[4];
+            using (RNGCryptoServiceProvider rng = new RNGCryptoServiceProvider())
+            {
+                rng.GetBytes(b);
+            }
+            uint val = BitConverter.ToUInt32(b, 0) % 90000000u + 10000000u;
+            return val.ToString();
+        }
+
+        public int GetMaxAllowedConnectionsCap()
+        {
+            return ShihabAllowMoreThan32Connections ? 128 : 32;
+        }
+
+        public int GetEffectiveMaxConnectionsForHost(string host, int requestedConnections)
+        {
+            int cap = GetMaxAllowedConnectionsCap();
+            int effective = Math.Max(1, Math.Min(cap, requestedConnections));
+            if (!string.IsNullOrEmpty(host) && ShihabHostConnectionLimits != null)
+            {
+                string cleanHost = host.Trim().ToLowerInvariant();
+                for (int i = 0; i < ShihabHostConnectionLimits.Count; i++)
+                {
+                    ShihabHostConnectionLimit rule = ShihabHostConnectionLimits[i];
+                    if (rule != null && !string.IsNullOrEmpty(rule.ShihabHostPattern) && rule.MehediMaxConnections > 0)
+                    {
+                        if (ShihabFormatHelpers.WildcardMatchesMehediPattern(cleanHost, rule.ShihabHostPattern.Trim()) ||
+                            string.Equals(cleanHost, rule.ShihabHostPattern.Trim(), StringComparison.OrdinalIgnoreCase))
+                        {
+                            effective = Math.Min(effective, rule.MehediMaxConnections);
+                        }
+                    }
+                }
+            }
+            return Math.Max(1, effective);
+        }
+
+        public void RecordQuotaBytes(long deltaBytes)
+        {
+            if (deltaBytes <= 0) return;
+            if (ShihabQuotaHistory == null)
+            {
+                ShihabQuotaHistory = new List<ShihabQuotaBucketEntry>();
+            }
+            long currentHour = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalHours;
+            lock (ShihabQuotaHistory)
+            {
+                ShihabQuotaBucketEntry found = null;
+                for (int i = 0; i < ShihabQuotaHistory.Count; i++)
+                {
+                    if (ShihabQuotaHistory[i].ShihabHourEpoch == currentHour)
+                    {
+                        found = ShihabQuotaHistory[i];
+                        break;
+                    }
+                }
+                if (found == null)
+                {
+                    found = new ShihabQuotaBucketEntry { ShihabHourEpoch = currentHour, MehediBytesDownloaded = 0 };
+                    ShihabQuotaHistory.Add(found);
+                }
+                found.MehediBytesDownloaded += deltaBytes;
+
+                int keepHours = Math.Max(1, ShihabQuotaWindowHours) + 24;
+                ShihabQuotaHistory.RemoveAll(delegate(ShihabQuotaBucketEntry b)
+                {
+                    return b == null || (currentHour - b.ShihabHourEpoch) > keepHours;
+                });
+            }
+        }
+
+        public long GetCurrentQuotaWindowBytes()
+        {
+            if (ShihabQuotaHistory == null || ShihabQuotaHistory.Count == 0) return 0L;
+            long currentHour = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalHours;
+            int windowHours = Math.Max(1, ShihabQuotaWindowHours);
+            long sum = 0L;
+            lock (ShihabQuotaHistory)
+            {
+                for (int i = 0; i < ShihabQuotaHistory.Count; i++)
+                {
+                    ShihabQuotaBucketEntry entry = ShihabQuotaHistory[i];
+                    if (entry != null && (currentHour - entry.ShihabHourEpoch) < windowHours)
+                    {
+                        sum += entry.MehediBytesDownloaded;
+                    }
+                }
+            }
+            return sum;
+        }
+
+        public bool IsQuotaExceeded()
+        {
+            if (!ShihabQuotaEnabled || ShihabQuotaLimitMegabytes <= 0) return false;
+            long limitBytes = (long)ShihabQuotaLimitMegabytes * 1024L * 1024L;
+            return GetCurrentQuotaWindowBytes() >= limitBytes;
         }
 
         public bool MatchesShihabAutoCaptureExtension(string mehediExtWithoutDot)
@@ -496,10 +1214,12 @@ namespace ShihabMehediIDM
             try
             {
                 const string shihabRunSubKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
-                const string mehediValueName = "MHS_Download_Manager";
+                const string mehediValueName = "MHSDownloadManager";
+                const string legacyValueName = "MHS_Download_Manager";
                 using (RegistryKey shihabKey = Registry.CurrentUser.CreateSubKey(shihabRunSubKey))
                 {
                     if (shihabKey == null) return;
+                    try { shihabKey.DeleteValue(legacyValueName, false); } catch { }
                     if (mehediEnable)
                     {
                         string mehediExe = Process.GetCurrentProcess().MainModule.FileName;
@@ -579,7 +1299,12 @@ namespace ShihabMehediIDM
                     shihabPat = shihabPat.Replace("https://", "").Replace("http://", "");
                     if (mehediHostAndPath.StartsWith(shihabPat) || shihabUri.Host.Equals(shihabPat, StringComparison.OrdinalIgnoreCase))
                     {
-                        return mehediCred;
+                        return new ShihabSiteLoginCredential
+                        {
+                            ShihabServerPattern = mehediCred.ShihabServerPattern,
+                            MehediUserName = mehediCred.MehediUserName,
+                            ShihabPassword = ShihabSecretsVault.UnprotectSecret(mehediCred.ShihabPassword)
+                        };
                     }
                 }
             }
@@ -937,6 +1662,29 @@ namespace ShihabMehediIDM
                                 {
                                     shihabLoaded.ShihabCategories = MehediAppConfiguration.CreateShihabDefault(MehediBaseDirectory).ShihabCategories;
                                 }
+                                else
+                                {
+                                    bool hasTorrentsCat = false;
+                                    for (int ci = 0; ci < shihabLoaded.ShihabCategories.Count; ci++)
+                                    {
+                                        if (string.Equals(shihabLoaded.ShihabCategories[ci].ShihabName, "Torrents", StringComparison.OrdinalIgnoreCase))
+                                        {
+                                            hasTorrentsCat = true;
+                                            break;
+                                        }
+                                    }
+                                    if (!hasTorrentsCat)
+                                    {
+                                        string dlRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
+                                        shihabLoaded.ShihabCategories.Add(new ShihabCategoryRule
+                                        {
+                                            ShihabName = "Torrents",
+                                            MehediExtensionsSpaceSeparated = "torrent magnet",
+                                            ShihabDefaultFolder = Path.Combine(dlRoot, "Torrents"),
+                                            MehediRememberLastSavePath = true
+                                        });
+                                    }
+                                }
                                 if (shihabLoaded.MehediQueues == null || shihabLoaded.MehediQueues.Count == 0)
                                 {
                                     shihabLoaded.MehediQueues = MehediAppConfiguration.CreateShihabDefault(MehediBaseDirectory).MehediQueues;
@@ -944,6 +1692,26 @@ namespace ShihabMehediIDM
                                 if (shihabLoaded.ShihabSiteLogins == null)
                                 {
                                     shihabLoaded.ShihabSiteLogins = new List<ShihabSiteLoginCredential>();
+                                }
+                                if (shihabLoaded.ShihabHostConnectionLimits == null)
+                                {
+                                    shihabLoaded.ShihabHostConnectionLimits = new List<ShihabHostConnectionLimit>();
+                                }
+                                if (shihabLoaded.ShihabDebridAccounts == null || shihabLoaded.ShihabDebridAccounts.Count == 0)
+                                {
+                                    shihabLoaded.ShihabDebridAccounts = MehediAppConfiguration.CreateShihabDefault(MehediBaseDirectory).ShihabDebridAccounts;
+                                }
+                                if (shihabLoaded.ShihabRssFeeds == null)
+                                {
+                                    shihabLoaded.ShihabRssFeeds = new List<ShihabRssFeedConfig>();
+                                }
+                                if (shihabLoaded.ShihabPairedRemoteDevices == null)
+                                {
+                                    shihabLoaded.ShihabPairedRemoteDevices = new List<ShihabPairedRemoteDevice>();
+                                }
+                                if (shihabLoaded.ShihabQuotaHistory == null)
+                                {
+                                    shihabLoaded.ShihabQuotaHistory = new List<ShihabQuotaBucketEntry>();
                                 }
                                 if (shihabLoaded.ShihabCustomBrowserPaths == null)
                                 {
@@ -973,6 +1741,38 @@ namespace ShihabMehediIDM
                                 {
                                     shihabLoaded.MehediLocalBridgePort = 45779;
                                 }
+                                if (shihabLoaded.ShihabRemoteWebPort <= 0)
+                                {
+                                    shihabLoaded.ShihabRemoteWebPort = 8463;
+                                }
+                                if (string.IsNullOrWhiteSpace(shihabLoaded.ShihabRemotePairingCode))
+                                {
+                                    shihabLoaded.ShihabRemotePairingCode = MehediAppConfiguration.GenerateRandomEightDigitCode();
+                                }
+                                if (string.IsNullOrWhiteSpace(shihabLoaded.ShihabThemeName))
+                                {
+                                    shihabLoaded.ShihabThemeName = "Obsidian Dark";
+                                }
+                                if (shihabLoaded.ShihabUiScalePercent < 100 || shihabLoaded.ShihabUiScalePercent > 200)
+                                {
+                                    shihabLoaded.ShihabUiScalePercent = 100;
+                                }
+                                if (string.IsNullOrWhiteSpace(shihabLoaded.ShihabLanguageCode))
+                                {
+                                    shihabLoaded.ShihabLanguageCode = "en";
+                                }
+                                if (string.IsNullOrWhiteSpace(shihabLoaded.ShihabDnsMode))
+                                {
+                                    shihabLoaded.ShihabDnsMode = "System";
+                                }
+                                if (string.IsNullOrWhiteSpace(shihabLoaded.ShihabDnsProvider))
+                                {
+                                    shihabLoaded.ShihabDnsProvider = "Cloudflare";
+                                }
+                                if (string.IsNullOrWhiteSpace(shihabLoaded.ShihabExtractSubfolderMode))
+                                {
+                                    shihabLoaded.ShihabExtractSubfolderMode = "Smart";
+                                }
                                 if (shihabLoaded.ShihabDefaultMaxConnections <= 0)
                                 {
                                     shihabLoaded.ShihabDefaultMaxConnections = 8;
@@ -997,24 +1797,83 @@ namespace ShihabMehediIDM
             }
         }
 
-        public void SaveMehediConfig(MehediAppConfiguration shihabCfg)
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool MoveFileExW(string lpExistingFileName, string lpNewFileName, int dwFlags);
+
+        private static void ReplaceFileAtomically(string tempFile, string destFile)
+        {
+            const int MOVEFILE_REPLACE_EXISTING = 0x1;
+            const int MOVEFILE_WRITE_THROUGH = 0x8;
+            if (!MoveFileExW(tempFile, destFile, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+            {
+                if (File.Exists(destFile))
+                {
+                    File.Delete(destFile);
+                }
+                File.Move(tempFile, destFile);
+            }
+        }
+
+        public string LoadOrCreateBridgeToken()
         {
             lock (_shihabSyncLock)
             {
                 try
                 {
                     Directory.CreateDirectory(MehediBaseDirectory);
+                    string tokPath = Path.Combine(MehediBaseDirectory, "bridge.token");
+                    if (File.Exists(tokPath))
+                    {
+                        string existing = File.ReadAllText(tokPath, Encoding.UTF8).Trim();
+                        if (!string.IsNullOrWhiteSpace(existing))
+                        {
+                            return existing;
+                        }
+                    }
+                    MehediAppConfiguration cfg = LoadShihabConfig();
+                    if (string.IsNullOrWhiteSpace(cfg.ShihabLocalBridgeToken))
+                    {
+                        cfg.ShihabLocalBridgeToken = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
+                        SaveMehediConfig(cfg);
+                    }
+                    else
+                    {
+                        try { File.WriteAllText(tokPath, cfg.ShihabLocalBridgeToken, Encoding.UTF8); } catch { }
+                    }
+                    return cfg.ShihabLocalBridgeToken;
+                }
+                catch
+                {
+                    return Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
+                }
+            }
+        }
+
+        public void SaveMehediConfig(MehediAppConfiguration shihabCfg)
+        {
+            lock (_shihabSyncLock)
+            {
+                try
+                {
+                    if (string.IsNullOrWhiteSpace(shihabCfg.ShihabLocalBridgeToken))
+                    {
+                        shihabCfg.ShihabLocalBridgeToken = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
+                    }
+                    ShihabSecretsVault.SealConfigurationSecrets(shihabCfg);
+                    Directory.CreateDirectory(MehediBaseDirectory);
+                    try
+                    {
+                        File.WriteAllText(Path.Combine(MehediBaseDirectory, "bridge.token"), shihabCfg.ShihabLocalBridgeToken, Encoding.UTF8);
+                    }
+                    catch { }
                     string mehediTmp = ShihabConfigFilePath + ".tmp";
                     using (FileStream shihabFs = new FileStream(mehediTmp, FileMode.Create, FileAccess.Write, FileShare.None))
                     {
                         DataContractJsonSerializer mehediSer = new DataContractJsonSerializer(typeof(MehediAppConfiguration));
                         mehediSer.WriteObject(shihabFs, shihabCfg);
+                        shihabFs.Flush(true);
                     }
-                    if (File.Exists(ShihabConfigFilePath))
-                    {
-                        File.Delete(ShihabConfigFilePath);
-                    }
-                    File.Move(mehediTmp, ShihabConfigFilePath);
+                    ReplaceFileAtomically(mehediTmp, ShihabConfigFilePath);
                 }
                 catch
                 {
@@ -1040,6 +1899,10 @@ namespace ShihabMehediIDM
                                 for (int shihabI = 0; shihabI < mehediDb.ShihabItems.Count; shihabI++)
                                 {
                                     ShihabDownloadItem mehediItem = mehediDb.ShihabItems[shihabI];
+                                    if (!string.IsNullOrEmpty(mehediItem.MehediAuthPassword))
+                                    {
+                                        mehediItem.MehediAuthPassword = ShihabSecretsVault.UnprotectSecret(mehediItem.MehediAuthPassword);
+                                    }
                                     if (mehediItem.MehediSegments == null)
                                     {
                                         mehediItem.MehediSegments = new List<MehediSegmentChunk>();
@@ -1072,18 +1935,28 @@ namespace ShihabMehediIDM
                 {
                     Directory.CreateDirectory(MehediBaseDirectory);
                     ShihabDownloadDatabase shihabDb = new ShihabDownloadDatabase();
-                    shihabDb.ShihabItems = new List<ShihabDownloadItem>(mehediItems);
+                    shihabDb.ShihabItems = new List<ShihabDownloadItem>();
+                    if (mehediItems != null)
+                    {
+                        for (int i = 0; i < mehediItems.Count; i++)
+                        {
+                            ShihabDownloadItem item = mehediItems[i];
+                            if (item == null || item.ShihabIsPrivateIncognito) continue;
+                            if (!string.IsNullOrEmpty(item.MehediAuthPassword))
+                            {
+                                item.MehediAuthPassword = ShihabSecretsVault.ProtectSecret(item.MehediAuthPassword);
+                            }
+                            shihabDb.ShihabItems.Add(item);
+                        }
+                    }
                     string mehediTmp = MehediDownloadsFilePath + ".tmp";
                     using (FileStream shihabFs = new FileStream(mehediTmp, FileMode.Create, FileAccess.Write, FileShare.None))
                     {
                         DataContractJsonSerializer mehediSer = new DataContractJsonSerializer(typeof(ShihabDownloadDatabase));
                         mehediSer.WriteObject(shihabFs, shihabDb);
+                        shihabFs.Flush(true);
                     }
-                    if (File.Exists(MehediDownloadsFilePath))
-                    {
-                        File.Delete(MehediDownloadsFilePath);
-                    }
-                    File.Move(mehediTmp, MehediDownloadsFilePath);
+                    ReplaceFileAtomically(mehediTmp, MehediDownloadsFilePath);
                 }
                 catch
                 {
@@ -1096,7 +1969,7 @@ namespace ShihabMehediIDM
             StringBuilder mehediSb = new StringBuilder();
             foreach (ShihabDownloadItem shihabItem in shihabItems)
             {
-                if (string.IsNullOrWhiteSpace(shihabItem.MehediUrl)) continue;
+                if (shihabItem == null || shihabItem.ShihabIsPrivateIncognito || string.IsNullOrWhiteSpace(shihabItem.MehediUrl)) continue;
                 mehediSb.AppendLine("<");
                 mehediSb.AppendLine(shihabItem.MehediUrl.Trim());
                 if (!string.IsNullOrWhiteSpace(shihabItem.MehediReferer))
@@ -1109,11 +1982,11 @@ namespace ShihabMehediIDM
                 }
                 if (!string.IsNullOrWhiteSpace(shihabItem.MehediUserAgent))
                 {
-                    mehediSb.AppendLine("user-agent: " + shihabItem.MehediUserAgent.Trim());
+                    mehediSb.AppendLine("User-Agent: " + shihabItem.MehediUserAgent.Trim());
                 }
                 mehediSb.AppendLine(">");
             }
-            File.WriteAllText(mehediFilePath, mehediSb.ToString(), Encoding.UTF8);
+            File.WriteAllText(mehediFilePath, mehediSb.ToString(), new UTF8Encoding(false));
         }
 
         public static List<ShihabDownloadItem> ImportFromMehediEf2OrText(string shihabFilePath)
@@ -1123,9 +1996,21 @@ namespace ShihabMehediIDM
             {
                 return mehediImported;
             }
-            string[] shihabLines = File.ReadAllLines(shihabFilePath, Encoding.UTF8);
+            byte[] rawBytes = StripShihabUtf8Bom(File.ReadAllBytes(shihabFilePath));
+            string fullText = Encoding.UTF8.GetString(rawBytes);
+            return ParseEf2OrEmbeddedUrlsText(fullText);
+        }
+
+        public static List<ShihabDownloadItem> ParseEf2OrEmbeddedUrlsText(string fullText)
+        {
+            List<ShihabDownloadItem> mehediImported = new List<ShihabDownloadItem>();
+            if (string.IsNullOrWhiteSpace(fullText)) return mehediImported;
+
+            HashSet<string> seenUrls = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            string[] shihabLines = fullText.Split(new char[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
             bool mehediInsideBlock = false;
             ShihabDownloadItem shihabCurrent = null;
+            Regex embeddedUrlRx = new Regex(@"(?:https?|ftps?|magnet):(?://|\?)[^\s<>""'`\)\]]+", RegexOptions.IgnoreCase);
 
             for (int mehediI = 0; mehediI < shihabLines.Length; mehediI++)
             {
@@ -1141,8 +2026,11 @@ namespace ShihabMehediIDM
                 {
                     if (shihabCurrent != null && !string.IsNullOrWhiteSpace(shihabCurrent.MehediUrl))
                     {
-                        shihabCurrent.ShihabFileName = ShihabFormatHelpers.ExtractMehediFileNameFromUrl(shihabCurrent.MehediUrl);
-                        mehediImported.Add(shihabCurrent);
+                        if (seenUrls.Add(shihabCurrent.MehediUrl))
+                        {
+                            shihabCurrent.ShihabFileName = ShihabFormatHelpers.ExtractMehediFileNameFromUrl(shihabCurrent.MehediUrl);
+                            mehediImported.Add(shihabCurrent);
+                        }
                     }
                     mehediInsideBlock = false;
                     shihabCurrent = null;
@@ -1152,9 +2040,16 @@ namespace ShihabMehediIDM
                 {
                     if (shihabLine.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
                         shihabLine.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
-                        shihabLine.StartsWith("ftp://", StringComparison.OrdinalIgnoreCase))
+                        shihabLine.StartsWith("ftp://", StringComparison.OrdinalIgnoreCase) ||
+                        shihabLine.StartsWith("ftps://", StringComparison.OrdinalIgnoreCase) ||
+                        shihabLine.StartsWith("magnet:?", StringComparison.OrdinalIgnoreCase))
                     {
                         shihabCurrent.MehediUrl = shihabLine;
+                        if (shihabLine.StartsWith("magnet:?", StringComparison.OrdinalIgnoreCase))
+                        {
+                            shihabCurrent.ShihabIsTorrent = true;
+                            shihabCurrent.ShihabTorrentMagnetOrPath = shihabLine;
+                        }
                     }
                     else if (shihabLine.StartsWith("referer:", StringComparison.OrdinalIgnoreCase))
                     {
@@ -1169,13 +2064,23 @@ namespace ShihabMehediIDM
                         shihabCurrent.MehediUserAgent = shihabLine.Substring(11).Trim();
                     }
                 }
-                else if (shihabLine.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
-                         shihabLine.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                else
                 {
-                    ShihabDownloadItem mehediPlain = new ShihabDownloadItem();
-                    mehediPlain.MehediUrl = shihabLine;
-                    mehediPlain.ShihabFileName = ShihabFormatHelpers.ExtractMehediFileNameFromUrl(shihabLine);
-                    mehediImported.Add(mehediPlain);
+                    MatchCollection matches = embeddedUrlRx.Matches(shihabLine);
+                    for (int m = 0; m < matches.Count; m++)
+                    {
+                        string u = System.Net.WebUtility.HtmlDecode(matches[m].Value.TrimEnd('.', ',', ';'));
+                        if (string.IsNullOrWhiteSpace(u) || !seenUrls.Add(u)) continue;
+                        ShihabDownloadItem mehediPlain = new ShihabDownloadItem();
+                        mehediPlain.MehediUrl = u;
+                        if (u.StartsWith("magnet:?", StringComparison.OrdinalIgnoreCase))
+                        {
+                            mehediPlain.ShihabIsTorrent = true;
+                            mehediPlain.ShihabTorrentMagnetOrPath = u;
+                        }
+                        mehediPlain.ShihabFileName = ShihabFormatHelpers.ExtractMehediFileNameFromUrl(u);
+                        mehediImported.Add(mehediPlain);
+                    }
                 }
             }
             return mehediImported;

@@ -1,0 +1,75 @@
+{
+  "manifest_version": 3,
+  "name": "MHS Download Manager Integration Module",
+  "version": "1.0.3",
+  "description": "Capture downloads, torrents, magnets, and web videos with MHS Download Manager (mdm.exe) by Mehedi Hasan Shihab.",
+  "author": "Mehedi Hasan Shihab (sshihabb007)",
+  "homepage_url": "https://sshihabb007.github.io/",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "idm@shihab.mehedi",
+      "strict_min_version": "115.0"
+    }
+  },
+  "icons": {
+    "16": "images/shihab_logo16.png",
+    "32": "images/shihab_logo32.png",
+    "48": "images/shihab_logo48.png",
+    "128": "images/shihab_logo128.png"
+  },
+  "action": {
+    "default_title": "MHS Download Manager 1.0.3 (Mehedi Hasan Shihab)",
+    "default_popup": "shihab_popup.html",
+    "default_icon": {
+      "16": "images/shihab_logo16.png",
+      "32": "images/shihab_logo32.png"
+    }
+  },
+  "background": {
+    "scripts": ["shihab_background.js"]
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://*/*"],
+      "js": ["mehedi_page_hook.js"],
+      "world": "MAIN",
+      "all_frames": true,
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["*://*/*"],
+      "js": ["mehedi_content.js"],
+      "all_frames": true,
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "shihab_captured.html",
+        "mehedi_captured.js",
+        "images/shihab_logo16.png",
+        "images/shihab_logo24.png",
+        "images/shihab_logo32.png",
+        "images/shihab_logo48.png"
+      ],
+      "matches": ["*://*/*"]
+    }
+  ],
+  "permissions": [
+    "downloads",
+    "cookies",
+    "tabs",
+    "contextMenus",
+    "webRequest",
+    "declarativeNetRequest",
+    "storage",
+    "scripting",
+    "nativeMessaging",
+    "alarms"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ]
+}
+

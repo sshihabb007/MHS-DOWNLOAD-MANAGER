@@ -73,6 +73,8 @@
   let shihabToastClearTimer = null;
   let mehediPeriodicTimerId = null;
   let shihabDomObserver = null;
+  let shihabPageHasDrmProtectedMedia = false;
+  let mehediDetectedDrmKeySystem = "";
   let mehediLastObservedPageHref = location.href;
   let shihabLocalVidUidCounter = 1;
   let mehediLastSentGestureMs = 0;
@@ -303,6 +305,13 @@
     const mehediKind = shihabEvent.data.mehediKind;
     const shihabPayload = shihabEvent.data.shihabPayload;
     if (!shihabPayload) return;
+
+    if (mehediKind === "shihab_eme_drm_detected") {
+      shihabPageHasDrmProtectedMedia = true;
+      mehediDetectedDrmKeySystem = String(shihabPayload.keySystem || "EME");
+      shihabRenderFloatingIdmVideoPanel();
+      return;
+    }
 
     if (mehediKind === "shihab_video_element_identity") {
       const mehediVidUid = String(shihabPayload.shihabVidUid || "");
@@ -2344,7 +2353,14 @@
         mehediEmptyRow.className = "shihab-item";
         const shihabEmptySpan = document.createElement("span");
         shihabEmptySpan.className = "mehedi-name";
-        shihabEmptySpan.textContent = "No direct HTTP stream exposed — click ↻ to re-track";
+        const shihabIsDrmStream = Boolean(
+          shihabPageHasDrmProtectedMedia || (shihabTargetVideo && shihabTargetVideo.mediaKeys)
+        );
+        shihabEmptySpan.textContent = shihabIsDrmStream
+          ? (mehediDetectedDrmKeySystem
+              ? `Protected (DRM — Encrypted Media Stream: ${mehediDetectedDrmKeySystem})`
+              : "Protected (DRM — Encrypted Media Stream)")
+          : "No direct HTTP stream exposed — click ↻ to re-track";
         mehediEmptyRow.appendChild(shihabEmptySpan);
         mehediEmptyRow.addEventListener("click", async (shihabEv) => {
           shihabEv.preventDefault();
@@ -2585,7 +2601,13 @@
       } catch (shihabErr) {
         continue;
       }
-      if (!shihabAbsHref.startsWith("http://") && !shihabAbsHref.startsWith("https://")) {
+      if (
+        !shihabAbsHref.startsWith("http://") &&
+        !shihabAbsHref.startsWith("https://") &&
+        !shihabAbsHref.startsWith("ftp://") &&
+        !shihabAbsHref.startsWith("ftps://") &&
+        !/^magnet:\?/i.test(shihabAbsHref)
+      ) {
         continue;
       }
       if (mehediSeen.has(shihabAbsHref)) {

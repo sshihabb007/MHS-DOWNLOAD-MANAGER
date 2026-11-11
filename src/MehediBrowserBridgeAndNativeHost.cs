@@ -34,6 +34,12 @@ namespace ShihabMehediIDM
         [DataMember(Name = "audioSize")] public long MehediAudioSize { get; set; }
         [DataMember(Name = "tabId")] public int ShihabTabId { get; set; }
         [DataMember(Name = "qualityLabel")] public string MehediQualityLabel { get; set; }
+        [DataMember(Name = "postBody")] public string ShihabPostBody { get; set; }
+        [DataMember(Name = "expectedChecksum")] public string ShihabExpectedChecksum { get; set; }
+        [DataMember(Name = "incognito")] public bool ShihabIncognito { get; set; }
+        [DataMember(Name = "kind")] public string ShihabJobKind { get; set; }
+        [DataMember(Name = "format")] public string ShihabFormatSelector { get; set; }
+        [DataMember(Name = "audioOnly")] public bool ShihabAudioOnly { get; set; }
     }
 
     [DataContract]
@@ -287,6 +293,7 @@ namespace ShihabMehediIDM
         [DataMember(Name = "url")] public string ShihabUrl { get; set; }
         [DataMember(Name = "text")] public string MehediText { get; set; }
         [DataMember(Name = "fileType")] public string ShihabFileType { get; set; }
+        [DataMember(Name = "referer")] public string ShihabReferer { get; set; }
     }
 
     [DataContract]
@@ -315,7 +322,12 @@ namespace ShihabMehediIDM
         [DataMember(Name = "excludedAddresses")] public string ShihabExcludedAddresses { get; set; }
         [DataMember(Name = "preventKey")] public string MehediPreventKey { get; set; }
         [DataMember(Name = "forceKey")] public string ShihabForceKey { get; set; }
+        [DataMember(Name = "captureOpenedFiles")] public bool ShihabCaptureOpenedFiles { get; set; }
+        [DataMember(Name = "captureMinSizeKb")] public int ShihabCaptureMinSizeKb { get; set; }
         [DataMember(Name = "activeDownloads")] public int ShihabActiveDownloads { get; set; }
+        [DataMember(Name = "updateAvailable")] public bool ShihabUpdateAvailable { get; set; }
+        [DataMember(Name = "latestVersion")] public string ShihabLatestVersion { get; set; }
+        [DataMember(Name = "latestHtmlUrl")] public string ShihabLatestHtmlUrl { get; set; }
         [DataMember(Name = "message")] public string MehediMessage { get; set; }
     }
 
@@ -340,6 +352,15 @@ namespace ShihabMehediIDM
         public bool ShihabStartMainQueue { get; set; }
         public string MehediCustomConfigDir { get; set; }
         public bool ShihabRunAsNativeHost { get; set; }
+        public bool ShihabRunAsMcpServer { get; set; }
+        public bool ShihabRunAsHeadlessCli { get; set; }
+        public bool ShihabRunHeadlessDaemon { get; set; }
+        public bool ShihabRunCrashWatchdog { get; set; }
+        public int ShihabCrashWatchdogPid { get; set; }
+        public string ShihabCrashWatchdogDir { get; set; }
+        public string ShihabUpdatedFromVersion { get; set; }
+        public bool ShihabForgetSignIns { get; set; }
+        public string[] ShihabRawArgs { get; set; }
         public bool ShihabStartMinimized { get; set; }
         public int MehediAutoCloseMs { get; set; }
         public bool ShihabHasActionableCommand { get; set; }
@@ -351,16 +372,90 @@ namespace ShihabMehediIDM
             mehediParsed.MehediLocalSavePath = "";
             mehediParsed.ShihabLocalFileName = "";
             mehediParsed.MehediCustomConfigDir = "";
+            mehediParsed.ShihabCrashWatchdogDir = "";
+            mehediParsed.ShihabUpdatedFromVersion = "";
             mehediParsed.MehediAutoCloseMs = 0;
+            mehediParsed.ShihabRawArgs = shihabArgs ?? new string[0];
 
-            if (shihabArgs == null) return mehediParsed;
+            if (shihabArgs == null || shihabArgs.Length == 0) return mehediParsed;
+
+            string firstLower = (shihabArgs[0] ?? "").Trim().ToLowerInvariant();
+            if (firstLower == "status" ||
+                firstLower == "list" ||
+                firstLower == "get" ||
+                firstLower == "pause" ||
+                firstLower == "start" ||
+                firstLower == "resume" ||
+                firstLower == "remove" ||
+                firstLower == "delete" ||
+                firstLower == "pair" ||
+                firstLower == "api" ||
+                firstLower == "check-update" ||
+                firstLower == "check-updates" ||
+                firstLower == "update" ||
+                firstLower == "video-info" ||
+                firstLower == "playlist-info" ||
+                firstLower == "video-get" ||
+                firstLower == "playlist-get" ||
+                firstLower == "gallery-get" ||
+                firstLower == "torrent-info" ||
+                firstLower == "torrent-get" ||
+                firstLower == "torrent-create" ||
+                firstLower == "install-ytdlp" ||
+                firstLower == "install-ffmpeg" ||
+                firstLower == "install-gallery-dl" ||
+                firstLower == "help" ||
+                firstLower == "--help" ||
+                firstLower == "-h")
+            {
+                mehediParsed.ShihabRunAsHeadlessCli = true;
+            }
 
             for (int shihabI = 0; shihabI < shihabArgs.Length; shihabI++)
             {
                 string mehediTok = shihabArgs[shihabI] ?? "";
                 string shihabLower = mehediTok.Trim().ToLowerInvariant();
 
-                if (shihabLower == "/d" || shihabLower == "-d")
+                if (shihabLower == "--mcp" || shihabLower == "mcp")
+                {
+                    mehediParsed.ShihabRunAsMcpServer = true;
+                }
+                else if (shihabLower == "--headless")
+                {
+                    mehediParsed.ShihabRunHeadlessDaemon = true;
+                }
+                else if (shihabLower == "--crash-monitor")
+                {
+                    mehediParsed.ShihabRunCrashWatchdog = true;
+                    if (shihabI + 1 < shihabArgs.Length)
+                    {
+                        int pidVal;
+                        if (int.TryParse(shihabArgs[++shihabI], out pidVal))
+                        {
+                            mehediParsed.ShihabCrashWatchdogPid = pidVal;
+                        }
+                    }
+                    if (shihabI + 1 < shihabArgs.Length)
+                    {
+                        mehediParsed.ShihabCrashWatchdogDir = shihabArgs[++shihabI];
+                    }
+                }
+                else if (shihabLower == "--shihab-updated-from")
+                {
+                    if (shihabI + 1 < shihabArgs.Length)
+                    {
+                        mehediParsed.ShihabUpdatedFromVersion = shihabArgs[++shihabI];
+                    }
+                }
+                else if (shihabLower == "--forget-sign-ins")
+                {
+                    mehediParsed.ShihabForgetSignIns = true;
+                }
+                else if (shihabLower == "--cli")
+                {
+                    mehediParsed.ShihabRunAsHeadlessCli = true;
+                }
+                else if (shihabLower == "/d" || shihabLower == "-d")
                 {
                     if (shihabI + 1 < shihabArgs.Length)
                     {
@@ -430,7 +525,11 @@ namespace ShihabMehediIDM
                     }
                 }
                 else if (mehediTok.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
-                         mehediTok.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                         mehediTok.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
+                         mehediTok.StartsWith("ftp://", StringComparison.OrdinalIgnoreCase) ||
+                         mehediTok.StartsWith("ftps://", StringComparison.OrdinalIgnoreCase) ||
+                         mehediTok.StartsWith("magnet:?", StringComparison.OrdinalIgnoreCase) ||
+                         mehediTok.EndsWith(".torrent", StringComparison.OrdinalIgnoreCase))
                 {
                     mehediParsed.ShihabDirectUrl = mehediTok;
                     mehediParsed.ShihabHasActionableCommand = true;
@@ -442,6 +541,7 @@ namespace ShihabMehediIDM
 
     public class MehediBrowserBridgeServer : IDisposable
     {
+        private readonly ShihabStateStore _shihabStore;
         private readonly MehediAppConfiguration _shihabConfig;
         private readonly MehediDynamicSegmentEngine _mehediEngine;
         private TcpListener _shihabTcpListener;
@@ -451,11 +551,45 @@ namespace ShihabMehediIDM
         public event Action<ShihabCapturedLinkDto> OnShihabSingleCaptureReceived;
         public event Action<ShihabBatchCaptureDto> OnMehediBatchCaptureReceived;
         public event Action OnShihabStartMainQueueRequested;
+        public event Action OnShihabShowMainWindowRequested;
+        public event Action OnShihabGracefulExitRequested;
 
         public MehediBrowserBridgeServer(MehediAppConfiguration shihabConfig, MehediDynamicSegmentEngine mehediEngine)
+            : this(new ShihabStateStore(null), shihabConfig, mehediEngine)
         {
+        }
+
+        public MehediBrowserBridgeServer(ShihabStateStore shihabStore, MehediAppConfiguration shihabConfig, MehediDynamicSegmentEngine mehediEngine)
+        {
+            _shihabStore = shihabStore ?? new ShihabStateStore(null);
             _shihabConfig = shihabConfig;
             _mehediEngine = mehediEngine;
+        }
+
+        private string GetBridgeSecretToken()
+        {
+            return _shihabStore != null ? _shihabStore.LoadOrCreateBridgeToken() : "";
+        }
+
+        private static bool IsTrustedExtensionOrigin(string originHeader)
+        {
+            if (string.IsNullOrWhiteSpace(originHeader)) return false;
+            string trimmed = originHeader.Trim();
+            return trimmed.StartsWith("chrome-extension://", StringComparison.OrdinalIgnoreCase) ||
+                   trimmed.StartsWith("moz-extension://", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private bool IsValidBridgeToken(string providedToken)
+        {
+            if (string.IsNullOrWhiteSpace(providedToken)) return false;
+            string expected = GetBridgeSecretToken();
+            if (string.IsNullOrWhiteSpace(expected)) return false;
+            string candidate = providedToken.Trim();
+            if (candidate.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+            {
+                candidate = candidate.Substring(7).Trim();
+            }
+            return ShihabRemoteControlServer.ConstantTimeEquals(candidate, expected);
         }
 
         public bool StartShihabBridge()
@@ -539,6 +673,8 @@ namespace ShihabMehediIDM
                     {
                         string mehediMethod;
                         string shihabPath;
+                        string originHeader;
+                        string bridgeTokenHeader;
                         string mehediBody;
                         byte[] shihabRawBodyBytes;
                         int mehediRawBodyCount;
@@ -546,6 +682,8 @@ namespace ShihabMehediIDM
                             shihabStream,
                             out mehediMethod,
                             out shihabPath,
+                            out originHeader,
+                            out bridgeTokenHeader,
                             out mehediBody,
                             out shihabRawBodyBytes,
                             out mehediRawBodyCount))
@@ -553,16 +691,120 @@ namespace ShihabMehediIDM
                             return;
                         }
 
+                        // Reject untrusted cross-origin browser requests (anti-CSRF / Private Network Access defense)
+                        bool hasOrigin = !string.IsNullOrWhiteSpace(originHeader);
+                        bool isTrustedExtOrigin = IsTrustedExtensionOrigin(originHeader);
+                        if (hasOrigin && !isTrustedExtOrigin)
+                        {
+                            WriteRawMehediHttpResponse(shihabStream, 403, "Forbidden", "{\"ok\":false,\"message\":\"Untrusted Origin rejected\"}", "");
+                            return;
+                        }
+
+                        string allowedCorsOrigin = isTrustedExtOrigin ? originHeader.Trim() : "";
+
                         if (string.Equals(mehediMethod, "OPTIONS", StringComparison.OrdinalIgnoreCase))
                         {
-                            WriteRawMehediHttpResponse(shihabStream, 204, "No Content", "");
+                            WriteRawMehediHttpResponse(shihabStream, 204, "No Content", "", allowedCorsOrigin);
                             return;
                         }
 
                         string shihabCleanPath = shihabPath.Split('?')[0].ToLowerInvariant();
                         if (shihabCleanPath == "/shihab/ping" || shihabCleanPath == "/")
                         {
-                            WriteMehediJsonTcpResponse(shihabStream, 200, BuildShihabStatusReply("MHS Download Manager Bridge Ready"));
+                            WriteMehediJsonTcpResponse(shihabStream, 200, BuildShihabStatusReply("MHS Download Manager Bridge Ready"), allowedCorsOrigin);
+                            return;
+                        }
+
+                        bool isAuthorizedCaller = isTrustedExtOrigin || IsValidBridgeToken(bridgeTokenHeader);
+                        if (!isAuthorizedCaller)
+                        {
+                            WriteMehediJsonTcpResponse(shihabStream, 401, BuildShihabErrorReply("Unauthorized bridge request: valid extension Origin or X-MHS-Bridge-Token required"), allowedCorsOrigin);
+                            return;
+                        }
+
+                        if (shihabCleanPath == "/shihab/show" && string.Equals(mehediMethod, "POST", StringComparison.OrdinalIgnoreCase))
+                        {
+                            if (OnShihabShowMainWindowRequested != null)
+                            {
+                                try { OnShihabShowMainWindowRequested(); } catch { }
+                            }
+                            WriteMehediJsonTcpResponse(shihabStream, 200, BuildShihabStatusReply("Main window activated"), allowedCorsOrigin);
+                            return;
+                        }
+
+                        if (shihabCleanPath == "/shihab/exit" && string.Equals(mehediMethod, "POST", StringComparison.OrdinalIgnoreCase))
+                        {
+                            try { _mehediEngine.PersistShihabState(); } catch { }
+                            try { ShihabCrashMonitor.MarkCleanShutdown(); } catch { }
+                            WriteRawMehediHttpResponse(shihabStream, 200, "OK", "{\"ok\":true,\"message\":\"Shutting down cleanly\"}", allowedCorsOrigin);
+                            Task.Run(delegate
+                            {
+                                Thread.Sleep(120);
+                                if (OnShihabGracefulExitRequested != null)
+                                {
+                                    try { OnShihabGracefulExitRequested(); return; } catch { }
+                                }
+                                try { System.Windows.Forms.Application.Exit(); } catch { }
+                            });
+                            return;
+                        }
+
+                        if (shihabCleanPath == "/shihab/api/status" && string.Equals(mehediMethod, "GET", StringComparison.OrdinalIgnoreCase))
+                        {
+                            List<ShihabDownloadItem> items = _mehediEngine.GetShihabDownloadsSnapshot();
+                            StringBuilder jb = new StringBuilder("[");
+                            for (int i = 0; i < items.Count; i++)
+                            {
+                                ShihabDownloadItem it = items[i];
+                                if (i > 0) jb.Append(",");
+                                jb.AppendFormat(System.Globalization.CultureInfo.InvariantCulture,
+                                    "{{\"id\":\"{0}\",\"fileName\":\"{1}\",\"status\":\"{2}\",\"percent\":{3:0.0},\"totalBytes\":{4},\"downloadedBytes\":{5},\"speedBps\":{6:0},\"checksumStatus\":\"{7}\",\"url\":\"{8}\"}}",
+                                    EscapeJsonVal(it.ShihabId),
+                                    EscapeJsonVal(it.ShihabFileName),
+                                    EscapeJsonVal(it.ShihabStatusText),
+                                    it.GetMehediPercent(),
+                                    it.ShihabTotalBytes,
+                                    it.MehediDownloadedBytes,
+                                    it.ShihabCurrentSpeedBps,
+                                    EscapeJsonVal(it.ShihabChecksumStatus),
+                                    EscapeJsonVal(it.MehediUrl));
+                            }
+                            jb.Append("]");
+                            WriteRawMehediHttpResponse(shihabStream, 200, "OK", jb.ToString(), allowedCorsOrigin);
+                            return;
+                        }
+
+                        if (shihabCleanPath == "/shihab/api/add" && string.Equals(mehediMethod, "POST", StringComparison.OrdinalIgnoreCase))
+                        {
+                            string url = ShihabDebridManager.ExtractJsonStringField(mehediBody, "url");
+                            string fileName = ShihabDebridManager.ExtractJsonStringField(mehediBody, "fileName");
+                            string checksum = ShihabDebridManager.ExtractJsonStringField(mehediBody, "checksum");
+                            string kind = ShihabDebridManager.ExtractJsonStringField(mehediBody, "kind");
+                            string format = ShihabDebridManager.ExtractJsonStringField(mehediBody, "format");
+                            string postBody = ShihabDebridManager.ExtractJsonStringField(mehediBody, "postBody");
+                            bool audioOnly = mehediBody.IndexOf("\"audioOnly\":true", StringComparison.OrdinalIgnoreCase) >= 0;
+                            bool incognito = mehediBody.IndexOf("\"incognito\":true", StringComparison.OrdinalIgnoreCase) >= 0;
+
+                            if (string.IsNullOrWhiteSpace(url))
+                            {
+                                WriteRawMehediHttpResponse(shihabStream, 400, "Bad Request", "{\"ok\":false,\"error\":\"url is required\"}", allowedCorsOrigin);
+                                return;
+                            }
+
+                            ShihabDownloadItem newItem = CreateItemFromApiOrCapture(url.Trim(), fileName, checksum, kind, format, audioOnly, incognito, postBody);
+                            _mehediEngine.AddShihabDownloadItem(newItem, true);
+                            WriteRawMehediHttpResponse(shihabStream, 200, "OK",
+                                "{\"ok\":true,\"id\":\"" + EscapeJsonVal(newItem.ShihabId) + "\",\"fileName\":\"" + EscapeJsonVal(newItem.ShihabFileName) + "\"}",
+                                allowedCorsOrigin);
+                            return;
+                        }
+
+                        if (shihabCleanPath == "/shihab/api/action" && string.Equals(mehediMethod, "POST", StringComparison.OrdinalIgnoreCase))
+                        {
+                            string act = ShihabDebridManager.ExtractJsonStringField(mehediBody, "action").Trim().ToLowerInvariant();
+                            string targetId = ShihabDebridManager.ExtractJsonStringField(mehediBody, "id").Trim();
+                            ExecuteBridgeActionOnEngine(act, targetId);
+                            WriteRawMehediHttpResponse(shihabStream, 200, "OK", "{\"ok\":true}", allowedCorsOrigin);
                             return;
                         }
 
@@ -573,7 +815,7 @@ namespace ShihabMehediIDM
                                 ShihabOk = true,
                                 MehediJobs = ShihabBrowserRelayHub.ClaimPendingShihabRelayJobs()
                             };
-                            WriteMehediJsonTcpResponse(shihabStream, 200, mehediRelayReply);
+                            WriteMehediJsonTcpResponse(shihabStream, 200, mehediRelayReply, allowedCorsOrigin);
                             return;
                         }
 
@@ -593,11 +835,11 @@ namespace ShihabMehediIDM
                                 mehediRawBodyCount);
                             if (mehediAccepted)
                             {
-                                WriteRawMehediHttpResponse(shihabStream, 200, "OK", "{\"ok\":true}");
+                                WriteRawMehediHttpResponse(shihabStream, 200, "OK", "{\"ok\":true}", allowedCorsOrigin);
                             }
                             else
                             {
-                                WriteRawMehediHttpResponse(shihabStream, 410, "Gone", "{\"ok\":false,\"message\":\"cancelled\"}");
+                                WriteRawMehediHttpResponse(shihabStream, 410, "Gone", "{\"ok\":false,\"message\":\"cancelled\"}", allowedCorsOrigin);
                             }
                             return;
                         }
@@ -609,14 +851,14 @@ namespace ShihabMehediIDM
                             string mehediErrParam = ParseMehediQueryParam(shihabPath, "error");
                             bool shihabSuccess = shihabOkParam == "1" || string.Equals(shihabOkParam, "true", StringComparison.OrdinalIgnoreCase);
                             ShihabBrowserRelayHub.CompleteShihabRelayJob(mehediJobId, shihabSuccess, mehediErrParam);
-                            WriteRawMehediHttpResponse(shihabStream, 200, "OK", "{\"ok\":true}");
+                            WriteRawMehediHttpResponse(shihabStream, 200, "OK", "{\"ok\":true}", allowedCorsOrigin);
                             return;
                         }
 
                         if (shihabCleanPath == "/shihab/toggle" && string.Equals(mehediMethod, "POST", StringComparison.OrdinalIgnoreCase))
                         {
                             _shihabConfig.MehediBrowserIntegrationEnabled = !_shihabConfig.MehediBrowserIntegrationEnabled;
-                            WriteMehediJsonTcpResponse(shihabStream, 200, BuildShihabStatusReply("Toggled integration"));
+                            WriteMehediJsonTcpResponse(shihabStream, 200, BuildShihabStatusReply("Toggled integration"), allowedCorsOrigin);
                             return;
                         }
 
@@ -629,7 +871,7 @@ namespace ShihabMehediIDM
                                 mehediYtId,
                                 shihabVisData,
                                 mehediForceYt);
-                            WriteMehediJsonTcpResponse(shihabStream, shihabYtReply.ShihabOk ? 200 : 400, shihabYtReply);
+                            WriteMehediJsonTcpResponse(shihabStream, shihabYtReply.ShihabOk ? 200 : 400, shihabYtReply, allowedCorsOrigin);
                             return;
                         }
 
@@ -642,10 +884,15 @@ namespace ShihabMehediIDM
                                 {
                                     OnShihabSingleCaptureReceived(shihabDto);
                                 }
-                                WriteMehediJsonTcpResponse(shihabStream, 200, BuildShihabStatusReply("Download transferred to MHS Download Manager"));
+                                else
+                                {
+                                    ShihabDownloadItem headlessItem = CreateItemFromCaptureDto(shihabDto);
+                                    _mehediEngine.AddShihabDownloadItem(headlessItem, !shihabDto.MehediAddToQueueOnly);
+                                }
+                                WriteMehediJsonTcpResponse(shihabStream, 200, BuildShihabStatusReply("Download transferred to MHS Download Manager"), allowedCorsOrigin);
                                 return;
                             }
-                            WriteMehediJsonTcpResponse(shihabStream, 400, BuildShihabErrorReply("Missing URL"));
+                            WriteMehediJsonTcpResponse(shihabStream, 400, BuildShihabErrorReply("Missing URL"), allowedCorsOrigin);
                             return;
                         }
 
@@ -659,10 +906,10 @@ namespace ShihabMehediIDM
                                     OnMehediBatchCaptureReceived(mehediBatchDto);
                                 }
                                 WriteMehediJsonTcpResponse(shihabStream, 200, BuildShihabStatusReply(
-                                    string.Format("Transferred {0} links to MHS Download Manager", mehediBatchDto.ShihabLinks.Count)));
+                                    string.Format("Transferred {0} links to MHS Download Manager", mehediBatchDto.ShihabLinks.Count)), allowedCorsOrigin);
                                 return;
                             }
-                            WriteMehediJsonTcpResponse(shihabStream, 400, BuildShihabErrorReply("No links supplied"));
+                            WriteMehediJsonTcpResponse(shihabStream, 400, BuildShihabErrorReply("No links supplied"), allowedCorsOrigin);
                             return;
                         }
 
@@ -672,17 +919,120 @@ namespace ShihabMehediIDM
                             {
                                 OnShihabStartMainQueueRequested();
                             }
-                            WriteMehediJsonTcpResponse(shihabStream, 200, BuildShihabStatusReply("Main Download Queue started"));
+                            else
+                            {
+                                _mehediEngine.StartShihabQueue("Main Queue");
+                            }
+                            WriteMehediJsonTcpResponse(shihabStream, 200, BuildShihabStatusReply("Main Download Queue started"), allowedCorsOrigin);
                             return;
                         }
 
-                        WriteMehediJsonTcpResponse(shihabStream, 404, BuildShihabErrorReply("Unknown Shihab endpoint"));
+                        WriteMehediJsonTcpResponse(shihabStream, 404, BuildShihabErrorReply("Unknown Shihab endpoint"), allowedCorsOrigin);
                     }
                 }
                 catch
                 {
                 }
             }
+        }
+
+        private ShihabDownloadItem CreateItemFromApiOrCapture(
+            string url,
+            string fileName,
+            string checksum,
+            string kind,
+            string format,
+            bool audioOnly,
+            bool incognito,
+            string postBody)
+        {
+            ShihabDownloadItem item = new ShihabDownloadItem();
+            item.MehediUrl = url;
+            item.ShihabFileName = string.IsNullOrWhiteSpace(fileName)
+                ? ShihabFormatHelpers.ExtractMehediFileNameFromUrl(url)
+                : ShihabFormatHelpers.SanitizeShihabFileName(fileName);
+            item.ShihabExpectedChecksum = checksum ?? "";
+            item.ShihabIsPrivateIncognito = incognito;
+            item.ShihabPostBody = postBody ?? "";
+
+            string k = (kind ?? "").Trim().ToLowerInvariant();
+            if (k == "ytdlp" || k == "video" || k == "playlist")
+            {
+                item.ShihabIsYtDlpJob = true;
+                item.ShihabYtDlpFormatSelector = format ?? "";
+                item.ShihabAudioOnlyExtract = audioOnly;
+            }
+            else if (k == "gallery")
+            {
+                item.ShihabIsGalleryJob = true;
+            }
+            else if (k == "torrent" || url.StartsWith("magnet:", StringComparison.OrdinalIgnoreCase) || url.EndsWith(".torrent", StringComparison.OrdinalIgnoreCase))
+            {
+                item.ShihabIsTorrentOrMagnet = true;
+                item.ShihabTorrentMagnetOrPath = url;
+            }
+
+            ShihabCategoryRule cat = _shihabConfig.ResolveMehediCategoryForFile(item.ShihabFileName);
+            item.ShihabCategoryName = cat.ShihabName;
+            item.MehediSaveDirectory = cat.ShihabDefaultFolder;
+            item.ShihabFileName = ShihabFormatHelpers.EnsureShihabUniqueFilePath(item.MehediSaveDirectory, item.ShihabFileName);
+            return item;
+        }
+
+        private ShihabDownloadItem CreateItemFromCaptureDto(ShihabCapturedLinkDto dto)
+        {
+            ShihabDownloadItem item = CreateItemFromApiOrCapture(
+                dto.ShihabUrl,
+                dto.ShihabFileName,
+                dto.ShihabExpectedChecksum,
+                dto.ShihabJobKind,
+                dto.ShihabFormatSelector,
+                dto.ShihabAudioOnly,
+                dto.ShihabIncognito,
+                dto.ShihabPostBody);
+            item.MehediReferer = dto.MehediReferrer ?? "";
+            item.ShihabCookies = dto.ShihabCookies ?? "";
+            if (!string.IsNullOrWhiteSpace(dto.MehediUserAgent)) item.MehediUserAgent = dto.MehediUserAgent;
+            if (!string.IsNullOrWhiteSpace(dto.ShihabSaveDirectory)) item.MehediSaveDirectory = dto.ShihabSaveDirectory;
+            item.MehediOriginHeader = dto.ShihabOrigin ?? "";
+            item.MehediOmitCookies = dto.MehediOmitCookies;
+            item.MehediAudioCompanionUrl = dto.ShihabAudioUrl ?? "";
+            item.ShihabAudioCompanionBytes = dto.MehediAudioSize;
+            item.ShihabSourceTabId = dto.ShihabTabId;
+            item.ShihabQualityLabel = dto.MehediQualityLabel ?? "";
+            return item;
+        }
+
+        private void ExecuteBridgeActionOnEngine(string act, string targetId)
+        {
+            if (act == "start_queue")
+            {
+                _mehediEngine.StartShihabQueue("Main Download Queue");
+                return;
+            }
+            if (act == "stop_queue")
+            {
+                _mehediEngine.StopShihabQueue("Main Download Queue");
+                return;
+            }
+            List<ShihabDownloadItem> snap = _mehediEngine.GetShihabDownloadsSnapshot();
+            for (int i = 0; i < snap.Count; i++)
+            {
+                ShihabDownloadItem it = snap[i];
+                bool matches = string.Equals(targetId, "all", StringComparison.OrdinalIgnoreCase) ||
+                               (!string.IsNullOrEmpty(targetId) && it.ShihabId.StartsWith(targetId, StringComparison.OrdinalIgnoreCase));
+                if (!matches) continue;
+                if (act == "pause") _mehediEngine.PauseShihabDownload(it);
+                else if (act == "start" || act == "resume") _mehediEngine.StartOrResumeMehediDownload(it);
+                else if (act == "remove") _mehediEngine.RemoveShihabDownload(it, false);
+                else if (act == "delete") _mehediEngine.RemoveShihabDownload(it, true);
+            }
+        }
+
+        private static string EscapeJsonVal(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return "";
+            return text.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\r", "").Replace("\n", "\\n");
         }
 
         private static string ParseMehediQueryParam(string shihabRawPath, string mehediParamName)
@@ -712,12 +1062,16 @@ namespace ShihabMehediIDM
             NetworkStream mehediStream,
             out string shihabMethod,
             out string mehediPath,
+            out string originHeader,
+            out string bridgeTokenHeader,
             out string shihabBody,
             out byte[] mehediRawBodyBytes,
             out int shihabRawBodyCount)
         {
             shihabMethod = "";
             mehediPath = "/";
+            originHeader = "";
+            bridgeTokenHeader = "";
             shihabBody = "";
             mehediRawBodyBytes = null;
             shihabRawBodyCount = 0;
@@ -757,6 +1111,18 @@ namespace ShihabMehediIDM
                 {
                     int.TryParse(shihabLine.Substring(15).Trim(), out shihabContentLen);
                 }
+                else if (shihabLine.StartsWith("Origin:", StringComparison.OrdinalIgnoreCase))
+                {
+                    originHeader = shihabLine.Substring(7).Trim();
+                }
+                else if (shihabLine.StartsWith("X-MHS-Bridge-Token:", StringComparison.OrdinalIgnoreCase))
+                {
+                    bridgeTokenHeader = shihabLine.Substring(19).Trim();
+                }
+                else if (string.IsNullOrEmpty(bridgeTokenHeader) && shihabLine.StartsWith("Authorization:", StringComparison.OrdinalIgnoreCase))
+                {
+                    bridgeTokenHeader = shihabLine.Substring(14).Trim();
+                }
             }
 
             string mehediLowerPathOnly = mehediPath.Split('?')[0].ToLowerInvariant();
@@ -774,26 +1140,30 @@ namespace ShihabMehediIDM
             return true;
         }
 
-        private static void WriteMehediJsonTcpResponse<T>(NetworkStream shihabStream, int mehediStatus, T shihabPayload)
+        private static void WriteMehediJsonTcpResponse<T>(NetworkStream shihabStream, int mehediStatus, T shihabPayload, string allowedCorsOrigin)
         {
             string mehediJson = SerializeShihabJson(shihabPayload);
-            string shihabReason = mehediStatus == 200 ? "OK" : (mehediStatus == 400 ? "Bad Request" : "Error");
-            WriteRawMehediHttpResponse(shihabStream, mehediStatus, shihabReason, mehediJson);
+            string shihabReason = mehediStatus == 200 ? "OK" : (mehediStatus == 400 ? "Bad Request" : (mehediStatus == 401 ? "Unauthorized" : (mehediStatus == 403 ? "Forbidden" : "Error")));
+            WriteRawMehediHttpResponse(shihabStream, mehediStatus, shihabReason, mehediJson, allowedCorsOrigin);
         }
 
-        private static void WriteRawMehediHttpResponse(NetworkStream shihabStream, int mehediStatus, string shihabReason, string mehediJsonBody)
+        private static void WriteRawMehediHttpResponse(NetworkStream shihabStream, int mehediStatus, string shihabReason, string mehediJsonBody, string allowedCorsOrigin)
         {
             byte[] shihabBodyBytes = Encoding.UTF8.GetBytes(mehediJsonBody ?? "");
-            string mehediHeaders =
-                string.Format("HTTP/1.1 {0} {1}\r\n", mehediStatus, shihabReason) +
-                "Content-Type: application/json; charset=utf-8\r\n" +
-                "Access-Control-Allow-Origin: *\r\n" +
-                "Access-Control-Allow-Private-Network: true\r\n" +
-                "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n" +
-                "Access-Control-Allow-Headers: Content-Type, X-Shihab-Client\r\n" +
-                "Connection: close\r\n" +
-                string.Format("Content-Length: {0}\r\n\r\n", shihabBodyBytes.Length);
-            byte[] shihabHdrBytes = Encoding.ASCII.GetBytes(mehediHeaders);
+            StringBuilder hdr = new StringBuilder(384);
+            hdr.AppendFormat("HTTP/1.1 {0} {1}\r\n", mehediStatus, shihabReason);
+            hdr.Append("Content-Type: application/json; charset=utf-8\r\n");
+            if (!string.IsNullOrEmpty(allowedCorsOrigin))
+            {
+                hdr.Append("Access-Control-Allow-Origin: ").Append(allowedCorsOrigin).Append("\r\n");
+                hdr.Append("Vary: Origin\r\n");
+                hdr.Append("Access-Control-Allow-Private-Network: true\r\n");
+                hdr.Append("Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n");
+                hdr.Append("Access-Control-Allow-Headers: Content-Type, X-Shihab-Client, X-MHS-Bridge-Token, Authorization\r\n");
+            }
+            hdr.Append("Connection: close\r\n");
+            hdr.AppendFormat("Content-Length: {0}\r\n\r\n", shihabBodyBytes.Length);
+            byte[] shihabHdrBytes = Encoding.ASCII.GetBytes(hdr.ToString());
             shihabStream.Write(shihabHdrBytes, 0, shihabHdrBytes.Length);
             if (shihabBodyBytes.Length > 0)
             {
@@ -813,11 +1183,14 @@ namespace ShihabMehediIDM
                     mehediActive++;
                 }
             }
+            ShihabUpdateCheckResult cachedUpd = ShihabAutoUpdater.LastCachedUpdate;
+            bool updAvail = cachedUpd != null && cachedUpd.UpdateAvailable;
+            string curVer = ShihabAutoUpdater.GetCurrentAppVersion();
             return new MehediBridgeStatusReply
             {
                 ShihabOk = true,
                 MehediAppName = "MHS Download Manager",
-                ShihabVersion = "1.0.3",
+                ShihabVersion = curVer,
                 MehediIntegrationEnabled = _shihabConfig.MehediBrowserIntegrationEnabled,
                 ShihabShowVideoPanel = _shihabConfig.ShihabShowVideoFloatingPanel,
                 MehediPanelMiniMode = _shihabConfig.ShihabPanelMiniMode,
@@ -828,7 +1201,12 @@ namespace ShihabMehediIDM
                 ShihabExcludedAddresses = _shihabConfig.MehediExcludedAddressesSpaceSeparated ?? "",
                 MehediPreventKey = string.IsNullOrWhiteSpace(_shihabConfig.MehediPreventKeyName) ? "Alt" : _shihabConfig.MehediPreventKeyName,
                 ShihabForceKey = string.IsNullOrWhiteSpace(_shihabConfig.ShihabForceKeyName) ? "Ins" : _shihabConfig.ShihabForceKeyName,
+                ShihabCaptureOpenedFiles = _shihabConfig.ShihabCaptureOpenedFiles,
+                ShihabCaptureMinSizeKb = _shihabConfig.ShihabCaptureMinSizeKb,
                 ShihabActiveDownloads = mehediActive,
+                ShihabUpdateAvailable = updAvail,
+                ShihabLatestVersion = updAvail ? cachedUpd.LatestVersion : curVer,
+                ShihabLatestHtmlUrl = updAvail ? cachedUpd.HtmlUrl : "",
                 MehediMessage = mehediMsg
             };
         }
@@ -839,7 +1217,7 @@ namespace ShihabMehediIDM
             {
                 ShihabOk = false,
                 MehediAppName = "MHS Download Manager",
-                ShihabVersion = "1.0.3",
+                ShihabVersion = ShihabAutoUpdater.GetCurrentAppVersion(),
                 MehediMessage = mehediErr
             };
         }
@@ -866,10 +1244,32 @@ namespace ShihabMehediIDM
             }
         }
 
+        public static bool SendUrlToExistingShihabInstance(int shihabPort, string url, string saveDir, string fileName)
+        {
+            try
+            {
+                ShihabCapturedLinkDto shihabDto = new ShihabCapturedLinkDto
+                {
+                    ShihabUrl = url ?? "",
+                    ShihabFileName = fileName ?? "",
+                    ShihabSaveDirectory = saveDir ?? "",
+                    ShihabSilentMode = true
+                };
+                string mehediJson = SerializeShihabJson(shihabDto);
+                PostLocalShihabJson(shihabPort, "/shihab/capture", mehediJson, null);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         public static bool ForwardCliToRunningShihabInstance(ShihabCliParsedArguments mehediCli, int shihabPort)
         {
             try
             {
+                string customDir = mehediCli != null ? mehediCli.MehediCustomConfigDir : null;
                 if (!string.IsNullOrWhiteSpace(mehediCli.ShihabDirectUrl))
                 {
                     ShihabCapturedLinkDto shihabDto = new ShihabCapturedLinkDto
@@ -882,11 +1282,11 @@ namespace ShihabMehediIDM
                         MehediExitWhenDone = mehediCli.ShihabExitOnDone
                     };
                     string mehediJson = SerializeShihabJson(shihabDto);
-                    PostLocalShihabJson(shihabPort, "/shihab/capture", mehediJson);
+                    PostLocalShihabJson(shihabPort, "/shihab/capture", mehediJson, customDir);
                 }
                 if (mehediCli.ShihabStartMainQueue)
                 {
-                    PostLocalShihabJson(shihabPort, "/shihab/start-queue", "{}");
+                    PostLocalShihabJson(shihabPort, "/shihab/start-queue", "{}", customDir);
                 }
                 return true;
             }
@@ -898,10 +1298,26 @@ namespace ShihabMehediIDM
 
         public static string PostLocalShihabJson(int mehediPort, string shihabPath, string mehediJsonBody)
         {
+            return PostLocalShihabJson(mehediPort, shihabPath, mehediJsonBody, null);
+        }
+
+        public static string PostLocalShihabJson(int mehediPort, string shihabPath, string mehediJsonBody, string customConfigDir)
+        {
             HttpWebRequest shihabReq = (HttpWebRequest)WebRequest.Create(string.Format("http://127.0.0.1:{0}{1}", mehediPort, shihabPath));
             shihabReq.Method = "POST";
             shihabReq.Timeout = 3000;
+            shihabReq.Proxy = null;
             shihabReq.ContentType = "application/json; charset=utf-8";
+            try
+            {
+                ShihabStateStore tokenStore = new ShihabStateStore(customConfigDir);
+                string token = tokenStore.LoadOrCreateBridgeToken();
+                if (!string.IsNullOrEmpty(token))
+                {
+                    shihabReq.Headers["X-MHS-Bridge-Token"] = token;
+                }
+            }
+            catch { }
             byte[] mehediData = Encoding.UTF8.GetBytes(mehediJsonBody ?? "{}");
             shihabReq.ContentLength = mehediData.Length;
             using (Stream shihabOut = shihabReq.GetRequestStream())
@@ -1075,19 +1491,60 @@ namespace ShihabMehediIDM
                 "}\r\n";
             File.WriteAllText(shihabManifestPath, shihabManifestJson, Encoding.UTF8);
 
-            string[] mehediRegistryKeys = new string[]
+            // Also write Firefox/Gecko native messaging manifest (Zen, LibreWolf, Floorp, Waterfox, Firefox)
+            string shihabFirefoxManifestPath = Path.Combine(shihabDataDir, "com.shihab.mehedi.idm.firefox.json");
+            string shihabFirefoxManifestJson =
+                "{\r\n" +
+                "  \"name\": \"com.shihab.mehedi.idm\",\r\n" +
+                "  \"description\": \"MHS Download Manager Native Messaging Host (mdm.exe)\",\r\n" +
+                "  \"path\": \"" + mehediEscapedBat + "\",\r\n" +
+                "  \"type\": \"stdio\",\r\n" +
+                "  \"allowed_extensions\": [\r\n" +
+                "    \"mhs-download-manager@shihab.mehedi.idm\"\r\n" +
+                "  ]\r\n" +
+                "}\r\n";
+            File.WriteAllText(shihabFirefoxManifestPath, shihabFirefoxManifestJson, Encoding.UTF8);
+
+            // Register across all 9 Chromium-family browsers
+            string[] mehediChromiumKeys = new string[]
             {
                 @"Software\Google\Chrome\NativeMessagingHosts\com.shihab.mehedi.idm",
+                @"Software\Chromium\NativeMessagingHosts\com.shihab.mehedi.idm",
                 @"Software\Microsoft\Edge\NativeMessagingHosts\com.shihab.mehedi.idm",
-                @"Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.shihab.mehedi.idm"
+                @"Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.shihab.mehedi.idm",
+                @"Software\Vivaldi\NativeMessagingHosts\com.shihab.mehedi.idm",
+                @"Software\Opera Software\NativeMessagingHosts\com.shihab.mehedi.idm",
+                @"Software\Helium\NativeMessagingHosts\com.shihab.mehedi.idm",
+                @"Software\Thorium\NativeMessagingHosts\com.shihab.mehedi.idm",
+                @"Software\Arc\NativeMessagingHosts\com.shihab.mehedi.idm"
             };
-            for (int shihabI = 0; shihabI < mehediRegistryKeys.Length; shihabI++)
+            for (int shihabI = 0; shihabI < mehediChromiumKeys.Length; shihabI++)
             {
-                using (RegistryKey mehediKey = Registry.CurrentUser.CreateSubKey(mehediRegistryKeys[shihabI]))
+                using (RegistryKey mehediKey = Registry.CurrentUser.CreateSubKey(mehediChromiumKeys[shihabI]))
                 {
                     if (mehediKey != null)
                     {
                         mehediKey.SetValue("", shihabManifestPath, RegistryValueKind.String);
+                    }
+                }
+            }
+
+            // Register across all 5 Firefox/Gecko-family browsers
+            string[] mehediFirefoxKeys = new string[]
+            {
+                @"Software\Mozilla\NativeMessagingHosts\com.shihab.mehedi.idm",
+                @"Software\Zen\NativeMessagingHosts\com.shihab.mehedi.idm",
+                @"Software\LibreWolf\NativeMessagingHosts\com.shihab.mehedi.idm",
+                @"Software\Floorp\NativeMessagingHosts\com.shihab.mehedi.idm",
+                @"Software\Waterfox\NativeMessagingHosts\com.shihab.mehedi.idm"
+            };
+            for (int shihabF = 0; shihabF < mehediFirefoxKeys.Length; shihabF++)
+            {
+                using (RegistryKey mehediKey = Registry.CurrentUser.CreateSubKey(mehediFirefoxKeys[shihabF]))
+                {
+                    if (mehediKey != null)
+                    {
+                        mehediKey.SetValue("", shihabFirefoxManifestPath, RegistryValueKind.String);
                     }
                 }
             }

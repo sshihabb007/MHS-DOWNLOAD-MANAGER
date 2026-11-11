@@ -57,6 +57,7 @@
     "tabs",
     "contextMenus",
     "webRequest",
+    "declarativeNetRequest",
     "storage",
     "scripting",
     "nativeMessaging",

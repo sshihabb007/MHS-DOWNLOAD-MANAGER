@@ -1064,24 +1064,30 @@ namespace ShihabMehediIDM
             bool mehediSelected,
             bool shihabHovered)
         {
+            Color baseBg = ShihabThemePalette.GetMehediWindowBg(MehediDarkMode);
+            Color surfBg = ShihabThemePalette.GetShihabSurfaceBg(MehediDarkMode);
+            Color accentCol = ShihabThemePalette.GetShihabAccentBlue();
             Color shihabRowFill;
             if (mehediSelected)
             {
-                shihabRowFill = MehediDarkMode ? Color.FromArgb(24, 38, 58) : Color.FromArgb(219, 234, 254);
+                shihabRowFill = MehediDarkMode
+                    ? ShihabThemePalette.BlendThemeColor(baseBg, accentCol, 0.22)
+                    : Color.FromArgb(219, 234, 254);
             }
             else if (shihabHovered)
             {
-                shihabRowFill = MehediDarkMode ? Color.FromArgb(27, 30, 38) : Color.FromArgb(241, 245, 249);
+                shihabRowFill = MehediDarkMode ? surfBg : Color.FromArgb(241, 245, 249);
             }
             else
             {
-                shihabRowFill = MehediDarkMode ? Color.FromArgb(22, 24, 29) : Color.White;
+                shihabRowFill = baseBg;
             }
 
+            Color borderCol = ShihabThemePalette.GetShihabBorder(MehediDarkMode);
             Color mehediHorizLine = mehediSelected
-                ? (MehediDarkMode ? Color.FromArgb(38, 66, 104) : Color.FromArgb(147, 197, 253))
-                : (MehediDarkMode ? Color.FromArgb(33, 37, 46) : Color.FromArgb(226, 232, 240));
-            Color shihabVertLine = MehediDarkMode ? Color.FromArgb(31, 35, 43) : Color.FromArgb(232, 237, 244);
+                ? ShihabThemePalette.BlendThemeColor(borderCol, accentCol, 0.45)
+                : borderCol;
+            Color shihabVertLine = ShihabThemePalette.BlendThemeColor(baseBg, borderCol, 0.65);
 
             using (SolidBrush mehediFillBr = new SolidBrush(shihabRowFill))
             using (Pen shihabRowPen = new Pen(mehediHorizLine))
@@ -1098,7 +1104,7 @@ namespace ShihabMehediIDM
 
             if (shihabCol == 0)
             {
-                Color mehediIdxCol = MehediDarkMode ? Color.FromArgb(124, 133, 153) : Color.FromArgb(100, 116, 139);
+                Color mehediIdxCol = ShihabThemePalette.GetMehediMutedText(MehediDarkMode);
                 using (Font shihabIdxFont = new Font("Segoe UI", 8.6f, FontStyle.Regular))
                 {
                     TextRenderer.DrawText(
@@ -1114,7 +1120,7 @@ namespace ShihabMehediIDM
 
             if (shihabCol == 1)
             {
-                Color mehediNameCol = MehediDarkMode ? Color.FromArgb(238, 242, 247) : Color.FromArgb(15, 23, 42);
+                Color mehediNameCol = ShihabThemePalette.GetShihabPrimaryText(MehediDarkMode);
                 Rectangle shihabNameBounds = new Rectangle(shihabCell.X + 10, shihabCell.Y, Math.Max(4, shihabCell.Width - 16), shihabCell.Height);
                 using (Font mehediNameFont = new Font("Segoe UI", 9f, FontStyle.Bold))
                 {
@@ -1410,38 +1416,84 @@ namespace ShihabMehediIDM
             return mehediPath;
         }
 
+        private static ShihabCustomThemePreset _activeThemePreset;
+        private static bool _activeThemeIsDark = true;
+
+        public static void ApplyThemePreset(ShihabCustomThemePreset preset)
+        {
+            _activeThemePreset = preset;
+            _activeThemeIsDark = preset == null || ShihabThemeManager.IsDarkThemePreset(preset);
+        }
+
+        public static Color BlendThemeColor(Color a, Color b, double weightB)
+        {
+            double w = Math.Max(0.0, Math.Min(1.0, weightB));
+            int r = (int)Math.Round(a.R * (1.0 - w) + b.R * w);
+            int g = (int)Math.Round(a.G * (1.0 - w) + b.G * w);
+            int bl = (int)Math.Round(a.B * (1.0 - w) + b.B * w);
+            return Color.FromArgb(Math.Max(0, Math.Min(255, r)), Math.Max(0, Math.Min(255, g)), Math.Max(0, Math.Min(255, bl)));
+        }
+
         public static Color GetMehediWindowBg(bool shihabDark)
         {
+            if (_activeThemePreset != null && _activeThemeIsDark == shihabDark)
+            {
+                return _activeThemePreset.BackgroundMain;
+            }
             return shihabDark ? Color.FromArgb(18, 19, 25) : Color.FromArgb(245, 248, 252);
         }
 
         public static Color GetShihabSidebarBg(bool mehediDark)
         {
+            if (_activeThemePreset != null && _activeThemeIsDark == mehediDark)
+            {
+                return _activeThemePreset.BackgroundSidebar;
+            }
             return mehediDark ? Color.FromArgb(22, 24, 33) : Color.White;
         }
 
         public static Color GetShihabSurfaceBg(bool mehediDark)
         {
+            if (_activeThemePreset != null && _activeThemeIsDark == mehediDark)
+            {
+                return _activeThemePreset.BackgroundCard;
+            }
             return mehediDark ? Color.FromArgb(25, 28, 39) : Color.White;
         }
 
         public static Color GetMehediHeaderBg(bool shihabDark)
         {
+            if (_activeThemePreset != null && _activeThemeIsDark == shihabDark)
+            {
+                return _activeThemePreset.GridAlternate;
+            }
             return shihabDark ? Color.FromArgb(22, 24, 34) : Color.FromArgb(232, 240, 250);
         }
 
         public static Color GetShihabPrimaryText(bool mehediDark)
         {
+            if (_activeThemePreset != null && _activeThemeIsDark == mehediDark)
+            {
+                return _activeThemePreset.TextPrimary;
+            }
             return mehediDark ? Color.FromArgb(230, 234, 245) : Color.FromArgb(22, 28, 38);
         }
 
         public static Color GetMehediMutedText(bool shihabDark)
         {
+            if (_activeThemePreset != null && _activeThemeIsDark == shihabDark)
+            {
+                return _activeThemePreset.TextSecondary;
+            }
             return shihabDark ? Color.FromArgb(132, 140, 166) : Color.FromArgb(95, 110, 128);
         }
 
         public static Color GetShihabAccentBlue()
         {
+            if (_activeThemePreset != null)
+            {
+                return _activeThemePreset.AccentPrimary;
+            }
             return Color.FromArgb(124, 92, 255);
         }
 
@@ -1467,6 +1519,10 @@ namespace ShihabMehediIDM
 
         public static Color GetShihabBorder(bool mehediDark)
         {
+            if (_activeThemePreset != null && _activeThemeIsDark == mehediDark)
+            {
+                return BlendThemeColor(_activeThemePreset.BackgroundCard, _activeThemePreset.TextSecondary, mehediDark ? 0.22 : 0.35);
+            }
             return mehediDark ? Color.FromArgb(38, 43, 60) : Color.FromArgb(203, 213, 225);
         }
 
@@ -2064,7 +2120,10 @@ namespace ShihabMehediIDM
                     {
                         string mehediClip = Clipboard.GetText().Trim();
                         if (mehediClip.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
-                            mehediClip.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                            mehediClip.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
+                            mehediClip.StartsWith("ftp://", StringComparison.OrdinalIgnoreCase) ||
+                            mehediClip.StartsWith("ftps://", StringComparison.OrdinalIgnoreCase) ||
+                            mehediClip.StartsWith("magnet:?", StringComparison.OrdinalIgnoreCase))
                         {
                             _shihabUrlBox.Text = mehediClip;
                         }
@@ -2121,11 +2180,12 @@ namespace ShihabMehediIDM
             shihabOkBtn.Click += delegate
             {
                 string mehediU = _shihabUrlBox.Text.Trim();
+                bool isMagnet = mehediU.StartsWith("magnet:?", StringComparison.OrdinalIgnoreCase);
                 Uri shihabParsed;
-                if (!Uri.TryCreate(mehediU, UriKind.Absolute, out shihabParsed) ||
-                    (shihabParsed.Scheme != "http" && shihabParsed.Scheme != "https"))
+                if (!isMagnet && (!Uri.TryCreate(mehediU, UriKind.Absolute, out shihabParsed) ||
+                    (shihabParsed.Scheme != "http" && shihabParsed.Scheme != "https" && shihabParsed.Scheme != "ftp" && shihabParsed.Scheme != "ftps")))
                 {
-                    MessageBox.Show(this, "Invalid URL entered. Please enter a valid http:// or https:// address.", "MHS Download Manager", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    MessageBox.Show(this, "Invalid URL entered. Please enter a valid http://, https://, ftp://, ftps://, or magnet:? address.", "MHS Download Manager", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return;
                 }
                 ShihabEnteredUrl = mehediU;
@@ -2169,6 +2229,10 @@ namespace ShihabMehediIDM
         private ComboBox _shihabQueueCombo;
         private CheckBox _mehediRememberPathCheck;
         private Label _shihabSizeBadgeLabel;
+        private TextBox _shihabExpectedChecksumBox;
+        private CheckBox _shihabAutoExtractCheck;
+        private CheckBox _shihabPrivateIncognitoCheck;
+        private CheckBox _shihabBypassDebridCheck;
 
         public MehediDownloadFileInfoForm(
             ShihabDownloadItem shihabDraftItem,
@@ -2181,7 +2245,7 @@ namespace ShihabMehediIDM
             bool shihabDark = mehediConfig.ShihabDarkMode;
 
             Text = "Download File Info — " + ShihabThemePalette.ShihabMainHeaderTitle;
-            Size = new Size(640, 365);
+            Size = new Size(640, 415);
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
             MinimizeBox = false;
@@ -2326,16 +2390,50 @@ namespace ShihabMehediIDM
             }
             if (_shihabQueueCombo.Items.Count > 0) _shihabQueueCombo.SelectedIndex = 0;
 
+            _shihabAutoExtractCheck = new CheckBox
+            {
+                Text = "Auto-extract archive on completion",
+                Location = new Point(365, 193),
+                AutoSize = true,
+                Checked = shihabDraftItem.ShihabAutoExtract || _shihabConfig.ShihabAutoExtractArchives
+            };
+
+            Label shihabChkLbl = new Label { Text = "Checksum (opt):", Location = new Point(18, 230), AutoSize = true };
+            _shihabExpectedChecksumBox = new TextBox
+            {
+                Location = new Point(110, 227),
+                Width = 495,
+                BackColor = ShihabThemePalette.GetShihabSurfaceBg(shihabDark),
+                ForeColor = ForeColor,
+                Text = shihabDraftItem.ShihabExpectedChecksum ?? ""
+            };
+
+            _shihabPrivateIncognitoCheck = new CheckBox
+            {
+                Text = "Private / Incognito (ephemeral — omit from saved history)",
+                Location = new Point(110, 264),
+                AutoSize = true,
+                Checked = shihabDraftItem.ShihabIsPrivateIncognito
+            };
+
+            _shihabBypassDebridCheck = new CheckBox
+            {
+                Text = "Bypass Debrid",
+                Location = new Point(470, 264),
+                AutoSize = true,
+                Checked = shihabDraftItem.ShihabBypassDebrid
+            };
+
             Button mehediLaterBtn = ShihabThemePalette.CreateMehediStyledButton("Download Later", ShihabThemePalette.GetShihabSurfaceBg(shihabDark), ForeColor, 138);
-            mehediLaterBtn.Location = new Point(180, 265);
+            mehediLaterBtn.Location = new Point(180, 312);
             mehediLaterBtn.Click += delegate { CommitShihabChoicesAndClose(false); };
 
             Button shihabStartBtn = ShihabThemePalette.CreateMehediStyledButton("Start Download", ShihabThemePalette.GetMehediAccentGreen(), Color.White, 155);
-            shihabStartBtn.Location = new Point(328, 265);
+            shihabStartBtn.Location = new Point(328, 312);
             shihabStartBtn.Click += delegate { CommitShihabChoicesAndClose(true); };
 
             Button mehediCancelBtn = ShihabThemePalette.CreateMehediStyledButton("Cancel", ShihabThemePalette.GetShihabSurfaceBg(shihabDark), ForeColor, 110);
-            mehediCancelBtn.Location = new Point(495, 265);
+            mehediCancelBtn.Location = new Point(495, 312);
             mehediCancelBtn.Click += delegate
             {
                 DialogResult = DialogResult.Cancel;
@@ -2350,6 +2448,8 @@ namespace ShihabMehediIDM
                 mehediUrlLbl, _shihabUrlBox, shihabCatLbl, _mehediCategoryCombo, _shihabSizeBadgeLabel,
                 mehediSaveLbl, _shihabSaveAsBox, shihabBrowseBtn, _mehediRememberPathCheck,
                 shihabDescLbl, _mehediDescBox, mehediQueueLbl, _shihabQueueCombo,
+                _shihabAutoExtractCheck, shihabChkLbl, _shihabExpectedChecksumBox,
+                _shihabPrivateIncognitoCheck, _shihabBypassDebridCheck,
                 mehediLaterBtn, shihabStartBtn, mehediCancelBtn
             });
 
@@ -2392,7 +2492,10 @@ namespace ShihabMehediIDM
                                 ? ShihabFormatHelpers.FormatMehediBytes(mehediCombinedBytes)
                                 : (mehediProbe.MehediIsHlsPlaylist ? "HLS Video Stream (.m3u8)" : "Stream / Unknown");
                             string mehediResStr = mehediProbe.MehediAcceptsRanges ? "Resume: Yes" : "Resume: No";
-                            _shihabSizeBadgeLabel.Text = string.Format("Size: {0}  [{1}{2}]", shihabSizeStr, mehediResStr, shihabMuxTag);
+                            string shihabGeoTag = !string.IsNullOrWhiteSpace(mehediProbe.ShihabServerCountryCode)
+                                ? (" · [" + mehediProbe.ShihabServerCountryCode + "]")
+                                : "";
+                            _shihabSizeBadgeLabel.Text = string.Format("Size: {0}  [{1}{2}{3}]", shihabSizeStr, mehediResStr, shihabMuxTag, shihabGeoTag);
 
                             string shihabCurLeaf = Path.GetFileName(_shihabSaveAsBox.Text);
                             if ((shihabCurLeaf == "download.bin" || shihabCurLeaf == "shihab_download.bin") &&
@@ -2452,6 +2555,10 @@ namespace ShihabMehediIDM
                 ? _mehediCategoryCombo.SelectedItem.ToString()
                 : "General";
             MehediConfiguredItem.ShihabDescription = _mehediDescBox.Text.Trim();
+            MehediConfiguredItem.ShihabExpectedChecksum = _shihabExpectedChecksumBox != null ? _shihabExpectedChecksumBox.Text.Trim() : "";
+            MehediConfiguredItem.ShihabAutoExtract = _shihabAutoExtractCheck != null && _shihabAutoExtractCheck.Checked;
+            MehediConfiguredItem.ShihabIsPrivateIncognito = _shihabPrivateIncognitoCheck != null && _shihabPrivateIncognitoCheck.Checked;
+            MehediConfiguredItem.ShihabBypassDebrid = _shihabBypassDebridCheck != null && _shihabBypassDebridCheck.Checked;
             MehediConfiguredItem.MehediMaxConnections = _shihabConfig.ShihabDefaultMaxConnections;
 
             if (!mehediStartNow)
@@ -2872,7 +2979,9 @@ namespace ShihabMehediIDM
             _shihabEtaVal.Text = (mehediActive && _shihabItem.MehediEtaSeconds > 0)
                 ? ShihabFormatHelpers.FormatMehediTimeLeft(_shihabItem.MehediEtaSeconds)
                 : "-";
-            _mehediResumeVal.Text = _shihabItem.ShihabResumeSupported ? "Yes" : "No";
+            string shihabGeoInfo = ShihabGeoIpLookup.FormatCountryBadgeText(_shihabItem.ShihabServerCountryCode, _shihabItem.ShihabServerIp);
+            _mehediResumeVal.Text = (_shihabItem.ShihabResumeSupported ? "Yes" : "No") +
+                (!string.IsNullOrEmpty(shihabGeoInfo) ? ("   •   Server: " + shihabGeoInfo) : "");
             _mehediResumeVal.ForeColor = _shihabItem.ShihabResumeSupported
                 ? ShihabThemePalette.GetMehediAccentGreen()
                 : ShihabThemePalette.GetShihabAccentAmber();
@@ -3047,7 +3156,7 @@ namespace ShihabMehediIDM
         public ShihabFilePropertiesForm(ShihabDownloadItem shihabItem, bool mehediDark)
         {
             Text = "File Properties — " + shihabItem.ShihabFileName;
-            Size = new Size(600, 395);
+            Size = new Size(620, 485);
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
             MinimizeBox = false;
@@ -3059,41 +3168,124 @@ namespace ShihabMehediIDM
             ShihabThemePalette.ApplyMehediNativeDarkFrame(this, mehediDark);
 
             Label mehediL1 = new Label { Text = "Address (URL):", Location = new Point(16, 18), AutoSize = true };
-            TextBox shihabUrlBox = new TextBox { Location = new Point(125, 15), Width = 440, Text = shihabItem.MehediUrl, BackColor = ShihabThemePalette.GetShihabSurfaceBg(mehediDark), ForeColor = ForeColor };
+            TextBox shihabUrlBox = new TextBox { Location = new Point(135, 15), Width = 450, Text = shihabItem.MehediUrl, BackColor = ShihabThemePalette.GetShihabSurfaceBg(mehediDark), ForeColor = ForeColor };
 
-            Label mehediL2 = new Label { Text = "Referer:", Location = new Point(16, 52), AutoSize = true };
-            TextBox shihabRefBox = new TextBox { Location = new Point(125, 49), Width = 440, Text = shihabItem.MehediReferer ?? "", BackColor = ShihabThemePalette.GetShihabSurfaceBg(mehediDark), ForeColor = ForeColor };
+            Label mehediL2 = new Label { Text = "Referer:", Location = new Point(16, 50), AutoSize = true };
+            TextBox shihabRefBox = new TextBox { Location = new Point(135, 47), Width = 450, Text = shihabItem.MehediReferer ?? "", BackColor = ShihabThemePalette.GetShihabSurfaceBg(mehediDark), ForeColor = ForeColor };
 
-            Label mehediL3 = new Label { Text = "Save To:", Location = new Point(16, 86), AutoSize = true };
-            TextBox shihabSaveBox = new TextBox { Location = new Point(125, 83), Width = 440, ReadOnly = true, Text = shihabItem.GetShihabFullTargetPath(), BackColor = ShihabThemePalette.GetShihabSurfaceBg(mehediDark), ForeColor = ForeColor };
+            Label mehediL3 = new Label { Text = "Save To:", Location = new Point(16, 82), AutoSize = true };
+            TextBox shihabSaveBox = new TextBox { Location = new Point(135, 79), Width = 450, ReadOnly = true, Text = shihabItem.GetShihabFullTargetPath(), BackColor = ShihabThemePalette.GetShihabSurfaceBg(mehediDark), ForeColor = ForeColor };
 
-            Label mehediL4 = new Label { Text = "Size / Status:", Location = new Point(16, 120), AutoSize = true };
+            string shihabGeoBadge = ShihabGeoIpLookup.FormatCountryBadgeText(shihabItem.ShihabServerCountryCode, shihabItem.ShihabServerIp);
+            Label mehediL4 = new Label { Text = "Size / Server:", Location = new Point(16, 114), AutoSize = true };
             Label shihabSizeInfo = new Label
             {
-                Location = new Point(125, 120),
+                Location = new Point(135, 114),
                 AutoSize = true,
-                Text = string.Format("{0}  |  Downloaded: {1}  |  Status: {2}  |  Resume: {3}",
+                Text = string.Format("{0}  |  Downloaded: {1}  |  Resume: {2}{3}",
                     ShihabFormatHelpers.FormatMehediBytes(shihabItem.ShihabTotalBytes),
                     ShihabFormatHelpers.FormatMehediBytes(shihabItem.MehediDownloadedBytes),
-                    shihabItem.ShihabStatusText,
-                    shihabItem.ShihabResumeSupported ? "Yes" : "No")
+                    shihabItem.ShihabResumeSupported ? "Yes" : "No",
+                    !string.IsNullOrEmpty(shihabGeoBadge) ? ("  |  Server: " + shihabGeoBadge) : "")
             };
 
-            Label mehediL5 = new Label { Text = "SHA-256:", Location = new Point(16, 150), AutoSize = true };
-            TextBox shihabHashBox = new TextBox { Location = new Point(125, 147), Width = 440, ReadOnly = true, Text = string.IsNullOrEmpty(shihabItem.MehediSha256Hex) ? "(computed on completion)" : shihabItem.MehediSha256Hex, BackColor = ShihabThemePalette.GetShihabSurfaceBg(mehediDark), ForeColor = ForeColor };
+            Label mehediL5 = new Label { Text = "SHA-256 / Status:", Location = new Point(16, 144), AutoSize = true };
+            string shihabHashDisplay = !string.IsNullOrEmpty(shihabItem.MehediSha256Hex)
+                ? (shihabItem.MehediSha256Hex + (!string.IsNullOrEmpty(shihabItem.ShihabChecksumStatus) ? (" [" + shihabItem.ShihabChecksumStatus + "]") : ""))
+                : "(computed on completion)";
+            TextBox shihabHashBox = new TextBox { Location = new Point(135, 141), Width = 450, ReadOnly = true, Text = shihabHashDisplay, BackColor = ShihabThemePalette.GetShihabSurfaceBg(mehediDark), ForeColor = ForeColor };
 
-            Label mehediL6 = new Label { Text = "Description:", Location = new Point(16, 184), AutoSize = true };
-            TextBox shihabDescBox = new TextBox { Location = new Point(125, 181), Width = 440, Text = shihabItem.ShihabDescription ?? "", BackColor = ShihabThemePalette.GetShihabSurfaceBg(mehediDark), ForeColor = ForeColor };
+            Label mehediL5B = new Label { Text = "Expected Hash:", Location = new Point(16, 176), AutoSize = true };
+            TextBox shihabExpectedBox = new TextBox { Location = new Point(135, 173), Width = 450, Text = shihabItem.ShihabExpectedChecksum ?? "", BackColor = ShihabThemePalette.GetShihabSurfaceBg(mehediDark), ForeColor = ForeColor };
 
-            Label mehediL7 = new Label { Text = "Login / Pass:", Location = new Point(16, 218), AutoSize = true };
-            TextBox shihabUserBox = new TextBox { Location = new Point(125, 215), Width = 200, Text = shihabItem.ShihabAuthUser ?? "", BackColor = ShihabThemePalette.GetShihabSurfaceBg(mehediDark), ForeColor = ForeColor };
-            TextBox mehediPassBox = new TextBox { Location = new Point(340, 215), Width = 225, UseSystemPasswordChar = true, Text = shihabItem.MehediAuthPassword ?? "", BackColor = ShihabThemePalette.GetShihabSurfaceBg(mehediDark), ForeColor = ForeColor };
+            Label mehediL5C = new Label { Text = "ETag Validator:", Location = new Point(16, 208), AutoSize = true };
+            TextBox shihabETagBox = new TextBox { Location = new Point(135, 205), Width = 450, ReadOnly = true, Text = string.IsNullOrEmpty(shihabItem.ShihabETag) ? "(none)" : (shihabItem.ShihabETag + " @ " + (shihabItem.ShihabETagHost ?? "")), BackColor = ShihabThemePalette.GetShihabSurfaceBg(mehediDark), ForeColor = ForeColor };
 
-            Label mehediL8 = new Label { Text = "Max Conns:", Location = new Point(16, 254), AutoSize = true };
-            NumericUpDown shihabConnNum = new NumericUpDown { Location = new Point(125, 251), Width = 80, Minimum = 1, Maximum = 32, Value = Math.Max(1, Math.Min(32, shihabItem.MehediMaxConnections)) };
+            Label mehediL6 = new Label { Text = "Description:", Location = new Point(16, 240), AutoSize = true };
+            TextBox shihabDescBox = new TextBox { Location = new Point(135, 237), Width = 450, Text = shihabItem.ShihabDescription ?? "", BackColor = ShihabThemePalette.GetShihabSurfaceBg(mehediDark), ForeColor = ForeColor };
+
+            Label mehediL7 = new Label { Text = "Login / Pass:", Location = new Point(16, 272), AutoSize = true };
+            TextBox shihabUserBox = new TextBox { Location = new Point(135, 269), Width = 200, Text = shihabItem.ShihabAuthUser ?? "", BackColor = ShihabThemePalette.GetShihabSurfaceBg(mehediDark), ForeColor = ForeColor };
+            TextBox mehediPassBox = new TextBox { Location = new Point(350, 269), Width = 235, UseSystemPasswordChar = true, Text = shihabItem.MehediAuthPassword ?? "", BackColor = ShihabThemePalette.GetShihabSurfaceBg(mehediDark), ForeColor = ForeColor };
+
+            Label mehediL8 = new Label { Text = "Max Conns (1-128):", Location = new Point(16, 308), AutoSize = true };
+            NumericUpDown shihabConnNum = new NumericUpDown { Location = new Point(135, 305), Width = 80, Minimum = 1, Maximum = 128, Value = Math.Max(1, Math.Min(128, shihabItem.MehediMaxConnections)) };
+
+            CheckBox shihabAutoExtChk = new CheckBox
+            {
+                Text = "Auto-extract archive",
+                Location = new Point(235, 307),
+                AutoSize = true,
+                Checked = shihabItem.ShihabAutoExtract
+            };
+
+            CheckBox shihabBypassDebridChk = new CheckBox
+            {
+                Text = "Bypass Debrid",
+                Location = new Point(415, 307),
+                AutoSize = true,
+                Checked = shihabItem.ShihabBypassDebrid
+            };
+
+            Label mehediL9 = new Label { Text = "Archive Pass:", Location = new Point(16, 344), AutoSize = true };
+            TextBox shihabArchPassBox = new TextBox { Location = new Point(135, 341), Width = 220, UseSystemPasswordChar = true, Text = shihabItem.ShihabArchivePassword ?? "", BackColor = ShihabThemePalette.GetShihabSurfaceBg(mehediDark), ForeColor = ForeColor };
+            CheckBox shihabPrivateChk = new CheckBox { Text = "Private / Incognito", Location = new Point(375, 343), AutoSize = true, Checked = shihabItem.ShihabIsPrivateIncognito };
+
+            Button shihabVerifyNowBtn = ShihabThemePalette.CreateMehediStyledButton("Verify Hash Now", ShihabThemePalette.GetShihabSurfaceBg(mehediDark), ForeColor, 135);
+            shihabVerifyNowBtn.Location = new Point(16, 390);
+            shihabVerifyNowBtn.Click += delegate
+            {
+                string fullFile = shihabItem.GetShihabFullTargetPath();
+                if (!File.Exists(fullFile))
+                {
+                    MessageBox.Show(this, "Target file does not exist on disk yet:\r\n" + fullFile, "Verify Checksum", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+                string spec = shihabExpectedBox.Text.Trim();
+                if (string.IsNullOrEmpty(spec))
+                {
+                    string sha256 = ShihabChecksumVerifier.ComputeFileChecksumHex(fullFile, "SHA-256");
+                    shihabItem.MehediSha256Hex = sha256;
+                    shihabHashBox.Text = sha256;
+                    MessageBox.Show(this, "Computed SHA-256:\r\n" + sha256, "Checksum Computed", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                else
+                {
+                    string algo;
+                    string comp;
+                    string err;
+                    bool ok = ShihabChecksumVerifier.VerifyExpectedChecksum(fullFile, spec, out algo, out comp, out err);
+                    shihabItem.ShihabComputedChecksum = algo + ":" + comp;
+                    shihabItem.ShihabChecksumStatus = ok ? ("Verified (" + algo + ")") : ("Mismatch (" + algo + ")");
+                    shihabHashBox.Text = comp + " [" + shihabItem.ShihabChecksumStatus + "]";
+                    MessageBox.Show(this, ok ? ("Checksum VERIFIED (" + algo + "):\r\n" + comp) : err, "Checksum Verification", MessageBoxButtons.OK, ok ? MessageBoxIcon.Information : MessageBoxIcon.Error);
+                }
+            };
+
+            Button shihabExtractNowBtn = ShihabThemePalette.CreateMehediStyledButton("Extract Archive", ShihabThemePalette.GetShihabSurfaceBg(mehediDark), ForeColor, 130);
+            shihabExtractNowBtn.Location = new Point(160, 390);
+            shihabExtractNowBtn.Click += delegate
+            {
+                string fullFile = shihabItem.GetShihabFullTargetPath();
+                if (!File.Exists(fullFile) || !ShihabSafeArchiveExtractor.IsSupportedArchiveFile(fullFile))
+                {
+                    MessageBox.Show(this, "Target file is not an existing supported archive (.zip, .tar, .tar.gz, .tgz, .gz, .7z, .rar).", "Extract Archive", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+                string destDir;
+                string err;
+                if (ShihabSafeArchiveExtractor.ExtractArchiveSafely(fullFile, "Smart", false, shihabArchPassBox.Text, out destDir, out err))
+                {
+                    MessageBox.Show(this, "Archive extracted safely to:\r\n" + destDir, "Extract Archive", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                else
+                {
+                    MessageBox.Show(this, "Archive extraction failed:\r\n" + err, "Extract Archive", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+            };
 
             Button shihabSaveBtn = ShihabThemePalette.CreateMehediStyledButton("Save Changes", ShihabThemePalette.GetShihabAccentBlue(), Color.White, 130);
-            shihabSaveBtn.Location = new Point(315, 305);
+            shihabSaveBtn.Location = new Point(335, 390);
             shihabSaveBtn.Click += delegate
             {
                 if (!string.IsNullOrWhiteSpace(shihabUrlBox.Text))
@@ -3101,24 +3293,31 @@ namespace ShihabMehediIDM
                     shihabItem.MehediUrl = shihabUrlBox.Text.Trim();
                 }
                 shihabItem.MehediReferer = shihabRefBox.Text.Trim();
+                shihabItem.ShihabExpectedChecksum = shihabExpectedBox.Text.Trim();
                 shihabItem.ShihabDescription = shihabDescBox.Text.Trim();
                 shihabItem.ShihabAuthUser = shihabUserBox.Text.Trim();
                 shihabItem.MehediAuthPassword = mehediPassBox.Text;
                 shihabItem.MehediMaxConnections = (int)shihabConnNum.Value;
+                shihabItem.ShihabAutoExtract = shihabAutoExtChk.Checked;
+                shihabItem.ShihabBypassDebrid = shihabBypassDebridChk.Checked;
+                shihabItem.ShihabArchivePassword = shihabArchPassBox.Text;
+                shihabItem.ShihabIsPrivateIncognito = shihabPrivateChk.Checked;
                 DialogResult = DialogResult.OK;
                 Close();
             };
 
             Button mehediCancelBtn = ShihabThemePalette.CreateMehediStyledButton("Close", ShihabThemePalette.GetShihabSurfaceBg(mehediDark), ForeColor, 110);
-            mehediCancelBtn.Location = new Point(455, 305);
+            mehediCancelBtn.Location = new Point(475, 390);
             mehediCancelBtn.Click += delegate { Close(); };
 
             Controls.AddRange(new Control[]
             {
                 mehediL1, shihabUrlBox, mehediL2, shihabRefBox, mehediL3, shihabSaveBox,
-                mehediL4, shihabSizeInfo, mehediL5, shihabHashBox, mehediL6, shihabDescBox,
-                mehediL7, shihabUserBox, mehediPassBox, mehediL8, shihabConnNum,
-                shihabSaveBtn, mehediCancelBtn
+                mehediL4, shihabSizeInfo, mehediL5, shihabHashBox, mehediL5B, shihabExpectedBox,
+                mehediL5C, shihabETagBox, mehediL6, shihabDescBox,
+                mehediL7, shihabUserBox, mehediPassBox, mehediL8, shihabConnNum, shihabAutoExtChk,
+                shihabBypassDebridChk, mehediL9, shihabArchPassBox, shihabPrivateChk,
+                shihabVerifyNowBtn, shihabExtractNowBtn, shihabSaveBtn, mehediCancelBtn
             });
         }
     }

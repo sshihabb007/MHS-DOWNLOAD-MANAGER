@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Net;
+using System.Runtime.InteropServices;
 using System.Runtime.Serialization;
 using System.Runtime.Serialization.Json;
 using System.Security.Cryptography;
@@ -22,6 +24,10 @@ namespace ShihabMehediIDM
         public bool MehediAcceptsRanges { get; set; }
         public string ShihabContentType { get; set; }
         public string MehediLastModifiedHeader { get; set; }
+        public string ShihabETagHeader { get; set; }
+        public string ShihabDigestSpec { get; set; }
+        public string ShihabServerIp { get; set; }
+        public string ShihabServerCountryCode { get; set; }
         public bool ShihabIsHtmlPage { get; set; }
         public bool MehediIsHlsPlaylist { get; set; }
         public string ShihabErrorMessage { get; set; }
@@ -29,19 +35,28 @@ namespace ShihabMehediIDM
 
     public class MehediDynamicSegmentEngine
     {
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        private static extern bool MoveFileExW(string lpExistingFileName, string lpNewFileName, int dwFlags);
+        private const int MOVEFILE_REPLACE_EXISTING = 0x1;
+        private const int MOVEFILE_WRITE_THROUGH = 0x8;
+
         private readonly ShihabStateStore _shihabStore;
         private readonly MehediAppConfiguration _mehediConfig;
         private readonly List<ShihabDownloadItem> _shihabDownloads;
         private readonly Dictionary<string, CancellationTokenSource> _mehediActiveCts;
+        private readonly Dictionary<string, int> _adaptiveHostConcurrencyCaps;
+        private readonly Dictionary<string, DateTime> _hostRetryCooldownUntilUtc;
         private readonly object _shihabEngineLock = new object();
         private readonly object _mehediRateLock = new object();
-        private long _shihabGlobalWindowStartMs = 0;
-        private long _mehediGlobalBytesInWindow = 0;
+        private double _globalTokenBucketBytes = 0.0;
+        private long _globalLastBucketTickMs = 0L;
+        private readonly Stopwatch _globalRateStopwatch = Stopwatch.StartNew();
 
         public event Action<ShihabDownloadItem> OnShihabItemUpdated;
         public event Action<ShihabDownloadItem> OnMehediItemCompleted;
         public event Action<ShihabDownloadItem> OnShihabItemFailed;
         public event Action<string> OnShihabEngineLog;
+        public event Action<MehediQueueConfig> OnQueueFinishedWithActions;
 
         public MehediDynamicSegmentEngine(
             ShihabStateStore shihabStore,
@@ -52,6 +67,10 @@ namespace ShihabMehediIDM
             _mehediConfig = mehediConfig;
             _shihabDownloads = shihabDownloads;
             _mehediActiveCts = new Dictionary<string, CancellationTokenSource>();
+            _adaptiveHostConcurrencyCaps = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            _hostRetryCooldownUntilUtc = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
+
+            ShihabLocalNetworkRelay.OnVpnKillSwitchTripped += HandleVpnKillSwitchTripped;
 
             ServicePointManager.DefaultConnectionLimit = 256;
             ServicePointManager.Expect100Continue = false;
@@ -62,6 +81,138 @@ namespace ShihabMehediIDM
             catch
             {
                 ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12 | SecurityProtocolType.Tls11 | SecurityProtocolType.Tls;
+            }
+        }
+
+        private void HandleVpnKillSwitchTripped(string reason)
+        {
+            EmitShihabLog("[KillSwitch] " + reason + " — aborting active transfers immediately.");
+            List<ShihabDownloadItem> snap = GetShihabDownloadsSnapshot();
+            for (int i = 0; i < snap.Count; i++)
+            {
+                if (IsMehediItemActive(snap[i].ShihabId))
+                {
+                    PauseShihabDownload(snap[i]);
+                    snap[i].SetMehediStatusEnum(ShihabDownloadStatus.ShihabPaused, "Paused (VPN Kill-Switch)");
+                    NotifyShihabItemChanged(snap[i]);
+                }
+            }
+        }
+
+        public void StartStartupQueues()
+        {
+            if (_mehediConfig == null || _mehediConfig.MehediQueues == null) return;
+            for (int i = 0; i < _mehediConfig.MehediQueues.Count; i++)
+            {
+                MehediQueueConfig q = _mehediConfig.MehediQueues[i];
+                if (q != null && q.ShihabStartOnStartup)
+                {
+                    q.MehediIsRunningNow = true;
+                    PumpRunningMehediQueue(q);
+                }
+            }
+        }
+
+        private int GetAdaptiveEffectiveConnections(string hostName, ShihabDownloadItem item)
+        {
+            int rawRequested = item != null && item.MehediMaxConnections > 0
+                ? item.MehediMaxConnections
+                : _mehediConfig.ShihabDefaultMaxConnections;
+            if (item != null && item.ShihabTransientMaxChunks > 0)
+            {
+                rawRequested = Math.Min(rawRequested, item.ShihabTransientMaxChunks);
+            }
+            int effective = _mehediConfig.GetEffectiveMaxConnectionsForHost(hostName, rawRequested);
+            if (!string.IsNullOrWhiteSpace(hostName))
+            {
+                lock (_shihabEngineLock)
+                {
+                    int adaptiveCap;
+                    if (_adaptiveHostConcurrencyCaps.TryGetValue(hostName, out adaptiveCap) && adaptiveCap > 0)
+                    {
+                        effective = Math.Min(effective, adaptiveCap);
+                    }
+                }
+            }
+            return Math.Max(1, effective);
+        }
+
+        private void RecordHostThrottleSignal(string hostName, HttpWebResponse resp, int currentDesired)
+        {
+            if (string.IsNullOrWhiteSpace(hostName)) return;
+            int retrySec = 2;
+            if (resp != null)
+            {
+                string ra = resp.Headers["Retry-After"];
+                int parsedSec;
+                DateTime parsedDt;
+                if (!string.IsNullOrWhiteSpace(ra))
+                {
+                    if (int.TryParse(ra.Trim(), out parsedSec) && parsedSec > 0)
+                    {
+                        retrySec = Math.Min(120, parsedSec);
+                    }
+                    else if (DateTime.TryParse(ra.Trim(), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out parsedDt))
+                    {
+                        double diff = (parsedDt - DateTime.UtcNow).TotalSeconds;
+                        if (diff > 0) retrySec = (int)Math.Min(120.0, diff);
+                    }
+                }
+            }
+            lock (_shihabEngineLock)
+            {
+                int prevCap;
+                if (!_adaptiveHostConcurrencyCaps.TryGetValue(hostName, out prevCap) || prevCap <= 0)
+                {
+                    prevCap = Math.Max(1, currentDesired);
+                }
+                int nextCap = Math.Max(1, prevCap / 2);
+                _adaptiveHostConcurrencyCaps[hostName] = nextCap;
+                _hostRetryCooldownUntilUtc[hostName] = DateTime.UtcNow.AddSeconds(retrySec);
+                EmitShihabLog(string.Format("[AdaptiveRate] Host {0} returned HTTP 429/503; capping concurrency -> {1} (cooldown {2}s)",
+                    hostName, nextCap, retrySec));
+            }
+        }
+
+        private void WaitForHostCooldownIfAny(string hostName, CancellationToken token)
+        {
+            if (string.IsNullOrWhiteSpace(hostName)) return;
+            DateTime untilUtc = DateTime.MinValue;
+            lock (_shihabEngineLock)
+            {
+                DateTime stored;
+                if (_hostRetryCooldownUntilUtc.TryGetValue(hostName, out stored))
+                {
+                    untilUtc = stored;
+                }
+            }
+            while (!token.IsCancellationRequested && DateTime.UtcNow < untilUtc)
+            {
+                Thread.Sleep(200);
+            }
+        }
+
+        private static bool TryAtomicMoveReplace(string sourcePath, string destPath)
+        {
+            try
+            {
+                string destDir = Path.GetDirectoryName(destPath);
+                if (!string.IsNullOrEmpty(destDir)) Directory.CreateDirectory(destDir);
+                if (MoveFileExW(sourcePath, destPath, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+                {
+                    return true;
+                }
+            }
+            catch { }
+            try
+            {
+                if (File.Exists(destPath)) File.Delete(destPath);
+                File.Move(sourcePath, destPath);
+                return true;
+            }
+            catch
+            {
+                return false;
             }
         }
 
@@ -270,6 +421,23 @@ namespace ShihabMehediIDM
             return string.Format("{0}{1}range={2}-{3}", mehediCleanUrl, shihabSep, shihabStart, mehediEnd);
         }
 
+        private static string GetEffectiveHttpUrl(ShihabDownloadItem item, string fallbackUrl)
+        {
+            if (item != null && !string.IsNullOrWhiteSpace(item.ShihabTransientUnlockedUrl))
+            {
+                return item.ShihabTransientUnlockedUrl;
+            }
+            return !string.IsNullOrWhiteSpace(fallbackUrl) ? fallbackUrl : (item != null ? item.MehediUrl : "");
+        }
+
+        private static bool IsSameHttpOrigin(Uri a, Uri b)
+        {
+            if (a == null || b == null) return false;
+            return string.Equals(a.Scheme, b.Scheme, StringComparison.OrdinalIgnoreCase) &&
+                   string.Equals(a.Host, b.Host, StringComparison.OrdinalIgnoreCase) &&
+                   a.Port == b.Port;
+        }
+
         private HttpWebRequest CreateShihabHttpRequest(
             string mehediUrl,
             string shihabMethod,
@@ -277,10 +445,26 @@ namespace ShihabMehediIDM
             long shihabRangeStart,
             long mehediRangeEnd)
         {
+            return CreateShihabHttpRequestCore(mehediUrl, shihabMethod, mehediContextItem, shihabRangeStart, mehediRangeEnd, true, false, null);
+        }
+
+        private HttpWebRequest CreateShihabHttpRequestCore(
+            string mehediUrl,
+            string shihabMethod,
+            ShihabDownloadItem mehediContextItem,
+            long shihabRangeStart,
+            long mehediRangeEnd,
+            bool allowAutoRedirect,
+            bool stripCrossOriginCredentials,
+            string ifRangeValidator)
+        {
             HttpWebRequest shihabReq = (HttpWebRequest)WebRequest.Create(mehediUrl);
             shihabReq.Method = shihabMethod;
-            shihabReq.AllowAutoRedirect = true;
-            shihabReq.MaximumAutomaticRedirections = 12;
+            shihabReq.AllowAutoRedirect = allowAutoRedirect;
+            if (allowAutoRedirect)
+            {
+                shihabReq.MaximumAutomaticRedirections = 12;
+            }
             shihabReq.Timeout = 25000;
             shihabReq.ReadWriteTimeout = 30000;
             shihabReq.KeepAlive = true;
@@ -323,37 +507,42 @@ namespace ShihabMehediIDM
             {
                 try { shihabReq.Headers["Origin"] = mehediContextItem.MehediOriginHeader; } catch { }
             }
-            if (!mehediIsDirectInnerTubeGv && mehediContextItem != null && !mehediContextItem.MehediOmitCookies && !string.IsNullOrWhiteSpace(mehediContextItem.ShihabCookies))
+            if (!stripCrossOriginCredentials &&
+                !mehediIsDirectInnerTubeGv &&
+                mehediContextItem != null &&
+                !mehediContextItem.MehediOmitCookies &&
+                !string.IsNullOrWhiteSpace(mehediContextItem.ShihabCookies))
             {
                 shihabReq.Headers[HttpRequestHeader.Cookie] = mehediContextItem.ShihabCookies;
             }
 
-            string shihabUser = mehediContextItem != null ? mehediContextItem.ShihabAuthUser : "";
-            string mehediPass = mehediContextItem != null ? mehediContextItem.MehediAuthPassword : "";
-            if (string.IsNullOrWhiteSpace(shihabUser))
+            if (!stripCrossOriginCredentials)
             {
-                ShihabSiteLoginCredential shihabSavedCred = _mehediConfig.FindShihabCredentialForUrl(mehediUrl);
-                if (shihabSavedCred != null)
+                string shihabUser = mehediContextItem != null ? mehediContextItem.ShihabAuthUser : "";
+                string mehediPass = mehediContextItem != null ? ShihabSecretsVault.UnprotectSecret(mehediContextItem.MehediAuthPassword) : "";
+                if (string.IsNullOrWhiteSpace(shihabUser))
                 {
-                    shihabUser = shihabSavedCred.MehediUserName;
-                    mehediPass = shihabSavedCred.ShihabPassword;
+                    ShihabSiteLoginCredential shihabSavedCred = _mehediConfig.FindShihabCredentialForUrl(mehediUrl);
+                    if (shihabSavedCred != null)
+                    {
+                        shihabUser = shihabSavedCred.MehediUserName;
+                        mehediPass = shihabSavedCred.ShihabPassword;
+                    }
                 }
-            }
-            if (!string.IsNullOrWhiteSpace(shihabUser))
-            {
-                string mehediBasic = Convert.ToBase64String(Encoding.UTF8.GetBytes(shihabUser + ":" + (mehediPass ?? "")));
-                shihabReq.Headers[HttpRequestHeader.Authorization] = "Basic " + mehediBasic;
+                if (!string.IsNullOrWhiteSpace(shihabUser))
+                {
+                    string mehediBasic = Convert.ToBase64String(Encoding.UTF8.GetBytes(shihabUser + ":" + (mehediPass ?? "")));
+                    shihabReq.Headers[HttpRequestHeader.Authorization] = "Basic " + mehediBasic;
+                }
             }
 
-            if (_mehediConfig.MehediUseHttpProxy && !string.IsNullOrWhiteSpace(_mehediConfig.ShihabProxyAddress))
+            try
             {
-                WebProxy shihabProxy = new WebProxy(_mehediConfig.ShihabProxyAddress.Trim(), _mehediConfig.MehediProxyPort);
-                if (!string.IsNullOrWhiteSpace(_mehediConfig.ShihabProxyUser))
-                {
-                    shihabProxy.Credentials = new NetworkCredential(_mehediConfig.ShihabProxyUser, _mehediConfig.MehediProxyPassword ?? "");
-                }
-                shihabReq.Proxy = shihabProxy;
+                shihabReq.Headers["Want-Repr-Digest"] = "sha-256=9, md5=3";
             }
+            catch { }
+
+            ShihabDnsAndNetworkManager.ApplyAdapterAndProxyPolicy(shihabReq, mehediUrl, _mehediConfig);
 
             if (shihabRangeStart >= 0)
             {
@@ -365,9 +554,116 @@ namespace ShihabMehediIDM
                 {
                     shihabReq.AddRange(shihabRangeStart);
                 }
+                if (!string.IsNullOrWhiteSpace(ifRangeValidator))
+                {
+                    try { shihabReq.Headers["If-Range"] = ifRangeValidator; } catch { }
+                }
+            }
+
+            if (!stripCrossOriginCredentials &&
+                mehediContextItem != null &&
+                !string.IsNullOrEmpty(mehediContextItem.ShihabPostBody) &&
+                shihabRangeStart <= 0 &&
+                shihabMethod == "GET")
+            {
+                shihabReq.Method = "POST";
+                shihabReq.ContentType = "application/x-www-form-urlencoded";
+                byte[] postBytes = Encoding.UTF8.GetBytes(mehediContextItem.ShihabPostBody);
+                shihabReq.ContentLength = postBytes.Length;
+                using (Stream reqStream = shihabReq.GetRequestStream())
+                {
+                    reqStream.Write(postBytes, 0, postBytes.Length);
+                }
             }
 
             return shihabReq;
+        }
+
+        private HttpWebResponse GetResponseWithSafeRedirects(
+            string initialUrl,
+            string httpMethod,
+            ShihabDownloadItem ctxItem,
+            long rangeStart,
+            long rangeEnd,
+            string ifRangeValidator,
+            CancellationToken cancelToken,
+            out HttpWebRequest finalActiveRequest)
+        {
+            finalActiveRequest = null;
+            Uri initialUri;
+            Uri.TryCreate(initialUrl, UriKind.Absolute, out initialUri);
+            string currentUrl = initialUrl;
+            string currentMethod = httpMethod;
+            bool stripCreds = false;
+
+            for (int hop = 0; hop <= 12; hop++)
+            {
+                Uri hopUri;
+                string hopHost = Uri.TryCreate(currentUrl, UriKind.Absolute, out hopUri) ? hopUri.Host : "";
+                WaitForHostCooldownIfAny(hopHost, cancelToken);
+                cancelToken.ThrowIfCancellationRequested();
+
+                HttpWebRequest req = CreateShihabHttpRequestCore(
+                    currentUrl,
+                    currentMethod,
+                    ctxItem,
+                    rangeStart,
+                    rangeEnd,
+                    false,
+                    stripCreds,
+                    ifRangeValidator);
+                finalActiveRequest = req;
+
+                HttpWebResponse resp = null;
+                try
+                {
+                    using (cancelToken.Register(delegate { try { req.Abort(); } catch { } }))
+                    {
+                        resp = (HttpWebResponse)req.GetResponse();
+                    }
+                }
+                catch (WebException wex)
+                {
+                    HttpWebResponse errResp = wex.Response as HttpWebResponse;
+                    if (errResp != null)
+                    {
+                        int errCode = (int)errResp.StatusCode;
+                        if (errCode == 429 || errCode == 503)
+                        {
+                            RecordHostThrottleSignal(hopHost, errResp, GetAdaptiveEffectiveConnections(hopHost, ctxItem));
+                        }
+                    }
+                    throw;
+                }
+
+                int code = (int)resp.StatusCode;
+                if (code == 301 || code == 302 || code == 303 || code == 307 || code == 308)
+                {
+                    string loc = resp.Headers["Location"];
+                    resp.Close();
+                    if (string.IsNullOrWhiteSpace(loc))
+                    {
+                        throw new IOException("Redirect response missing Location header.");
+                    }
+                    Uri nextUri;
+                    if (!Uri.TryCreate(hopUri, loc, out nextUri))
+                    {
+                        throw new IOException("Invalid redirect Location URI: " + loc);
+                    }
+                    if (!IsSameHttpOrigin(initialUri, nextUri))
+                    {
+                        stripCreds = true;
+                    }
+                    if (code == 303 && currentMethod == "POST")
+                    {
+                        currentMethod = "GET";
+                    }
+                    currentUrl = nextUri.AbsoluteUri;
+                    continue;
+                }
+                return resp;
+            }
+            throw new IOException("Too many HTTP redirects (> 12).");
         }
 
         public ShihabProbeMetadata ProbeMehediUrl(string shihabUrl, ShihabDownloadItem mehediContextItem)
@@ -376,6 +672,71 @@ namespace ShihabMehediIDM
             shihabMeta.ShihabFinalUrl = shihabUrl;
             shihabMeta.ShihabContentLength = -1;
             shihabMeta.MehediSuggestedFileName = ShihabFormatHelpers.ExtractMehediFileNameFromUrl(shihabUrl);
+
+            // 0. Google Docs / Sheets / Slides / Drive Direct Export & Download URL Resolution
+            string gdriveResolvedUrl, gdriveHintName;
+            if (ShihabDebridManager.TryResolveGoogleDriveOrDocsUrl(shihabUrl, _mehediConfig, out gdriveResolvedUrl, out gdriveHintName) &&
+                !string.IsNullOrWhiteSpace(gdriveResolvedUrl))
+            {
+                shihabUrl = gdriveResolvedUrl;
+                shihabMeta.ShihabFinalUrl = gdriveResolvedUrl;
+                if (!string.IsNullOrWhiteSpace(gdriveHintName))
+                {
+                    shihabMeta.MehediSuggestedFileName = ShihabFormatHelpers.SanitizeShihabFileName(gdriveHintName);
+                }
+            }
+
+            // 1. Automatic Debrid Link Unrestricting (Real-Debrid / AllDebrid / Premiumize)
+            // Keep unlocked CDN URL in transient memory so persisted downloads.json retains original source URL
+            bool bypassDebrid = mehediContextItem != null && mehediContextItem.ShihabBypassDebrid;
+            if (!bypassDebrid)
+            {
+                string linkPwd = mehediContextItem != null ? (mehediContextItem.ShihabArchivePassword ?? "") : "";
+                string unrestrictedUrl, debridFileName, debridProvider;
+                int debridMaxChunks;
+                if (ShihabDebridManager.TryUnrestrictUrl(shihabUrl, linkPwd, _mehediConfig, out unrestrictedUrl, out debridFileName, out debridProvider, out debridMaxChunks) &&
+                    !string.IsNullOrWhiteSpace(unrestrictedUrl))
+                {
+                    EmitShihabLog(string.Format("[Debrid] Unlocked via {0} (maxChunks={1}): {2}", debridProvider, debridMaxChunks, debridFileName));
+                    shihabUrl = unrestrictedUrl;
+                    shihabMeta.ShihabFinalUrl = unrestrictedUrl;
+                    if (!string.IsNullOrWhiteSpace(debridFileName))
+                    {
+                        shihabMeta.MehediSuggestedFileName = ShihabFormatHelpers.SanitizeShihabFileName(debridFileName);
+                    }
+                    if (mehediContextItem != null)
+                    {
+                        mehediContextItem.ShihabTransientUnlockedUrl = unrestrictedUrl;
+                        mehediContextItem.ShihabTransientMaxChunks = debridMaxChunks;
+                    }
+                }
+            }
+
+            // 2. Resolve Server IP & Country Code via Custom DNS / DoH + Offline GeoIP
+            Uri probeUri;
+            if (Uri.TryCreate(shihabUrl, UriKind.Absolute, out probeUri) && !string.IsNullOrEmpty(probeUri.Host))
+            {
+                string countryCode;
+                IPAddress ip = ShihabDnsAndNetworkManager.ResolveHostIpWithDohAndGeo(probeUri.Host, _mehediConfig, out countryCode);
+                if (ip != null)
+                {
+                    shihabMeta.ShihabServerIp = ip.ToString();
+                    shihabMeta.ShihabServerCountryCode = countryCode;
+                    if (mehediContextItem != null)
+                    {
+                        mehediContextItem.ShihabServerIp = shihabMeta.ShihabServerIp;
+                        mehediContextItem.ShihabServerCountryCode = shihabMeta.ShihabServerCountryCode;
+                    }
+                }
+
+                // 3. FTP / FTPS Probe (ftp://, ftps://, ftpes://)
+                if (probeUri.Scheme.Equals("ftp", StringComparison.OrdinalIgnoreCase) ||
+                    probeUri.Scheme.Equals("ftps", StringComparison.OrdinalIgnoreCase) ||
+                    probeUri.Scheme.Equals("ftpes", StringComparison.OrdinalIgnoreCase))
+                {
+                    return ProbeMehediFtpUrl(shihabUrl, mehediContextItem, shihabMeta);
+                }
+            }
 
             string mehediWatchVidId;
             if (MehediYouTubeInnerTubeResolver.TryExtractShihabYouTubeWatchVideoId(shihabUrl, out mehediWatchVidId))
@@ -452,8 +813,8 @@ namespace ShihabMehediIDM
                 try
                 {
                     string mehediMiniSliceUrl = AppendShihabQueryRangeParam(shihabCleanGv, 0, 511);
-                    HttpWebRequest shihabGvProbe = CreateShihabHttpRequest(mehediMiniSliceUrl, "GET", mehediContextItem, -1, -1);
-                    using (HttpWebResponse mehediGvResp = (HttpWebResponse)shihabGvProbe.GetResponse())
+                    HttpWebRequest shihabGvProbe;
+                    using (HttpWebResponse mehediGvResp = GetResponseWithSafeRedirects(mehediMiniSliceUrl, "GET", mehediContextItem, -1, -1, null, CancellationToken.None, out shihabGvProbe))
                     {
                         shihabMeta.ShihabContentType = mehediGvResp.ContentType ?? "";
                         if (shihabMeta.ShihabContentLength <= 0 && mehediGvResp.ContentLength > 512)
@@ -474,10 +835,16 @@ namespace ShihabMehediIDM
 
             try
             {
-                HttpWebRequest mehediRangeProbe = CreateShihabHttpRequest(shihabUrl, "GET", mehediContextItem, 0, 0);
-                using (HttpWebResponse shihabResp = (HttpWebResponse)mehediRangeProbe.GetResponse())
+                HttpWebRequest mehediRangeProbe;
+                using (HttpWebResponse shihabResp = GetResponseWithSafeRedirects(shihabUrl, "GET", mehediContextItem, 0, 0, null, CancellationToken.None, out mehediRangeProbe))
                 {
                     PopulateShihabProbeFromResponse(shihabMeta, shihabResp);
+                }
+                if (shihabMeta.ShihabIsHtmlPage &&
+                    (shihabUrl.IndexOf("drive.google.com", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                     shihabUrl.IndexOf("drive.usercontent.google.com", StringComparison.OrdinalIgnoreCase) >= 0))
+                {
+                    TryFollowGoogleDriveConfirmationPage(shihabUrl, mehediContextItem, shihabMeta);
                 }
                 shihabMeta.MehediSuccess = true;
                 return shihabMeta;
@@ -488,10 +855,16 @@ namespace ShihabMehediIDM
 
             try
             {
-                HttpWebRequest shihabHeadReq = CreateShihabHttpRequest(shihabUrl, "HEAD", mehediContextItem, -1, -1);
-                using (HttpWebResponse mehediResp = (HttpWebResponse)shihabHeadReq.GetResponse())
+                HttpWebRequest shihabHeadReq;
+                using (HttpWebResponse mehediResp = GetResponseWithSafeRedirects(shihabUrl, "HEAD", mehediContextItem, -1, -1, null, CancellationToken.None, out shihabHeadReq))
                 {
                     PopulateShihabProbeFromResponse(shihabMeta, mehediResp);
+                }
+                if (shihabMeta.ShihabIsHtmlPage &&
+                    (shihabUrl.IndexOf("drive.google.com", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                     shihabUrl.IndexOf("drive.usercontent.google.com", StringComparison.OrdinalIgnoreCase) >= 0))
+                {
+                    TryFollowGoogleDriveConfirmationPage(shihabUrl, mehediContextItem, shihabMeta);
                 }
                 shihabMeta.MehediSuccess = true;
                 return shihabMeta;
@@ -504,6 +877,139 @@ namespace ShihabMehediIDM
             }
         }
 
+        private void TryFollowGoogleDriveConfirmationPage(string gdriveUrl, ShihabDownloadItem ctxItem, ShihabProbeMetadata meta)
+        {
+            try
+            {
+                HttpWebRequest htmlReq;
+                string html = "";
+                string respBaseUrl = gdriveUrl;
+                using (HttpWebResponse htmlResp = GetResponseWithSafeRedirects(gdriveUrl, "GET", ctxItem, -1, -1, null, CancellationToken.None, out htmlReq))
+                using (Stream rs = htmlResp.GetResponseStream())
+                {
+                    if (htmlResp.ResponseUri != null) respBaseUrl = htmlResp.ResponseUri.AbsoluteUri;
+                    if (rs != null)
+                    {
+                        byte[] cap = new byte[131072];
+                        int total = 0;
+                        while (total < cap.Length)
+                        {
+                            int r = rs.Read(cap, total, cap.Length - total);
+                            if (r <= 0) break;
+                            total += r;
+                        }
+                        html = Encoding.UTF8.GetString(cap, 0, total);
+                    }
+                }
+                string confirmedUrl;
+                Uri baseUriObj;
+                if (!Uri.TryCreate(respBaseUrl, UriKind.Absolute, out baseUriObj))
+                {
+                    baseUriObj = new Uri("https://drive.usercontent.google.com/");
+                }
+                if (ShihabDebridManager.TryParseGoogleDriveConfirmationHtml(html, baseUriObj, out confirmedUrl) &&
+                    !string.IsNullOrWhiteSpace(confirmedUrl))
+                {
+                    string confirmedName = "";
+                    Match titleMatch = Regex.Match(html, @"<a[^>]+href=""[^""]*""[^>]*>([^<]{2,180})</a>", RegexOptions.IgnoreCase);
+                    if (titleMatch.Success)
+                    {
+                        confirmedName = WebUtility.HtmlDecode(titleMatch.Groups[1].Value.Trim());
+                    }
+                    EmitShihabLog("[GoogleDrive] Bypassed virus-scan confirmation interstitial -> " + (!string.IsNullOrEmpty(confirmedName) ? confirmedName : confirmedUrl));
+                    if (ctxItem != null) ctxItem.ShihabTransientUnlockedUrl = confirmedUrl;
+                    if (!string.IsNullOrWhiteSpace(confirmedName))
+                    {
+                        meta.MehediSuggestedFileName = ShihabFormatHelpers.SanitizeShihabFileName(confirmedName);
+                    }
+                    HttpWebRequest confirmedProbe;
+                    using (HttpWebResponse cResp = GetResponseWithSafeRedirects(confirmedUrl, "GET", ctxItem, 0, 0, null, CancellationToken.None, out confirmedProbe))
+                    {
+                        PopulateShihabProbeFromResponse(meta, cResp);
+                        if (!string.IsNullOrWhiteSpace(confirmedName) &&
+                            (string.IsNullOrWhiteSpace(meta.MehediSuggestedFileName) || meta.MehediSuggestedFileName == "uc" || meta.MehediSuggestedFileName == "download"))
+                        {
+                            meta.MehediSuggestedFileName = ShihabFormatHelpers.SanitizeShihabFileName(confirmedName);
+                        }
+                    }
+                }
+            }
+            catch { }
+        }
+
+        private ShihabProbeMetadata ProbeMehediFtpUrl(string ftpUrl, ShihabDownloadItem ctxItem, ShihabProbeMetadata meta)
+        {
+            try
+            {
+                string normUrl = ftpUrl.Replace("ftpes://", "ftp://").Replace("ftps://", "ftp://");
+                bool useTls = _mehediConfig.ShihabFtpEnableTls ||
+                              ftpUrl.StartsWith("ftps://", StringComparison.OrdinalIgnoreCase) ||
+                              ftpUrl.StartsWith("ftpes://", StringComparison.OrdinalIgnoreCase);
+
+                FtpWebRequest req = (FtpWebRequest)WebRequest.Create(normUrl);
+                req.Method = WebRequestMethods.Ftp.GetFileSize;
+                req.UseBinary = true;
+                req.UsePassive = _mehediConfig.ShihabFtpUsePassiveMode;
+                req.EnableSsl = useTls;
+                req.Timeout = 15000;
+                ApplyFtpCredentials(req, normUrl, ctxItem);
+                using (FtpWebResponse resp = (FtpWebResponse)req.GetResponse())
+                {
+                    if (resp.ContentLength > 0)
+                    {
+                        meta.ShihabContentLength = resp.ContentLength;
+                        meta.MehediAcceptsRanges = true;
+                    }
+                }
+
+                try
+                {
+                    FtpWebRequest mdtmReq = (FtpWebRequest)WebRequest.Create(normUrl);
+                    mdtmReq.Method = WebRequestMethods.Ftp.GetDateTimestamp;
+                    mdtmReq.UseBinary = true;
+                    mdtmReq.UsePassive = _mehediConfig.ShihabFtpUsePassiveMode;
+                    mdtmReq.EnableSsl = useTls;
+                    mdtmReq.Timeout = 10000;
+                    ApplyFtpCredentials(mdtmReq, normUrl, ctxItem);
+                    using (FtpWebResponse mdtmResp = (FtpWebResponse)mdtmReq.GetResponse())
+                    {
+                        if (mdtmResp.LastModified != DateTime.MinValue)
+                        {
+                            meta.MehediLastModifiedHeader = mdtmResp.LastModified.ToUniversalTime().ToString("R", CultureInfo.InvariantCulture);
+                        }
+                    }
+                }
+                catch { }
+
+                meta.MehediSuccess = true;
+            }
+            catch (Exception ex)
+            {
+                meta.MehediSuccess = false;
+                meta.ShihabErrorMessage = ex.Message;
+            }
+            return meta;
+        }
+
+        private void ApplyFtpCredentials(FtpWebRequest req, string url, ShihabDownloadItem ctxItem)
+        {
+            string user = ctxItem != null ? ctxItem.ShihabAuthUser : "";
+            string pass = ctxItem != null ? ShihabSecretsVault.UnprotectSecret(ctxItem.MehediAuthPassword) : "";
+            if (string.IsNullOrWhiteSpace(user))
+            {
+                ShihabSiteLoginCredential saved = _mehediConfig.FindShihabCredentialForUrl(url);
+                if (saved != null)
+                {
+                    user = saved.MehediUserName;
+                    pass = saved.ShihabPassword;
+                }
+            }
+            if (!string.IsNullOrWhiteSpace(user))
+            {
+                req.Credentials = new NetworkCredential(user, pass ?? "");
+            }
+        }
+
         private static void PopulateShihabProbeFromResponse(ShihabProbeMetadata mehediMeta, HttpWebResponse shihabResp)
         {
             if (shihabResp.ResponseUri != null)
@@ -513,6 +1019,11 @@ namespace ShihabMehediIDM
             }
             mehediMeta.ShihabContentType = shihabResp.ContentType ?? "";
             mehediMeta.MehediLastModifiedHeader = shihabResp.Headers["Last-Modified"] ?? "";
+            mehediMeta.ShihabETagHeader = shihabResp.Headers["ETag"] ?? "";
+            mehediMeta.ShihabDigestSpec = ShihabChecksumVerifier.ExtractServerDigestSpec(
+                shihabResp.Headers,
+                mehediMeta.ShihabETagHeader,
+                (int)shihabResp.StatusCode);
 
             string shihabContentDisp = shihabResp.Headers["Content-Disposition"] ?? "";
             string mehediParsedName = ParseShihabContentDispositionName(shihabContentDisp);
@@ -619,6 +1130,27 @@ namespace ShihabMehediIDM
             });
         }
 
+        private sealed class SegmentWorkerTelemetry
+        {
+            public MehediSegmentChunk Chunk;
+            public CancellationTokenSource WorkerCts;
+            public long StartedMs;
+            public volatile bool FirstByteReceived;
+            public double SmoothedBps;
+            public long SlowSinceMs;
+            public volatile bool WasShedOrPreempted;
+        }
+
+        private void UpdateSleepStateForActiveDownloads()
+        {
+            bool anyActive;
+            lock (_shihabEngineLock)
+            {
+                anyActive = _mehediActiveCts.Count > 0;
+            }
+            ShihabOsAndDiskSafety.UpdateSystemSleepPrevention(anyActive, _mehediConfig.ShihabPreventSystemSleep);
+        }
+
         public void PauseShihabDownload(ShihabDownloadItem mehediItem)
         {
             if (mehediItem == null) return;
@@ -634,6 +1166,7 @@ namespace ShihabMehediIDM
             {
                 shihabCts.Cancel();
             }
+            UpdateSleepStateForActiveDownloads();
             if (mehediItem.GetShihabStatusEnum() != ShihabDownloadStatus.ShihabCompleted)
             {
                 mehediItem.ShihabCurrentSpeedBps = 0;
@@ -672,13 +1205,17 @@ namespace ShihabMehediIDM
                 {
                     Directory.Delete(mehediPartDir, true);
                 }
-                if (shihabDeleteCompletedDiskFile)
+                string shihabTarget = mehediItem.GetShihabFullTargetPath();
+                string sparsePart = !string.IsNullOrWhiteSpace(mehediItem.ShihabPartFilePath)
+                    ? mehediItem.ShihabPartFilePath
+                    : (shihabTarget + ".mhs.part");
+                if (File.Exists(sparsePart))
                 {
-                    string shihabTarget = mehediItem.GetShihabFullTargetPath();
-                    if (File.Exists(shihabTarget))
-                    {
-                        File.Delete(shihabTarget);
-                    }
+                    try { File.Delete(sparsePart); } catch { }
+                }
+                if (shihabDeleteCompletedDiskFile && File.Exists(shihabTarget))
+                {
+                    File.Delete(shihabTarget);
                 }
             }
             catch
@@ -691,11 +1228,111 @@ namespace ShihabMehediIDM
             return Path.Combine(_mehediConfig.MehediTemporaryDirectory, mehediItem.ShihabId);
         }
 
+        private void ExecuteMehediYtDlpJob(ShihabDownloadItem shihabItem, CancellationToken mehediToken)
+        {
+            shihabItem.SetMehediStatusEnum(ShihabDownloadStatus.ShihabDownloading, "Starting yt-dlp...");
+            NotifyShihabItemChanged(shihabItem);
+
+            long perTaskBps = (shihabItem.ShihabUseItemSpeedLimit && shihabItem.MehediItemSpeedLimitKb > 0)
+                ? (long)shihabItem.MehediItemSpeedLimitKb * 1024L
+                : 0L;
+            string outputPath;
+            string errMsg;
+            bool ok = ShihabMediaHelpersManager.ExecuteYtDlpDownload(
+                shihabItem,
+                _shihabStore.MehediBaseDirectory,
+                _mehediConfig,
+                perTaskBps,
+                delegate
+                {
+                    NotifyShihabItemChanged(shihabItem);
+                },
+                mehediToken,
+                out outputPath,
+                out errMsg);
+
+            if (mehediToken.IsCancellationRequested) return;
+            if (!ok)
+            {
+                throw new IOException(string.IsNullOrWhiteSpace(errMsg) ? "yt-dlp job failed." : errMsg);
+            }
+            if (!string.IsNullOrWhiteSpace(outputPath) && File.Exists(outputPath))
+            {
+                shihabItem.ShihabFileName = Path.GetFileName(outputPath);
+                shihabItem.MehediSaveDirectory = Path.GetDirectoryName(outputPath);
+                ComputeShihabFileSha256AndSize(shihabItem, outputPath);
+                if (_mehediConfig.ShihabWriteZoneIdentifier)
+                {
+                    ShihabOsAndDiskSafety.WriteMarkOfTheWeb(outputPath, shihabItem.MehediUrl, shihabItem.MehediReferer);
+                }
+            }
+
+            lock (_shihabEngineLock) { _mehediActiveCts.Remove(shihabItem.ShihabId); }
+            UpdateSleepStateForActiveDownloads();
+            shihabItem.ShihabCurrentSpeedBps = 0;
+            shihabItem.MehediEtaSeconds = 0;
+            shihabItem.SetMehediStatusEnum(ShihabDownloadStatus.ShihabCompleted, "Complete");
+            PersistShihabState();
+            NotifyShihabItemChanged(shihabItem);
+            if (OnMehediItemCompleted != null) OnMehediItemCompleted(shihabItem);
+        }
+
+        private void ExecuteMehediGalleryDlJob(ShihabDownloadItem shihabItem, CancellationToken mehediToken)
+        {
+            shihabItem.SetMehediStatusEnum(ShihabDownloadStatus.ShihabDownloading, "Downloading gallery...");
+            NotifyShihabItemChanged(shihabItem);
+
+            int downloadedCount;
+            string errMsg;
+            bool ok = ShihabMediaHelpersManager.ExecuteGalleryDlJob(
+                shihabItem,
+                _shihabStore.MehediBaseDirectory,
+                _mehediConfig,
+                delegate
+                {
+                    NotifyShihabItemChanged(shihabItem);
+                },
+                mehediToken,
+                out downloadedCount,
+                out errMsg);
+
+            if (mehediToken.IsCancellationRequested) return;
+            if (!ok)
+            {
+                throw new IOException(string.IsNullOrWhiteSpace(errMsg) ? "gallery-dl job failed." : errMsg);
+            }
+            if (_mehediConfig.ShihabWriteZoneIdentifier && Directory.Exists(shihabItem.MehediSaveDirectory))
+            {
+                ShihabOsAndDiskSafety.PropagateMarkOfTheWebToDirectory(shihabItem.MehediSaveDirectory, shihabItem.MehediUrl, shihabItem.MehediReferer);
+            }
+
+            lock (_shihabEngineLock) { _mehediActiveCts.Remove(shihabItem.ShihabId); }
+            UpdateSleepStateForActiveDownloads();
+            shihabItem.ShihabCurrentSpeedBps = 0;
+            shihabItem.MehediEtaSeconds = 0;
+            shihabItem.SetMehediStatusEnum(ShihabDownloadStatus.ShihabCompleted, string.Format("Complete ({0} files)", downloadedCount));
+            PersistShihabState();
+            NotifyShihabItemChanged(shihabItem);
+            if (OnMehediItemCompleted != null) OnMehediItemCompleted(shihabItem);
+        }
+
         private void ExecuteShihabDownloadLifecycle(ShihabDownloadItem shihabItem, CancellationToken mehediToken)
         {
             object shihabSegmentLock = new object();
             try
             {
+                if (_mehediConfig.IsQuotaExceeded())
+                {
+                    lock (_shihabEngineLock) { _mehediActiveCts.Remove(shihabItem.ShihabId); }
+                    UpdateSleepStateForActiveDownloads();
+                    shihabItem.SetMehediStatusEnum(ShihabDownloadStatus.ShihabPaused, "Paused (Quota limit reached)");
+                    PersistShihabState();
+                    NotifyShihabItemChanged(shihabItem);
+                    return;
+                }
+
+                ShihabOsAndDiskSafety.UpdateSystemSleepPrevention(true, _mehediConfig.ShihabPreventSystemSleep);
+
                 Directory.CreateDirectory(_mehediConfig.MehediTemporaryDirectory);
                 string mehediItemTempDir = GetShihabItemTempFolder(shihabItem);
                 Directory.CreateDirectory(mehediItemTempDir);
@@ -707,6 +1344,28 @@ namespace ShihabMehediIDM
                     shihabItem.MehediSaveDirectory = shihabCat.ShihabDefaultFolder;
                 }
                 Directory.CreateDirectory(shihabItem.MehediSaveDirectory);
+
+                // 1. Handle BitTorrent / Magnet items
+                if (shihabItem.ShihabIsTorrent || shihabItem.ShihabIsTorrentOrMagnet || ShihabTorrentManager.IsMagnetOrTorrentInput(shihabItem.MehediUrl))
+                {
+                    shihabItem.ShihabIsTorrent = true;
+                    ExecuteMehediTorrentDownload(shihabItem, mehediItemTempDir, mehediToken);
+                    return;
+                }
+
+                // 2. Handle yt-dlp Video / Playlist / Audio extraction jobs
+                if (shihabItem.ShihabIsYtDlpJob)
+                {
+                    ExecuteMehediYtDlpJob(shihabItem, mehediToken);
+                    return;
+                }
+
+                // 3. Handle gallery-dl batch image gallery jobs
+                if (shihabItem.ShihabIsGalleryJob)
+                {
+                    ExecuteMehediGalleryDlJob(shihabItem, mehediToken);
+                    return;
+                }
 
                 TryHealOrResolveShihabYouTubeItem(shihabItem, mehediItemTempDir, false);
 
@@ -721,19 +1380,74 @@ namespace ShihabMehediIDM
                     }
                 }
 
+                shihabItem.ShihabTransientUnlockedUrl = "";
+                shihabItem.ShihabTransientMaxChunks = 0;
+
                 ShihabProbeMetadata mehediProbe = ProbeMehediUrl(shihabItem.MehediUrl, shihabItem);
                 if (mehediToken.IsCancellationRequested) return;
 
-                mehediIsGvUrl = IsShihabGoogleVideoUrl(shihabItem.MehediUrl);
+                string effectiveUrl = GetEffectiveHttpUrl(shihabItem, shihabItem.MehediUrl);
+                mehediIsGvUrl = IsShihabGoogleVideoUrl(effectiveUrl);
 
                 if (mehediProbe.MehediSuccess)
                 {
-                    if (mehediProbe.MehediIsHlsPlaylist || shihabItem.MehediUrl.IndexOf(".m3u8", StringComparison.OrdinalIgnoreCase) >= 0)
+                    if (mehediProbe.MehediIsHlsPlaylist || effectiveUrl.IndexOf(".m3u8", StringComparison.OrdinalIgnoreCase) >= 0)
                     {
                         shihabItem.MehediIsHlsStream = true;
                         ExecuteMehediHlsStreamDownload(shihabItem, mehediProbe.ShihabFinalUrl, mehediItemTempDir, mehediToken);
                         return;
                     }
+
+                    // RFC 9110 Validator Check on Resume (Strong ETag + Last-Modified + Content-Length)
+                    Uri finalUri;
+                    string probeHost = Uri.TryCreate(mehediProbe.ShihabFinalUrl ?? effectiveUrl, UriKind.Absolute, out finalUri)
+                        ? finalUri.Host
+                        : "";
+                    if (shihabItem.MehediDownloadedBytes > 0)
+                    {
+                        bool sameValidatorHost = string.IsNullOrEmpty(shihabItem.ShihabETagHost) ||
+                            string.Equals(shihabItem.ShihabETagHost, probeHost, StringComparison.OrdinalIgnoreCase);
+
+                        bool strongEtagMismatch = sameValidatorHost &&
+                            !string.IsNullOrEmpty(shihabItem.ShihabETag) &&
+                            !string.IsNullOrEmpty(mehediProbe.ShihabETagHeader) &&
+                            !shihabItem.ShihabETag.StartsWith("W/", StringComparison.OrdinalIgnoreCase) &&
+                            !mehediProbe.ShihabETagHeader.StartsWith("W/", StringComparison.OrdinalIgnoreCase) &&
+                            !string.Equals(shihabItem.ShihabETag, mehediProbe.ShihabETagHeader, StringComparison.Ordinal);
+
+                        bool lastModMismatch = sameValidatorHost &&
+                            string.IsNullOrEmpty(shihabItem.ShihabETag) &&
+                            !string.IsNullOrEmpty(shihabItem.ShihabServerLastModified) &&
+                            !string.IsNullOrEmpty(mehediProbe.MehediLastModifiedHeader) &&
+                            !string.Equals(shihabItem.ShihabServerLastModified, mehediProbe.MehediLastModifiedHeader, StringComparison.Ordinal);
+
+                        bool lengthMismatch = shihabItem.ShihabTotalBytes > 0 &&
+                            mehediProbe.ShihabContentLength > 0 &&
+                            shihabItem.ShihabTotalBytes != mehediProbe.ShihabContentLength;
+
+                        if (strongEtagMismatch || lastModMismatch || lengthMismatch)
+                        {
+                            EmitShihabLog(string.Format("[Validator] Remote representation changed on {0}; resetting segments to prevent corruption.", probeHost));
+                            shihabItem.MehediSegments.Clear();
+                            shihabItem.MehediDownloadedBytes = 0;
+                            shihabItem.ShihabTotalBytes = mehediProbe.ShihabContentLength;
+                            if (!string.IsNullOrWhiteSpace(shihabItem.ShihabPartFilePath) && File.Exists(shihabItem.ShihabPartFilePath))
+                            {
+                                try { File.Delete(shihabItem.ShihabPartFilePath); } catch { }
+                            }
+                        }
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(mehediProbe.ShihabETagHeader))
+                    {
+                        shihabItem.ShihabETag = mehediProbe.ShihabETagHeader;
+                        shihabItem.ShihabETagHost = probeHost;
+                    }
+                    if (string.IsNullOrWhiteSpace(shihabItem.ShihabExpectedChecksum) && !string.IsNullOrWhiteSpace(mehediProbe.ShihabDigestSpec))
+                    {
+                        shihabItem.ShihabExpectedChecksum = mehediProbe.ShihabDigestSpec;
+                    }
+
                     if (shihabItem.ShihabTotalBytes <= 0 && mehediProbe.ShihabContentLength > 0)
                     {
                         shihabItem.ShihabTotalBytes = mehediProbe.ShihabContentLength;
@@ -743,7 +1457,7 @@ namespace ShihabMehediIDM
                     {
                         shihabItem.ShihabServerLastModified = mehediProbe.MehediLastModifiedHeader;
                     }
-                    if ((shihabItem.ShihabFileName == "download.bin" || shihabItem.ShihabFileName == "shihab_download.bin" || shihabItem.ShihabFileName == "videoplayback") &&
+                    if ((shihabItem.ShihabFileName == "download.bin" || shihabItem.ShihabFileName == "shihab_download.bin" || shihabItem.ShihabFileName == "videoplayback" || shihabItem.ShihabFileName == "uc") &&
                         !string.IsNullOrWhiteSpace(mehediProbe.MehediSuggestedFileName))
                     {
                         shihabItem.ShihabFileName = ShihabFormatHelpers.EnsureShihabUniqueFilePath(
@@ -751,10 +1465,29 @@ namespace ShihabMehediIDM
                             mehediProbe.MehediSuggestedFileName);
                     }
                 }
-                else if (shihabItem.MehediUrl.IndexOf(".m3u8", StringComparison.OrdinalIgnoreCase) >= 0)
+                else if (effectiveUrl.IndexOf(".m3u8", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
                     shihabItem.MehediIsHlsStream = true;
-                    ExecuteMehediHlsStreamDownload(shihabItem, shihabItem.MehediUrl, mehediItemTempDir, mehediToken);
+                    ExecuteMehediHlsStreamDownload(shihabItem, effectiveUrl, mehediItemTempDir, mehediToken);
+                    return;
+                }
+
+                // Disk Space (128 MB margin) & FAT32 4 GB Preflight Check
+                string preflightErr;
+                long remainingNeeded = shihabItem.ShihabTotalBytes > 0
+                    ? Math.Max(0L, shihabItem.ShihabTotalBytes - shihabItem.MehediDownloadedBytes)
+                    : 0L;
+                if (!ShihabOsAndDiskSafety.VerifyDiskPreflight(shihabItem.MehediSaveDirectory, remainingNeeded, out preflightErr))
+                {
+                    throw new IOException(preflightErr);
+                }
+
+                // Multi-connection FTP / FTPS transfer
+                if (effectiveUrl.StartsWith("ftp://", StringComparison.OrdinalIgnoreCase) ||
+                    effectiveUrl.StartsWith("ftps://", StringComparison.OrdinalIgnoreCase) ||
+                    effectiveUrl.StartsWith("ftpes://", StringComparison.OrdinalIgnoreCase))
+                {
+                    ExecuteMehediFtpDownload(shihabItem, mehediItemTempDir, mehediToken);
                     return;
                 }
 
@@ -762,15 +1495,17 @@ namespace ShihabMehediIDM
                 string shihabPrimaryAssembledPath = mehediHasCompanionAudio
                     ? Path.Combine(mehediItemTempDir, "primary_video_raw.part")
                     : shihabItem.GetShihabFullTargetPath();
+                string sharedSparsePartPath = shihabPrimaryAssembledPath + ".mhs.part";
+                shihabItem.ShihabPartFilePath = sharedSparsePartPath;
                 bool mehediShaAlreadyComputed = false;
 
-                if (mehediIsGvUrl && !IsDirectMobileShihabGoogleVideoUrl(shihabItem.MehediUrl))
+                if (mehediIsGvUrl && !IsDirectMobileShihabGoogleVideoUrl(effectiveUrl))
                 {
-                    DownloadMehediGoogleVideoOrRelay(shihabItem, shihabItem.MehediUrl, shihabPrimaryAssembledPath, shihabItem.ShihabTotalBytes, true, mehediToken);
+                    DownloadMehediGoogleVideoOrRelay(shihabItem, effectiveUrl, shihabPrimaryAssembledPath, shihabItem.ShihabTotalBytes, true, mehediToken);
                 }
                 else
                 {
-                    PrepareInitialShihabSegments(shihabItem, mehediItemTempDir);
+                    PrepareInitialShihabSegments(shihabItem, mehediItemTempDir, sharedSparsePartPath);
                     PersistShihabState();
 
                     shihabItem.SetMehediStatusEnum(ShihabDownloadStatus.ShihabDownloading, "Receiving data...");
@@ -781,84 +1516,122 @@ namespace ShihabMehediIDM
                     long mehediLastRateTickMs = 0;
 
                     List<Task> shihabActiveTasks = new List<Task>();
+                    List<SegmentWorkerTelemetry> activeTelemetries = new List<SegmentWorkerTelemetry>();
                     int mehediNextSegmentId = shihabItem.MehediSegments.Count;
+                    int maxDynamicSegments = _mehediConfig.GetMaxAllowedConnectionsCap() * 2;
+                    bool pausedByQuotaMidTransfer = false;
 
                     Action<MehediSegmentChunk> launchShihabWorker = null;
                     launchShihabWorker = delegate(MehediSegmentChunk mehediChunk)
                     {
+                        CancellationTokenSource workerCts = CancellationTokenSource.CreateLinkedTokenSource(mehediToken);
+                        SegmentWorkerTelemetry telemetry = new SegmentWorkerTelemetry();
+                        telemetry.Chunk = mehediChunk;
+                        telemetry.WorkerCts = workerCts;
+                        telemetry.StartedMs = mehediRateWatch.ElapsedMilliseconds;
+
                         Task shihabWorkerTask = Task.Run(delegate
                         {
-                            DownloadSingleMehediSegment(shihabItem, mehediChunk, shihabSegmentLock, mehediToken);
-
-                            if (mehediToken.IsCancellationRequested) return;
-
-                            if (shihabItem.ShihabResumeSupported && shihabItem.ShihabTotalBytes > 0)
+                            try
                             {
-                                MehediSegmentChunk shihabSplitHalf = null;
-                                lock (shihabSegmentLock)
-                                {
-                                    if (mehediChunk.GetMehediRemainingBytes() == 0 && shihabItem.MehediSegments.Count < 64)
-                                    {
-                                        MehediSegmentChunk mehediLargestActive = null;
-                                        long shihabLargestRem = 0;
-                                        for (int mehediIdx = 0; mehediIdx < shihabItem.MehediSegments.Count; mehediIdx++)
-                                        {
-                                            MehediSegmentChunk shihabCand = shihabItem.MehediSegments[mehediIdx];
-                                            if (shihabCand.ShihabIsActiveWorker)
-                                            {
-                                                long mehediRem = shihabCand.GetMehediRemainingBytes();
-                                                if (mehediRem > shihabLargestRem)
-                                                {
-                                                    shihabLargestRem = mehediRem;
-                                                    mehediLargestActive = shihabCand;
-                                                }
-                                            }
-                                        }
+                                DownloadSingleMehediSegment(shihabItem, mehediChunk, sharedSparsePartPath, telemetry, shihabSegmentLock, workerCts.Token);
 
-                                        // IDM Dynamic File Segmentation: halve the largest remaining active range if >= 512 KB left
-                                        if (mehediLargestActive != null && shihabLargestRem >= 524288L)
-                                        {
-                                            long shihabCurrentCursor = mehediLargestActive.MehediStartByte + mehediLargestActive.MehediDownloadedBytes;
-                                            long mehediOldEnd = mehediLargestActive.ShihabEndByte;
-                                            long shihabMidpoint = shihabCurrentCursor + ((mehediOldEnd - shihabCurrentCursor + 1L) / 2L);
-                                            if (shihabMidpoint > shihabCurrentCursor + 131072L && mehediOldEnd >= shihabMidpoint)
-                                            {
-                                                mehediLargestActive.ShihabEndByte = shihabMidpoint - 1L;
-                                                mehediNextSegmentId++;
-                                                shihabSplitHalf = new MehediSegmentChunk
-                                                {
-                                                    ShihabSegmentIndex = mehediNextSegmentId,
-                                                    MehediStartByte = shihabMidpoint,
-                                                    ShihabEndByte = mehediOldEnd,
-                                                    MehediDownloadedBytes = 0,
-                                                    ShihabSegmentState = "Dynamic split connecting...",
-                                                    MehediPartFilePath = Path.Combine(mehediItemTempDir, string.Format("seg_{0:000}.shihabpart", mehediNextSegmentId)),
-                                                    ShihabIsActiveWorker = true
-                                                };
-                                                int mehediInsertPos = shihabItem.MehediSegments.IndexOf(mehediLargestActive) + 1;
-                                                shihabItem.MehediSegments.Insert(mehediInsertPos, shihabSplitHalf);
-                                                EmitShihabLog(string.Format("[DynamicSplit] {0}: split active seg #{1} at byte {2} -> new seg #{3}",
-                                                    shihabItem.ShihabFileName,
-                                                    mehediLargestActive.ShihabSegmentIndex,
-                                                    shihabMidpoint,
-                                                    shihabSplitHalf.ShihabSegmentIndex));
-                                            }
-                                        }
-                                    }
-                                }
+                                if (mehediToken.IsCancellationRequested) return;
 
-                                if (shihabSplitHalf != null)
+                                // If shed for slowness or TTFB stall, immediately relaunch a fresh connection on the remaining range
+                                if (telemetry.WasShedOrPreempted && mehediChunk.GetMehediRemainingBytes() > 0)
                                 {
                                     lock (shihabSegmentLock)
                                     {
-                                        launchShihabWorker(shihabSplitHalf);
+                                        mehediChunk.ShihabIsActiveWorker = true;
+                                        mehediChunk.ShihabSegmentState = "Reconnecting faster worker...";
+                                        launchShihabWorker(mehediChunk);
+                                    }
+                                    return;
+                                }
+
+                                if (shihabItem.ShihabResumeSupported && shihabItem.ShihabTotalBytes > 0)
+                                {
+                                    MehediSegmentChunk shihabSplitHalf = null;
+                                    lock (shihabSegmentLock)
+                                    {
+                                        if (mehediChunk.GetMehediRemainingBytes() == 0 && shihabItem.MehediSegments.Count < maxDynamicSegments)
+                                        {
+                                            MehediSegmentChunk mehediLargestActive = null;
+                                            long shihabLargestRem = 0;
+                                            for (int mehediIdx = 0; mehediIdx < shihabItem.MehediSegments.Count; mehediIdx++)
+                                            {
+                                                MehediSegmentChunk shihabCand = shihabItem.MehediSegments[mehediIdx];
+                                                if (shihabCand.ShihabIsActiveWorker)
+                                                {
+                                                    long mehediRem = shihabCand.GetMehediRemainingBytes();
+                                                    if (mehediRem > shihabLargestRem)
+                                                    {
+                                                        shihabLargestRem = mehediRem;
+                                                        mehediLargestActive = shihabCand;
+                                                    }
+                                                }
+                                            }
+
+                                            // 4 KiB (4096-byte) OS Page-Aligned Dynamic Segment Halving
+                                            if (mehediLargestActive != null && shihabLargestRem >= 524288L)
+                                            {
+                                                long shihabCurrentCursor = mehediLargestActive.MehediStartByte + mehediLargestActive.MehediDownloadedBytes;
+                                                long mehediOldEnd = mehediLargestActive.ShihabEndByte;
+                                                long rawMidpoint = shihabCurrentCursor + ((mehediOldEnd - shihabCurrentCursor + 1L) / 2L);
+                                                long shihabMidpoint = (rawMidpoint + 4095L) & ~4095L;
+                                                if (shihabMidpoint <= shihabCurrentCursor || shihabMidpoint > mehediOldEnd)
+                                                {
+                                                    shihabMidpoint = rawMidpoint;
+                                                }
+                                                if (shihabMidpoint > shihabCurrentCursor + 131072L && mehediOldEnd >= shihabMidpoint)
+                                                {
+                                                    mehediLargestActive.ShihabEndByte = shihabMidpoint - 1L;
+                                                    mehediNextSegmentId++;
+                                                    shihabSplitHalf = new MehediSegmentChunk
+                                                    {
+                                                        ShihabSegmentIndex = mehediNextSegmentId,
+                                                        MehediStartByte = shihabMidpoint,
+                                                        ShihabEndByte = mehediOldEnd,
+                                                        MehediDownloadedBytes = 0,
+                                                        ShihabSegmentState = "Dynamic split connecting...",
+                                                        MehediPartFilePath = sharedSparsePartPath,
+                                                        ShihabIsActiveWorker = true
+                                                    };
+                                                    int mehediInsertPos = shihabItem.MehediSegments.IndexOf(mehediLargestActive) + 1;
+                                                    shihabItem.MehediSegments.Insert(mehediInsertPos, shihabSplitHalf);
+                                                    EmitShihabLog(string.Format("[DynamicSplit] {0}: 4KiB-aligned split seg #{1} at byte {2} -> new seg #{3}",
+                                                        shihabItem.ShihabFileName,
+                                                        mehediLargestActive.ShihabSegmentIndex,
+                                                        shihabMidpoint,
+                                                        shihabSplitHalf.ShihabSegmentIndex));
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    if (shihabSplitHalf != null)
+                                    {
+                                        lock (shihabSegmentLock)
+                                        {
+                                            launchShihabWorker(shihabSplitHalf);
+                                        }
                                     }
                                 }
+                            }
+                            finally
+                            {
+                                lock (shihabSegmentLock)
+                                {
+                                    activeTelemetries.Remove(telemetry);
+                                }
+                                try { workerCts.Dispose(); } catch { }
                             }
                         });
 
                         lock (shihabSegmentLock)
                         {
+                            activeTelemetries.Add(telemetry);
                             shihabActiveTasks.Add(shihabWorkerTask);
                         }
                     };
@@ -883,9 +1656,78 @@ namespace ShihabMehediIDM
 
                     while (!mehediToken.IsCancellationRequested)
                     {
+                        if (_mehediConfig.IsQuotaExceeded())
+                        {
+                            pausedByQuotaMidTransfer = true;
+                            PauseShihabDownload(shihabItem);
+                            shihabItem.SetMehediStatusEnum(ShihabDownloadStatus.ShihabPaused, "Paused (Quota limit reached)");
+                            PersistShihabState();
+                            NotifyShihabItemChanged(shihabItem);
+                            return;
+                        }
+
+                        long mehediNowMs = mehediRateWatch.ElapsedMilliseconds;
                         Task[] mehediSnapshotTasks;
                         lock (shihabSegmentLock)
                         {
+                            // TTFB Stall Preemption (> 3000 ms on final active segment) & Slow-Connection Shedding (< 1/4 peak for >= 4000 ms)
+                            if (shihabItem.ShihabResumeSupported && activeTelemetries.Count > 0)
+                            {
+                                double peakWorkerBps = 0.0;
+                                for (int i = 0; i < activeTelemetries.Count; i++)
+                                {
+                                    if (activeTelemetries[i].SmoothedBps > peakWorkerBps)
+                                    {
+                                        peakWorkerBps = activeTelemetries[i].SmoothedBps;
+                                    }
+                                }
+
+                                if (activeTelemetries.Count == 1)
+                                {
+                                    SegmentWorkerTelemetry sole = activeTelemetries[0];
+                                    if (!sole.FirstByteReceived &&
+                                        !sole.WasShedOrPreempted &&
+                                        (mehediNowMs - sole.StartedMs) >= 3000L &&
+                                        sole.Chunk.GetMehediRemainingBytes() >= 262144L)
+                                    {
+                                        sole.WasShedOrPreempted = true;
+                                        EmitShihabLog(string.Format("[TTFBPreempt] Preempting stalled final segment #{0} after {1} ms",
+                                            sole.Chunk.ShihabSegmentIndex, mehediNowMs - sole.StartedMs));
+                                        try { sole.WorkerCts.Cancel(); } catch { }
+                                    }
+                                }
+                                else if (_mehediConfig.ShihabShedSlowConnections && peakWorkerBps > 65536.0)
+                                {
+                                    double slowThreshold = peakWorkerBps * 0.25;
+                                    for (int i = 0; i < activeTelemetries.Count; i++)
+                                    {
+                                        SegmentWorkerTelemetry wt = activeTelemetries[i];
+                                        if (wt.WasShedOrPreempted || !wt.FirstByteReceived || wt.Chunk.GetMehediRemainingBytes() < 262144L)
+                                        {
+                                            continue;
+                                        }
+                                        if (wt.SmoothedBps > 0 && wt.SmoothedBps < slowThreshold)
+                                        {
+                                            if (wt.SlowSinceMs <= 0) wt.SlowSinceMs = mehediNowMs;
+                                            else if ((mehediNowMs - wt.SlowSinceMs) >= 4000L)
+                                            {
+                                                wt.WasShedOrPreempted = true;
+                                                EmitShihabLog(string.Format("[SlowShed] Recycling slow worker on seg #{0} ({1} < 25% of peak {2})",
+                                                    wt.Chunk.ShihabSegmentIndex,
+                                                    ShihabFormatHelpers.FormatShihabSpeed(wt.SmoothedBps),
+                                                    ShihabFormatHelpers.FormatShihabSpeed(peakWorkerBps)));
+                                                try { wt.WorkerCts.Cancel(); } catch { }
+                                                break;
+                                            }
+                                        }
+                                        else
+                                        {
+                                            wt.SlowSinceMs = 0;
+                                        }
+                                    }
+                                }
+                            }
+
                             List<Task> shihabRunning = new List<Task>();
                             for (int mehediT = 0; mehediT < shihabActiveTasks.Count; mehediT++)
                             {
@@ -899,7 +1741,6 @@ namespace ShihabMehediIDM
 
                         long shihabNowBytes = CalculateMehediDownloadedSum(shihabItem, shihabSegmentLock);
                         shihabItem.MehediDownloadedBytes = shihabNowBytes;
-                        long mehediNowMs = mehediRateWatch.ElapsedMilliseconds;
                         long shihabDeltaMs = mehediNowMs - mehediLastRateTickMs;
                         if (shihabDeltaMs >= 250)
                         {
@@ -925,12 +1766,21 @@ namespace ShihabMehediIDM
 
                         if (mehediSnapshotTasks.Length == 0)
                         {
-                            break;
+                            // Double-check no relaunch task was just queued
+                            lock (shihabSegmentLock)
+                            {
+                                bool anyStillRunning = false;
+                                for (int t = 0; t < shihabActiveTasks.Count; t++)
+                                {
+                                    if (!shihabActiveTasks[t].IsCompleted) { anyStillRunning = true; break; }
+                                }
+                                if (!anyStillRunning) break;
+                            }
                         }
                         Thread.Sleep(150);
                     }
 
-                    if (mehediToken.IsCancellationRequested)
+                    if (mehediToken.IsCancellationRequested || pausedByQuotaMidTransfer)
                     {
                         return;
                     }
@@ -961,7 +1811,7 @@ namespace ShihabMehediIDM
 
                     if (!mehediAllDone)
                     {
-                        if (IsRealShihabGoogleVideoDomain(shihabItem.MehediUrl) &&
+                        if (IsRealShihabGoogleVideoDomain(effectiveUrl) &&
                             TryHealOrResolveShihabYouTubeItem(shihabItem, mehediItemTempDir, true))
                         {
                             EmitShihabLog("[YouTubeAutoHeal] Refreshed expired/403 YouTube stream URL for " + shihabItem.ShihabFileName);
@@ -974,7 +1824,7 @@ namespace ShihabMehediIDM
                         else
                         {
                             bool shihabCanTryBrowserRelay =
-                                !IsDirectMobileShihabGoogleVideoUrl(shihabItem.MehediUrl) &&
+                                !IsDirectMobileShihabGoogleVideoUrl(effectiveUrl) &&
                                 ((shihabFailedReason != null && (
                                     shihabFailedReason.IndexOf("403", StringComparison.OrdinalIgnoreCase) >= 0 ||
                                     shihabFailedReason.IndexOf("401", StringComparison.OrdinalIgnoreCase) >= 0 ||
@@ -987,7 +1837,7 @@ namespace ShihabMehediIDM
                                 EmitShihabLog("[BrowserRelayFallback] Direct HTTP rejected (" + shihabFailedReason + "), requesting Browser Relay for " + shihabItem.ShihabFileName);
                                 try
                                 {
-                                    DownloadViaShihabBrowserRelay(shihabItem, shihabItem.MehediUrl, shihabPrimaryAssembledPath, shihabItem.ShihabTotalBytes, true, mehediToken);
+                                    DownloadViaShihabBrowserRelay(shihabItem, effectiveUrl, shihabPrimaryAssembledPath, shihabItem.ShihabTotalBytes, true, mehediToken);
                                 }
                                 catch (Exception mehediRelayEx)
                                 {
@@ -1007,11 +1857,38 @@ namespace ShihabMehediIDM
                     {
                         shihabItem.ShihabCurrentSpeedBps = 0;
                         shihabItem.MehediEtaSeconds = 0;
-                        shihabItem.SetMehediStatusEnum(ShihabDownloadStatus.ShihabRebuilding, "Rebuilding...");
+                        shihabItem.SetMehediStatusEnum(ShihabDownloadStatus.ShihabRebuilding, "Finalizing...");
                         NotifyShihabItemChanged(shihabItem);
 
-                        RebuildMehediSegmentsToFinalFile(shihabItem, shihabSegmentLock, shihabPrimaryAssembledPath, !mehediHasCompanionAudio);
-                        mehediShaAlreadyComputed = !mehediHasCompanionAudio;
+                        // Zero-copy single-file sparse .mhs.part finalization!
+                        if (File.Exists(sharedSparsePartPath))
+                        {
+                            if (shihabItem.ShihabTotalBytes > 0)
+                            {
+                                using (FileStream trimFs = new FileStream(sharedSparsePartPath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite))
+                                {
+                                    if (trimFs.Length != shihabItem.ShihabTotalBytes)
+                                    {
+                                        trimFs.SetLength(shihabItem.ShihabTotalBytes);
+                                    }
+                                    trimFs.Flush(true);
+                                }
+                            }
+                            if (!mehediHasCompanionAudio)
+                            {
+                                ComputeShihabFileSha256AndSize(shihabItem, sharedSparsePartPath);
+                                mehediShaAlreadyComputed = true;
+                            }
+                            if (!TryAtomicMoveReplace(sharedSparsePartPath, shihabPrimaryAssembledPath))
+                            {
+                                throw new IOException("Unable to finalize .mhs.part into target destination: " + shihabPrimaryAssembledPath);
+                            }
+                        }
+                        else
+                        {
+                            RebuildMehediSegmentsToFinalFile(shihabItem, shihabSegmentLock, shihabPrimaryAssembledPath, !mehediHasCompanionAudio);
+                            mehediShaAlreadyComputed = !mehediHasCompanionAudio;
+                        }
                     }
                 }
 
@@ -1040,6 +1917,7 @@ namespace ShihabMehediIDM
                 {
                     _mehediActiveCts.Remove(shihabItem.ShihabId);
                 }
+                UpdateSleepStateForActiveDownloads();
 
                 shihabItem.SetMehediStatusEnum(ShihabDownloadStatus.ShihabCompleted, "Complete");
                 PersistShihabState();
@@ -1055,6 +1933,7 @@ namespace ShihabMehediIDM
                 {
                     _mehediActiveCts.Remove(shihabItem.ShihabId);
                 }
+                UpdateSleepStateForActiveDownloads();
                 if (!mehediToken.IsCancellationRequested)
                 {
                     shihabItem.ShihabCurrentSpeedBps = 0;
@@ -1072,25 +1951,82 @@ namespace ShihabMehediIDM
             }
         }
 
-        private void PrepareInitialShihabSegments(ShihabDownloadItem shihabItem, string mehediItemTempDir)
+        private void EnsureSparseSharedPartFile(string sharedSparsePartPath, long totalBytes)
         {
+            string parentDir = Path.GetDirectoryName(sharedSparsePartPath);
+            if (!string.IsNullOrEmpty(parentDir)) Directory.CreateDirectory(parentDir);
+
+            bool newlyCreated = !File.Exists(sharedSparsePartPath);
+            using (FileStream fs = new FileStream(sharedSparsePartPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite))
+            {
+                if (newlyCreated && _mehediConfig.ShihabEnableSparseFiles)
+                {
+                    ShihabOsAndDiskSafety.TryMarkFileSparse(fs);
+                }
+                if (totalBytes > 0 && fs.Length < totalBytes)
+                {
+                    if (_mehediConfig.ShihabEnableSparseFiles)
+                    {
+                        ShihabOsAndDiskSafety.TryMarkFileSparse(fs);
+                    }
+                    fs.SetLength(totalBytes);
+                }
+            }
+        }
+
+        private void PrepareInitialShihabSegments(ShihabDownloadItem shihabItem, string mehediItemTempDir, string sharedSparsePartPath)
+        {
+            EnsureSparseSharedPartFile(sharedSparsePartPath, shihabItem.ShihabTotalBytes);
+
             if (shihabItem.MehediSegments != null && shihabItem.MehediSegments.Count > 0)
             {
                 bool mehediValidExisting = true;
                 for (int shihabI = 0; shihabI < shihabItem.MehediSegments.Count; shihabI++)
                 {
                     MehediSegmentChunk mehediSeg = shihabItem.MehediSegments[shihabI];
-                    if (!string.IsNullOrEmpty(mehediSeg.MehediPartFilePath) && File.Exists(mehediSeg.MehediPartFilePath))
+
+                    // Migrate any legacy per-segment seg_NNN.shihabpart into the unified sparse .mhs.part file
+                    if (!string.IsNullOrEmpty(mehediSeg.MehediPartFilePath) &&
+                        !string.Equals(Path.GetFullPath(mehediSeg.MehediPartFilePath), Path.GetFullPath(sharedSparsePartPath), StringComparison.OrdinalIgnoreCase) &&
+                        File.Exists(mehediSeg.MehediPartFilePath))
                     {
-                        long shihabDiskLen = new FileInfo(mehediSeg.MehediPartFilePath).Length;
+                        try
+                        {
+                            using (FileStream oldSegFs = new FileStream(mehediSeg.MehediPartFilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                            using (FileStream dstFs = new FileStream(sharedSparsePartPath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite))
+                            {
+                                dstFs.Seek(mehediSeg.MehediStartByte, SeekOrigin.Begin);
+                                byte[] migBuf = new byte[65536];
+                                long copied = 0;
+                                long maxAllowed = mehediSeg.ShihabEndByte >= 0 ? mehediSeg.GetShihabTotalSpan() : long.MaxValue;
+                                int r;
+                                while (copied < maxAllowed && (r = oldSegFs.Read(migBuf, 0, (int)Math.Min((long)migBuf.Length, maxAllowed - copied))) > 0)
+                                {
+                                    dstFs.Write(migBuf, 0, r);
+                                    copied += r;
+                                }
+                                mehediSeg.MehediDownloadedBytes = copied;
+                            }
+                            try { File.Delete(mehediSeg.MehediPartFilePath); } catch { }
+                        }
+                        catch { }
+                        mehediSeg.MehediPartFilePath = sharedSparsePartPath;
+                    }
+
+                    if (File.Exists(sharedSparsePartPath))
+                    {
+                        mehediSeg.MehediPartFilePath = sharedSparsePartPath;
+                        long diskLen = new FileInfo(sharedSparsePartPath).Length;
                         if (mehediSeg.ShihabEndByte >= 0)
                         {
-                            long mehediMaxSpan = mehediSeg.GetShihabTotalSpan();
-                            mehediSeg.MehediDownloadedBytes = Math.Min(shihabDiskLen, mehediMaxSpan);
+                            long maxSpan = mehediSeg.GetShihabTotalSpan();
+                            long maxAvailFromStart = Math.Max(0L, diskLen - mehediSeg.MehediStartByte);
+                            mehediSeg.MehediDownloadedBytes = Math.Max(0L, Math.Min(mehediSeg.MehediDownloadedBytes, Math.Min(maxSpan, maxAvailFromStart)));
                         }
-                        else
+                        else if (!shihabItem.ShihabResumeSupported)
                         {
-                            mehediSeg.MehediDownloadedBytes = shihabDiskLen;
+                            mehediSeg.MehediDownloadedBytes = 0;
+                            if (shihabI > 0) mehediValidExisting = false;
                         }
                     }
                     else
@@ -1109,7 +2045,10 @@ namespace ShihabMehediIDM
             }
 
             shihabItem.MehediSegments = new List<MehediSegmentChunk>();
-            int mehediDesiredConns = Math.Max(1, Math.Min(32, shihabItem.MehediMaxConnections > 0 ? shihabItem.MehediMaxConnections : _mehediConfig.ShihabDefaultMaxConnections));
+            string effectiveUrl = GetEffectiveHttpUrl(shihabItem, shihabItem.MehediUrl);
+            Uri targetUri;
+            string hostName = Uri.TryCreate(effectiveUrl, UriKind.Absolute, out targetUri) ? targetUri.Host : "";
+            int mehediDesiredConns = GetAdaptiveEffectiveConnections(hostName, shihabItem);
             if (!shihabItem.ShihabResumeSupported || shihabItem.ShihabTotalBytes < 262144L)
             {
                 mehediDesiredConns = 1;
@@ -1124,18 +2063,22 @@ namespace ShihabMehediIDM
                     ShihabEndByte = shihabItem.ShihabTotalBytes > 0 ? (shihabItem.ShihabTotalBytes - 1L) : -1L,
                     MehediDownloadedBytes = 0,
                     ShihabSegmentState = "Connecting...",
-                    MehediPartFilePath = Path.Combine(mehediItemTempDir, "seg_001.shihabpart")
+                    MehediPartFilePath = sharedSparsePartPath
                 });
                 return;
             }
 
-            long shihabBaseSpan = shihabItem.ShihabTotalBytes / mehediDesiredConns;
+            long shihabBaseSpan = (shihabItem.ShihabTotalBytes / mehediDesiredConns + 4095L) & ~4095L;
+            if (shihabBaseSpan <= 0 || shihabBaseSpan * (mehediDesiredConns - 1) >= shihabItem.ShihabTotalBytes)
+            {
+                shihabBaseSpan = shihabItem.ShihabTotalBytes / mehediDesiredConns;
+            }
             long mehediCursor = 0;
             for (int shihabIdx = 1; shihabIdx <= mehediDesiredConns; shihabIdx++)
             {
                 long mehediEnd = (shihabIdx == mehediDesiredConns)
                     ? (shihabItem.ShihabTotalBytes - 1L)
-                    : (mehediCursor + shihabBaseSpan - 1L);
+                    : Math.Min(shihabItem.ShihabTotalBytes - 1L, mehediCursor + shihabBaseSpan - 1L);
                 shihabItem.MehediSegments.Add(new MehediSegmentChunk
                 {
                     ShihabSegmentIndex = shihabIdx,
@@ -1143,7 +2086,7 @@ namespace ShihabMehediIDM
                     ShihabEndByte = mehediEnd,
                     MehediDownloadedBytes = 0,
                     ShihabSegmentState = "Connecting...",
-                    MehediPartFilePath = Path.Combine(mehediItemTempDir, string.Format("seg_{0:000}.shihabpart", shihabIdx))
+                    MehediPartFilePath = sharedSparsePartPath
                 });
                 mehediCursor = mehediEnd + 1L;
             }
@@ -1152,6 +2095,8 @@ namespace ShihabMehediIDM
         private void DownloadSingleMehediSegment(
             ShihabDownloadItem shihabItem,
             MehediSegmentChunk mehediChunk,
+            string sharedSparsePartPath,
+            SegmentWorkerTelemetry telemetry,
             object shihabSegmentLock,
             CancellationToken mehediToken)
         {
@@ -1173,30 +2118,86 @@ namespace ShihabMehediIDM
                     mehediChunk.ShihabSegmentState = "Connecting...";
                 }
 
+                string targetUrl = GetEffectiveHttpUrl(shihabItem, shihabItem.MehediUrl);
+                string ifRangeVal = "";
+                if (!string.IsNullOrWhiteSpace(shihabItem.ShihabETag) &&
+                    !shihabItem.ShihabETag.StartsWith("W/", StringComparison.OrdinalIgnoreCase))
+                {
+                    ifRangeVal = shihabItem.ShihabETag;
+                }
+                else if (!string.IsNullOrWhiteSpace(shihabItem.ShihabServerLastModified))
+                {
+                    ifRangeVal = shihabItem.ShihabServerLastModified;
+                }
+
                 long shihabGvSliceCap = shihabItem.ShihabResumeSupported
-                    ? GetShihabGoogleVideoBurstSliceBytes(shihabItem.MehediUrl)
+                    ? GetShihabGoogleVideoBurstSliceBytes(targetUrl)
                     : -1L;
-                byte[] mehediBuf = new byte[32768];
+                byte[] mehediBuf = new byte[65536];
                 Stopwatch shihabItemThrottleWatch = Stopwatch.StartNew();
                 long mehediItemWindowStartMs = 0;
                 long shihabItemWindowBytes = 0;
+                long workerLastSpeedMs = 0;
+                long workerBytesSinceSpeedTick = 0;
                 int mehediTransientRetries = 0;
+                bool overlapVerifiedForThisRun = false;
 
                 while (!mehediToken.IsCancellationRequested)
                 {
                     long shihabSubStart;
                     long mehediCurrentEnd;
+                    long existingDiskBytes;
                     lock (shihabSegmentLock)
                     {
                         if (mehediChunk.ShihabEndByte >= 0 && mehediChunk.GetMehediRemainingBytes() <= 0)
                         {
                             break;
                         }
-                        shihabSubStart = mehediChunk.MehediStartByte + mehediChunk.MehediDownloadedBytes;
+                        existingDiskBytes = mehediChunk.MehediDownloadedBytes;
+                        shihabSubStart = mehediChunk.MehediStartByte + existingDiskBytes;
                         mehediCurrentEnd = mehediChunk.ShihabEndByte;
                     }
 
-                    long shihabReqStart = shihabItem.ShihabResumeSupported ? shihabSubStart : -1L;
+                    // Fail-Closed min(written, 64)-Byte Resume Overlap Verification
+                    int overlapBytesToVerify = 0;
+                    byte[] expectedOverlapBytes = null;
+                    if (!overlapVerifiedForThisRun &&
+                        _mehediConfig.ShihabVerifyResumeOverlap &&
+                        shihabItem.ShihabResumeSupported &&
+                        existingDiskBytes > 0L &&
+                        File.Exists(sharedSparsePartPath))
+                    {
+                        int wantOverlap = (int)Math.Min(existingDiskBytes, 64L);
+                        long checkOffset = shihabSubStart - wantOverlap;
+                        try
+                        {
+                            using (FileStream checkFs = new FileStream(sharedSparsePartPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                            {
+                                if (checkFs.Length >= shihabSubStart)
+                                {
+                                    expectedOverlapBytes = new byte[wantOverlap];
+                                    checkFs.Seek(checkOffset, SeekOrigin.Begin);
+                                    int gotDisk = 0;
+                                    while (gotDisk < wantOverlap)
+                                    {
+                                        int rd = checkFs.Read(expectedOverlapBytes, gotDisk, wantOverlap - gotDisk);
+                                        if (rd <= 0) break;
+                                        gotDisk += rd;
+                                    }
+                                    if (gotDisk == wantOverlap)
+                                    {
+                                        overlapBytesToVerify = wantOverlap;
+                                    }
+                                }
+                            }
+                        }
+                        catch
+                        {
+                            overlapBytesToVerify = 0;
+                        }
+                    }
+
+                    long shihabReqStart = shihabItem.ShihabResumeSupported ? (shihabSubStart - overlapBytesToVerify) : -1L;
                     long mehediReqEnd = (shihabItem.ShihabResumeSupported && mehediCurrentEnd >= shihabSubStart) ? mehediCurrentEnd : -1L;
                     if (shihabGvSliceCap > 0 && shihabReqStart >= 0)
                     {
@@ -1211,14 +2212,59 @@ namespace ShihabMehediIDM
 
                     try
                     {
-                        HttpWebRequest shihabReq = CreateShihabHttpRequest(shihabItem.MehediUrl, "GET", shihabItem, shihabReqStart, mehediReqEnd);
-                        using (mehediToken.Register(delegate { try { shihabReq.Abort(); } catch { } }))
-                        using (HttpWebResponse mehediResp = (HttpWebResponse)shihabReq.GetResponse())
+                        HttpWebRequest shihabReq;
+                        using (HttpWebResponse mehediResp = GetResponseWithSafeRedirects(
+                            targetUrl,
+                            "GET",
+                            shihabItem,
+                            shihabReqStart,
+                            mehediReqEnd,
+                            shihabReqStart > 0 ? ifRangeVal : null,
+                            mehediToken,
+                            out shihabReq))
                         using (Stream shihabNetStream = mehediResp.GetResponseStream())
                         {
                             if (shihabReqStart > 0 && mehediResp.StatusCode != HttpStatusCode.PartialContent)
                             {
-                                throw new IOException("Server did not honor HTTP byte-range request (HTTP " + (int)mehediResp.StatusCode + ").");
+                                // Server returned 200 OK (e.g. If-Range mismatch or range ignored)
+                                if (mehediChunk.MehediStartByte == 0 && shihabItem.MehediSegments.Count == 1)
+                                {
+                                    lock (shihabSegmentLock)
+                                    {
+                                        mehediChunk.MehediDownloadedBytes = 0;
+                                        shihabItem.ShihabResumeSupported = false;
+                                    }
+                                    shihabSubStart = 0;
+                                    overlapBytesToVerify = 0;
+                                }
+                                else
+                                {
+                                    throw new IOException("Server did not honor HTTP byte-range request (HTTP " + (int)mehediResp.StatusCode + ").");
+                                }
+                            }
+
+                            if (overlapBytesToVerify > 0 && expectedOverlapBytes != null)
+                            {
+                                byte[] wireOverlap = new byte[overlapBytesToVerify];
+                                int gotOverlap = 0;
+                                while (gotOverlap < overlapBytesToVerify)
+                                {
+                                    int r = shihabNetStream.Read(wireOverlap, gotOverlap, overlapBytesToVerify - gotOverlap);
+                                    if (r <= 0) break;
+                                    gotOverlap += r;
+                                }
+                                if (gotOverlap != overlapBytesToVerify)
+                                {
+                                    throw new IOException("Resume overlap verification failed: server closed stream before sending overlap bytes.");
+                                }
+                                for (int ov = 0; ov < overlapBytesToVerify; ov++)
+                                {
+                                    if (wireOverlap[ov] != expectedOverlapBytes[ov])
+                                    {
+                                        throw new IOException("Resume overlap verification failed: remote file bytes changed on server.");
+                                    }
+                                }
+                                overlapVerifiedForThisRun = true;
                             }
 
                             if (!shihabItem.ShihabResumeSupported && shihabItem.ShihabTotalBytes <= 0 && mehediResp.ContentLength > 0)
@@ -1228,15 +2274,10 @@ namespace ShihabMehediIDM
 
                             if (shihabPartFs == null)
                             {
-                                FileMode mehediFileMode = (shihabItem.ShihabResumeSupported && mehediChunk.MehediDownloadedBytes > 0 && File.Exists(mehediChunk.MehediPartFilePath))
-                                    ? FileMode.Open
-                                    : FileMode.Create;
-                                shihabPartFs = new FileStream(mehediChunk.MehediPartFilePath, mehediFileMode, FileAccess.Write, FileShare.Read);
-                                if (mehediFileMode == FileMode.Open)
-                                {
-                                    shihabPartFs.Seek(mehediChunk.MehediDownloadedBytes, SeekOrigin.Begin);
-                                }
+                                EnsureSparseSharedPartFile(sharedSparsePartPath, shihabItem.ShihabTotalBytes);
+                                shihabPartFs = new FileStream(sharedSparsePartPath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.ReadWrite);
                             }
+                            shihabPartFs.Seek(shihabSubStart, SeekOrigin.Begin);
 
                             lock (shihabSegmentLock)
                             {
@@ -1249,6 +2290,11 @@ namespace ShihabMehediIDM
                                 if (mehediRead <= 0)
                                 {
                                     break;
+                                }
+
+                                if (telemetry != null)
+                                {
+                                    telemetry.FirstByteReceived = true;
                                 }
 
                                 mehediSubSliceReadTotal += mehediRead;
@@ -1278,6 +2324,24 @@ namespace ShihabMehediIDM
                                 if (shihabToWrite > 0)
                                 {
                                     shihabPartFs.Write(mehediBuf, 0, shihabToWrite);
+                                    _mehediConfig.RecordQuotaBytes(shihabToWrite);
+
+                                    if (telemetry != null)
+                                    {
+                                        workerBytesSinceSpeedTick += shihabToWrite;
+                                        long wNowMs = shihabItemThrottleWatch.ElapsedMilliseconds;
+                                        long wDelta = wNowMs - workerLastSpeedMs;
+                                        if (wDelta >= 250L)
+                                        {
+                                            double inst = (workerBytesSinceSpeedTick * 1000.0) / Math.Max(1.0, (double)wDelta);
+                                            telemetry.SmoothedBps = telemetry.SmoothedBps <= 1.0
+                                                ? inst
+                                                : (telemetry.SmoothedBps * 0.6) + (inst * 0.4);
+                                            workerBytesSinceSpeedTick = 0;
+                                            workerLastSpeedMs = wNowMs;
+                                        }
+                                    }
+
                                     ApplyMehediSpeedLimiter(
                                         shihabItem,
                                         shihabToWrite,
@@ -1306,19 +2370,20 @@ namespace ShihabMehediIDM
                             break;
                         }
                         string mehediErrMsg = shihabSubEx.Message ?? "";
-                        bool mehediIsAuthOrForbidden =
+                        bool mehediIsFatalMismatchOrAuth =
+                            mehediErrMsg.IndexOf("overlap verification failed", StringComparison.OrdinalIgnoreCase) >= 0 ||
                             mehediErrMsg.IndexOf("403", StringComparison.OrdinalIgnoreCase) >= 0 ||
                             mehediErrMsg.IndexOf("401", StringComparison.OrdinalIgnoreCase) >= 0 ||
                             mehediErrMsg.IndexOf("Forbidden", StringComparison.OrdinalIgnoreCase) >= 0 ||
                             mehediErrMsg.IndexOf("Unauthorized", StringComparison.OrdinalIgnoreCase) >= 0 ||
                             mehediErrMsg.IndexOf("did not honor HTTP byte-range", StringComparison.OrdinalIgnoreCase) >= 0;
 
-                        if (!shihabItem.ShihabResumeSupported || mehediIsAuthOrForbidden || mehediTransientRetries >= 2)
+                        if (!shihabItem.ShihabResumeSupported || mehediIsFatalMismatchOrAuth || mehediTransientRetries >= 3)
                         {
                             throw;
                         }
                         mehediTransientRetries++;
-                        Thread.Sleep(150 * mehediTransientRetries);
+                        Thread.Sleep(200 * mehediTransientRetries);
                         continue;
                     }
 
@@ -1343,11 +2408,14 @@ namespace ShihabMehediIDM
 
                 lock (shihabSegmentLock)
                 {
-                    mehediChunk.ShihabIsActiveWorker = false;
-                    if (!mehediToken.IsCancellationRequested &&
-                        (mehediChunk.ShihabEndByte < 0 || mehediChunk.GetMehediRemainingBytes() == 0))
+                    if (telemetry == null || !telemetry.WasShedOrPreempted)
                     {
-                        mehediChunk.ShihabSegmentState = "Completed.";
+                        mehediChunk.ShihabIsActiveWorker = false;
+                        if (!mehediToken.IsCancellationRequested &&
+                            (mehediChunk.ShihabEndByte < 0 || mehediChunk.GetMehediRemainingBytes() == 0))
+                        {
+                            mehediChunk.ShihabSegmentState = "Completed.";
+                        }
                     }
                 }
             }
@@ -1355,10 +2423,13 @@ namespace ShihabMehediIDM
             {
                 lock (shihabSegmentLock)
                 {
-                    mehediChunk.ShihabIsActiveWorker = false;
-                    mehediChunk.ShihabSegmentState = mehediToken.IsCancellationRequested
-                        ? "Disconnect."
-                        : ("Error: " + shihabEx.Message);
+                    if (telemetry == null || !telemetry.WasShedOrPreempted)
+                    {
+                        mehediChunk.ShihabIsActiveWorker = false;
+                        mehediChunk.ShihabSegmentState = mehediToken.IsCancellationRequested
+                            ? "Disconnect."
+                            : ("Error: " + shihabEx.Message);
+                    }
                 }
             }
             finally
@@ -1380,7 +2451,12 @@ namespace ShihabMehediIDM
         {
             if (shihabItem.ShihabUseItemSpeedLimit && shihabItem.MehediItemSpeedLimitKb > 0)
             {
-                int shihabConns = Math.Max(1, shihabItem.MehediSegments.Count);
+                int activeConns = 0;
+                for (int i = 0; i < shihabItem.MehediSegments.Count; i++)
+                {
+                    if (shihabItem.MehediSegments[i].ShihabIsActiveWorker) activeConns++;
+                }
+                int shihabConns = Math.Max(1, activeConns);
                 long mehediPerSegBps = Math.Max(4096L, (shihabItem.MehediItemSpeedLimitKb * 1024L) / shihabConns);
                 long shihabNow = shihabWatch.ElapsedMilliseconds;
                 if (shihabNow - mehediItemWindowStartMs >= 200)
@@ -1405,18 +2481,17 @@ namespace ShihabMehediIDM
                 int mehediGlobalSleep = 0;
                 lock (_mehediRateLock)
                 {
-                    long shihabTick = Environment.TickCount & Int32.MaxValue;
-                    if (shihabTick - _shihabGlobalWindowStartMs >= 200 || shihabTick < _shihabGlobalWindowStartMs)
+                    long nowMs = _globalRateStopwatch.ElapsedMilliseconds;
+                    long elapsedMs = Math.Max(0L, nowMs - _globalLastBucketTickMs);
+                    _globalLastBucketTickMs = nowMs;
+                    double rateBps = Math.Max(8192.0, _mehediConfig.ShihabGlobalSpeedLimitKb * 1024.0);
+                    double maxBurst = Math.Max(65536.0, rateBps * 0.25);
+                    _globalTokenBucketBytes = Math.Min(maxBurst, _globalTokenBucketBytes + (rateBps * elapsedMs / 1000.0));
+                    _globalTokenBucketBytes -= mehediTransferredBytes;
+                    if (_globalTokenBucketBytes < 0.0)
                     {
-                        _shihabGlobalWindowStartMs = shihabTick;
-                        _mehediGlobalBytesInWindow = 0;
-                    }
-                    _mehediGlobalBytesInWindow += mehediTransferredBytes;
-                    long mehediGlobalBps = Math.Max(8192L, _mehediConfig.ShihabGlobalSpeedLimitKb * 1024L);
-                    long shihabQuota200Ms = mehediGlobalBps / 5L;
-                    if (_mehediGlobalBytesInWindow > shihabQuota200Ms)
-                    {
-                        mehediGlobalSleep = (int)Math.Min(250L, ((_mehediGlobalBytesInWindow - shihabQuota200Ms) * 1000L) / mehediGlobalBps);
+                        double deficit = -_globalTokenBucketBytes;
+                        mehediGlobalSleep = (int)Math.Min(250.0, (deficit * 1000.0) / rateBps);
                     }
                 }
                 if (mehediGlobalSleep > 5 && !mehediToken.IsCancellationRequested)
@@ -2178,17 +3253,48 @@ namespace ShihabMehediIDM
             }
             else if (!string.Equals(Path.GetFullPath(mehediPrimaryAssembledPath), Path.GetFullPath(shihabFinalTargetPath), StringComparison.OrdinalIgnoreCase))
             {
-                if (File.Exists(shihabFinalTargetPath))
+                if (!TryAtomicMoveReplace(mehediPrimaryAssembledPath, shihabFinalTargetPath))
                 {
-                    File.Delete(shihabFinalTargetPath);
+                    throw new IOException("Unable to move assembled download to final target path: " + shihabFinalTargetPath);
                 }
-                File.Move(mehediPrimaryAssembledPath, shihabFinalTargetPath);
                 mehediShaAlreadyComputedOnTarget = false;
             }
 
             if (!mehediShaAlreadyComputedOnTarget || string.IsNullOrEmpty(shihabItem.MehediSha256Hex))
             {
                 ComputeShihabFileSha256AndSize(shihabItem, shihabFinalTargetPath);
+            }
+
+            // Multi-Algorithm Checksum Verification (CRC32, MD5, SHA-1, SHA-256, SHA-512)
+            if (!string.IsNullOrWhiteSpace(shihabItem.ShihabExpectedChecksum))
+            {
+                shihabItem.SetMehediStatusEnum(ShihabDownloadStatus.ShihabRebuilding, "Verifying checksum...");
+                NotifyShihabItemChanged(shihabItem);
+                string computedSpec;
+                string statusSummary;
+                bool verifiedOk = ShihabChecksumVerifier.VerifyFileAgainstSpec(
+                    shihabFinalTargetPath,
+                    shihabItem.ShihabExpectedChecksum,
+                    out computedSpec,
+                    out statusSummary);
+                shihabItem.ShihabComputedChecksum = computedSpec;
+                shihabItem.ShihabChecksumStatus = statusSummary;
+                if (!verifiedOk)
+                {
+                    throw new InvalidOperationException("Checksum verification failed: " + statusSummary);
+                }
+                EmitShihabLog("[Checksum] " + shihabItem.ShihabFileName + " -> " + statusSummary);
+            }
+            else if (!string.IsNullOrEmpty(shihabItem.MehediSha256Hex))
+            {
+                shihabItem.ShihabComputedChecksum = "sha256:" + shihabItem.MehediSha256Hex;
+                shihabItem.ShihabChecksumStatus = "SHA-256 Computed";
+            }
+
+            // Mark-of-the-Web (NTFS :Zone.Identifier ADS)
+            if (_mehediConfig.ShihabWriteZoneIdentifier)
+            {
+                ShihabOsAndDiskSafety.WriteMarkOfTheWeb(shihabFinalTargetPath, shihabItem.MehediUrl, shihabItem.MehediReferer);
             }
 
             if ((_mehediConfig.ShihabSetServerFileTimestamp || _mehediConfig.ShihabSetServerCreationDate) &&
@@ -2204,6 +3310,40 @@ namespace ShihabMehediIDM
                     if (_mehediConfig.ShihabSetServerCreationDate)
                     {
                         try { File.SetCreationTime(shihabFinalTargetPath, mehediServerDt); } catch { }
+                    }
+                }
+            }
+
+            // Hardened Post-Download Archive Auto-Extraction (waits for all split volumes + propagates MotW)
+            if ((shihabItem.ShihabAutoExtract || _mehediConfig.ShihabAutoExtractArchives) &&
+                ShihabSafeArchiveExtractor.IsSupportedArchiveFile(shihabFinalTargetPath))
+            {
+                string splitWaitReason;
+                if (!ShihabSafeArchiveExtractor.AreAllSplitArchiveVolumesReady(shihabFinalTargetPath, out splitWaitReason))
+                {
+                    EmitShihabLog("[Extract] Deferred split archive extraction: " + splitWaitReason);
+                }
+                else
+                {
+                    shihabItem.SetMehediStatusEnum(ShihabDownloadStatus.ShihabRebuilding, "Extracting archive...");
+                    NotifyShihabItemChanged(shihabItem);
+                    string extractedDest;
+                    string extractErr;
+                    if (ShihabSafeArchiveExtractor.ExtractArchiveSafely(
+                        shihabFinalTargetPath,
+                        _mehediConfig.ShihabExtractSubfolderMode,
+                        shihabItem.ShihabArchivePassword,
+                        _mehediConfig.ShihabDeleteArchiveAfterExtract,
+                        _mehediConfig.ShihabWriteZoneIdentifier ? shihabItem.MehediUrl : "",
+                        _mehediConfig.ShihabWriteZoneIdentifier ? shihabItem.MehediReferer : "",
+                        out extractedDest,
+                        out extractErr))
+                    {
+                        EmitShihabLog("[Extract] Extracted " + shihabItem.ShihabFileName + " -> " + extractedDest);
+                    }
+                    else
+                    {
+                        EmitShihabLog("[ExtractWarning] " + extractErr);
                     }
                 }
             }
@@ -2231,6 +3371,322 @@ namespace ShihabMehediIDM
                 }
                 catch { }
             }
+        }
+
+        private void ExecuteMehediFtpDownload(
+            ShihabDownloadItem shihabItem,
+            string mehediItemTempDir,
+            CancellationToken mehediToken)
+        {
+            string normUrl = shihabItem.MehediUrl.Replace("ftpes://", "ftp://").Replace("ftps://", "ftp://");
+            string targetFile = shihabItem.GetShihabFullTargetPath();
+            Directory.CreateDirectory(Path.GetDirectoryName(targetFile));
+            string partPath = targetFile + ".mhs.part";
+            shihabItem.ShihabPartFilePath = partPath;
+            bool enableTls = _mehediConfig.ShihabFtpEnableTls ||
+                             shihabItem.MehediUrl.StartsWith("ftps://", StringComparison.OrdinalIgnoreCase) ||
+                             shihabItem.MehediUrl.StartsWith("ftpes://", StringComparison.OrdinalIgnoreCase);
+
+            int desiredConns = Math.Max(1, Math.Min(8, shihabItem.MehediMaxConnections > 0 ? shihabItem.MehediMaxConnections : 4));
+            if (shihabItem.ShihabTotalBytes >= 524288L && desiredConns > 1)
+            {
+                EnsureSparseSharedPartFile(partPath, shihabItem.ShihabTotalBytes);
+                object segLock = new object();
+                if (shihabItem.MehediSegments == null || shihabItem.MehediSegments.Count != desiredConns)
+                {
+                    shihabItem.MehediSegments = new List<MehediSegmentChunk>();
+                    long baseSpan = (shihabItem.ShihabTotalBytes / desiredConns + 4095L) & ~4095L;
+                    if (baseSpan <= 0 || baseSpan * (desiredConns - 1) >= shihabItem.ShihabTotalBytes)
+                    {
+                        baseSpan = shihabItem.ShihabTotalBytes / desiredConns;
+                    }
+                    long cursor = 0;
+                    for (int sIdx = 1; sIdx <= desiredConns; sIdx++)
+                    {
+                        long segEnd = (sIdx == desiredConns)
+                            ? (shihabItem.ShihabTotalBytes - 1L)
+                            : Math.Min(shihabItem.ShihabTotalBytes - 1L, cursor + baseSpan - 1L);
+                        shihabItem.MehediSegments.Add(new MehediSegmentChunk
+                        {
+                            ShihabSegmentIndex = sIdx,
+                            MehediStartByte = cursor,
+                            ShihabEndByte = segEnd,
+                            MehediDownloadedBytes = 0,
+                            ShihabSegmentState = "Connecting...",
+                            MehediPartFilePath = partPath
+                        });
+                        cursor = segEnd + 1L;
+                    }
+                }
+                shihabItem.SetMehediStatusEnum(ShihabDownloadStatus.ShihabDownloading, "Receiving multi-segment FTP data...");
+                NotifyShihabItemChanged(shihabItem);
+
+                Exception firstErr = null;
+                Task[] workers = new Task[shihabItem.MehediSegments.Count];
+                Stopwatch rateWatch = Stopwatch.StartNew();
+                long lastUiTick = 0;
+                long lastBytes = CalculateMehediDownloadedSum(shihabItem, segLock);
+
+                for (int idx = 0; idx < shihabItem.MehediSegments.Count; idx++)
+                {
+                    MehediSegmentChunk seg = shihabItem.MehediSegments[idx];
+                    seg.ShihabIsActiveWorker = true;
+                    workers[idx] = Task.Run(delegate
+                    {
+                        try
+                        {
+                            long startOff;
+                            long endOff;
+                            lock (segLock)
+                            {
+                                startOff = seg.MehediStartByte + seg.MehediDownloadedBytes;
+                                endOff = seg.ShihabEndByte;
+                            }
+                            if (endOff >= 0 && startOff > endOff)
+                            {
+                                lock (segLock) { seg.ShihabSegmentState = "Completed."; seg.ShihabIsActiveWorker = false; }
+                                return;
+                            }
+
+                            FtpWebRequest fReq = (FtpWebRequest)WebRequest.Create(normUrl);
+                            fReq.Method = WebRequestMethods.Ftp.DownloadFile;
+                            fReq.UseBinary = true;
+                            fReq.UsePassive = _mehediConfig.ShihabFtpUsePassiveMode;
+                            fReq.EnableSsl = enableTls;
+                            if (startOff > 0) fReq.ContentOffset = startOff;
+                            ApplyFtpCredentials(fReq, normUrl, shihabItem);
+
+                            long winStart = 0;
+                            long winBytes = 0;
+                            using (mehediToken.Register(delegate { try { fReq.Abort(); } catch { } }))
+                            using (FtpWebResponse fResp = (FtpWebResponse)fReq.GetResponse())
+                            using (Stream ns = fResp.GetResponseStream())
+                            using (FileStream pfs = new FileStream(partPath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.ReadWrite))
+                            {
+                                pfs.Seek(startOff, SeekOrigin.Begin);
+                                byte[] buf = new byte[32768];
+                                long cursor = startOff;
+                                while (!mehediToken.IsCancellationRequested && cursor <= endOff)
+                                {
+                                    int want = (int)Math.Min((long)buf.Length, (endOff - cursor) + 1L);
+                                    int r = ns.Read(buf, 0, want);
+                                    if (r <= 0) break;
+                                    pfs.Write(buf, 0, r);
+                                    cursor += r;
+                                    lock (segLock)
+                                    {
+                                        seg.MehediDownloadedBytes += r;
+                                    }
+                                    _mehediConfig.RecordQuotaBytes(r);
+                                    ApplyMehediSpeedLimiter(shihabItem, r, rateWatch, ref winStart, ref winBytes, mehediToken);
+
+                                    long nowMs = rateWatch.ElapsedMilliseconds;
+                                    if (nowMs - Interlocked.Read(ref lastUiTick) >= 220)
+                                    {
+                                        Interlocked.Exchange(ref lastUiTick, nowMs);
+                                        long curSum = CalculateMehediDownloadedSum(shihabItem, segLock);
+                                        shihabItem.MehediDownloadedBytes = curSum;
+                                        double bps = ((curSum - lastBytes) * 1000.0) / 220.0;
+                                        if (bps > 0) shihabItem.ShihabCurrentSpeedBps = bps;
+                                        lastBytes = curSum;
+                                        shihabItem.ShihabStatusText = string.Format("{0:0.0}%", shihabItem.GetMehediPercent());
+                                        NotifyShihabItemChanged(shihabItem);
+                                    }
+                                }
+                                pfs.Flush();
+                            }
+                            lock (segLock) { seg.ShihabSegmentState = "Completed."; seg.ShihabIsActiveWorker = false; }
+                        }
+                        catch (Exception ex)
+                        {
+                            lock (segLock) { seg.ShihabIsActiveWorker = false; seg.ShihabSegmentState = "Error"; if (firstErr == null) firstErr = ex; }
+                        }
+                    });
+                }
+
+                Task.WaitAll(workers);
+                if (mehediToken.IsCancellationRequested) return;
+                if (firstErr != null && CalculateMehediDownloadedSum(shihabItem, segLock) < shihabItem.ShihabTotalBytes)
+                {
+                    throw firstErr;
+                }
+                shihabItem.MehediDownloadedBytes = shihabItem.ShihabTotalBytes;
+                FinalizeShihabDownloadedFileAndOptionalAudioMux(shihabItem, partPath, mehediItemTempDir, false, mehediToken);
+                shihabItem.ShihabPartFilePath = "";
+                lock (_shihabEngineLock) { _mehediActiveCts.Remove(shihabItem.ShihabId); }
+                shihabItem.SetMehediStatusEnum(ShihabDownloadStatus.ShihabCompleted, "Complete");
+                PersistShihabState();
+                NotifyShihabItemChanged(shihabItem);
+                if (OnMehediItemCompleted != null) OnMehediItemCompleted(shihabItem);
+                return;
+            }
+
+            long resumeOffset = 0;
+            if (File.Exists(partPath))
+            {
+                resumeOffset = new FileInfo(partPath).Length;
+            }
+            shihabItem.MehediDownloadedBytes = resumeOffset;
+            shihabItem.MehediSegments = new List<MehediSegmentChunk>
+            {
+                new MehediSegmentChunk
+                {
+                    ShihabSegmentIndex = 1,
+                    MehediStartByte = 0,
+                    ShihabEndByte = shihabItem.ShihabTotalBytes > 0 ? (shihabItem.ShihabTotalBytes - 1L) : -1L,
+                    MehediDownloadedBytes = resumeOffset,
+                    ShihabSegmentState = "FTP Receiving...",
+                    MehediPartFilePath = partPath,
+                    ShihabIsActiveWorker = true
+                }
+            };
+            shihabItem.SetMehediStatusEnum(ShihabDownloadStatus.ShihabDownloading, "Receiving FTP data...");
+            NotifyShihabItemChanged(shihabItem);
+
+            FtpWebRequest req = (FtpWebRequest)WebRequest.Create(normUrl);
+            req.Method = WebRequestMethods.Ftp.DownloadFile;
+            req.UseBinary = true;
+            req.UsePassive = _mehediConfig.ShihabFtpUsePassiveMode;
+            req.EnableSsl = enableTls;
+            if (resumeOffset > 0)
+            {
+                req.ContentOffset = resumeOffset;
+            }
+            ApplyFtpCredentials(req, normUrl, shihabItem);
+
+            Stopwatch singleWatch = Stopwatch.StartNew();
+            long singleLastMs = 0;
+            long singleLastBytes = resumeOffset;
+            long throttleStartMs = 0;
+            long throttleBytes = 0;
+
+            using (mehediToken.Register(delegate { try { req.Abort(); } catch { } }))
+            using (FtpWebResponse resp = (FtpWebResponse)req.GetResponse())
+            using (Stream netStream = resp.GetResponseStream())
+            using (FileStream fs = new FileStream(partPath, resumeOffset > 0 ? FileMode.Append : FileMode.Create, FileAccess.Write, FileShare.Read))
+            {
+                byte[] buf = new byte[32768];
+                int read;
+                while (!mehediToken.IsCancellationRequested && (read = netStream.Read(buf, 0, buf.Length)) > 0)
+                {
+                    fs.Write(buf, 0, read);
+                    shihabItem.MehediDownloadedBytes += read;
+                    shihabItem.MehediSegments[0].MehediDownloadedBytes = shihabItem.MehediDownloadedBytes;
+                    _mehediConfig.RecordQuotaBytes(read);
+                    ApplyMehediSpeedLimiter(shihabItem, read, singleWatch, ref throttleStartMs, ref throttleBytes, mehediToken);
+
+                    long nowMs = singleWatch.ElapsedMilliseconds;
+                    if (nowMs - singleLastMs >= 200)
+                    {
+                        double instBps = ((shihabItem.MehediDownloadedBytes - singleLastBytes) * 1000.0) / Math.Max(1.0, (double)(nowMs - singleLastMs));
+                        shihabItem.ShihabCurrentSpeedBps = instBps;
+                        singleLastBytes = shihabItem.MehediDownloadedBytes;
+                        singleLastMs = nowMs;
+                        shihabItem.ShihabStatusText = string.Format("{0:0.0}%", shihabItem.GetMehediPercent());
+                        NotifyShihabItemChanged(shihabItem);
+                    }
+                }
+            }
+
+            if (mehediToken.IsCancellationRequested) return;
+            shihabItem.MehediSegments[0].ShihabSegmentState = "Completed.";
+            shihabItem.MehediSegments[0].ShihabIsActiveWorker = false;
+            FinalizeShihabDownloadedFileAndOptionalAudioMux(shihabItem, partPath, mehediItemTempDir, false, mehediToken);
+            shihabItem.ShihabPartFilePath = "";
+            lock (_shihabEngineLock) { _mehediActiveCts.Remove(shihabItem.ShihabId); }
+            shihabItem.SetMehediStatusEnum(ShihabDownloadStatus.ShihabCompleted, "Complete");
+            PersistShihabState();
+            NotifyShihabItemChanged(shihabItem);
+            if (OnMehediItemCompleted != null) OnMehediItemCompleted(shihabItem);
+        }
+
+        private void ExecuteMehediTorrentDownload(
+            ShihabDownloadItem shihabItem,
+            string mehediItemTempDir,
+            CancellationToken mehediToken)
+        {
+            string sourceSpec = !string.IsNullOrWhiteSpace(shihabItem.ShihabTorrentMagnetOrPath)
+                ? shihabItem.ShihabTorrentMagnetOrPath
+                : shihabItem.MehediUrl;
+
+            // 1. Optional Debrid Torrent/Magnet Instant Cloud Unlocking (Real-Debrid / AllDebrid / Premiumize)
+            if (shihabItem.ShihabUseDebridForTorrent && !shihabItem.ShihabBypassDebrid)
+            {
+                string unlockedDirectUrl, unlockedName, providerUsed;
+                if (ShihabDebridManager.TryUnlockTorrentOrMagnetWithDebrid(
+                    sourceSpec,
+                    _mehediConfig,
+                    out unlockedDirectUrl,
+                    out unlockedName,
+                    out providerUsed) && !string.IsNullOrWhiteSpace(unlockedDirectUrl))
+                {
+                    EmitShihabLog(string.Format("[DebridTorrent] Unlocked torrent via {0} -> {1}", providerUsed, unlockedName));
+                    if (!string.IsNullOrWhiteSpace(unlockedName))
+                    {
+                        shihabItem.ShihabFileName = ShihabFormatHelpers.EnsureShihabUniqueFilePath(
+                            shihabItem.MehediSaveDirectory,
+                            ShihabFormatHelpers.SanitizeShihabFileName(unlockedName));
+                    }
+                    string debridPartPath = shihabItem.GetShihabFullTargetPath() + ".mhs.part";
+                    DownloadDirectShihabStreamToFile(shihabItem, unlockedDirectUrl, debridPartPath, shihabItem.ShihabTotalBytes, true, mehediToken);
+                    if (mehediToken.IsCancellationRequested) return;
+                    FinalizeShihabDownloadedFileAndOptionalAudioMux(shihabItem, debridPartPath, mehediItemTempDir, false, mehediToken);
+                    lock (_shihabEngineLock) { _mehediActiveCts.Remove(shihabItem.ShihabId); }
+                    shihabItem.SetMehediStatusEnum(ShihabDownloadStatus.ShihabCompleted, "Complete (" + providerUsed + ")");
+                    PersistShihabState();
+                    NotifyShihabItemChanged(shihabItem);
+                    if (OnMehediItemCompleted != null) OnMehediItemCompleted(shihabItem);
+                    return;
+                }
+            }
+
+            // 2. Parse .torrent or Magnet URI and execute full P2P + BEP-9/10 + BEP-15 UDP/HTTP + BEP-19 WebSeed Session
+            ShihabTorrentMetadata meta = sourceSpec.StartsWith("magnet:", StringComparison.OrdinalIgnoreCase)
+                ? ShihabTorrentManager.ParseMagnetUri(sourceSpec)
+                : (File.Exists(sourceSpec) ? ShihabTorrentManager.InspectTorrentFile(sourceSpec) : ShihabTorrentManager.ParseMagnetUri(sourceSpec));
+
+            if (meta.TotalSizeBytes > 0 && shihabItem.ShihabTotalBytes <= 0)
+            {
+                shihabItem.ShihabTotalBytes = meta.TotalSizeBytes;
+            }
+            if (!string.IsNullOrWhiteSpace(meta.Name) &&
+                (shihabItem.ShihabFileName == "download.bin" || shihabItem.ShihabFileName.StartsWith("magnet_", StringComparison.OrdinalIgnoreCase)))
+            {
+                shihabItem.ShihabFileName = ShihabFormatHelpers.SanitizeShihabFileName(meta.Name);
+            }
+
+            string p2pErr;
+            bool p2pOk = ShihabTorrentManager.ExecuteP2pTorrentSession(
+                shihabItem,
+                meta,
+                _mehediConfig,
+                _shihabStore.MehediBaseDirectory,
+                delegate { NotifyShihabItemChanged(shihabItem); },
+                mehediToken,
+                out p2pErr);
+
+            if (mehediToken.IsCancellationRequested)
+            {
+                return;
+            }
+            if (!p2pOk)
+            {
+                throw new IOException(!string.IsNullOrWhiteSpace(p2pErr) ? p2pErr : "BitTorrent P2P session failed.");
+            }
+
+            string completedPath = shihabItem.GetShihabFullTargetPath();
+            if (File.Exists(completedPath))
+            {
+                FinalizeShihabDownloadedFileAndOptionalAudioMux(shihabItem, completedPath, mehediItemTempDir, false, mehediToken);
+            }
+
+            lock (_shihabEngineLock) { _mehediActiveCts.Remove(shihabItem.ShihabId); }
+            shihabItem.ShihabCurrentSpeedBps = 0;
+            shihabItem.MehediEtaSeconds = 0;
+            shihabItem.SetMehediStatusEnum(ShihabDownloadStatus.ShihabCompleted, shihabItem.ShihabTorrentKeepSeeding ? "Seeded & Complete" : "Complete");
+            PersistShihabState();
+            NotifyShihabItemChanged(shihabItem);
+            if (OnMehediItemCompleted != null) OnMehediItemCompleted(shihabItem);
         }
 
         private static void ComputeShihabFileSha256AndSize(ShihabDownloadItem mehediItem, string shihabFilePath)
@@ -2663,19 +4119,29 @@ namespace ShihabMehediIDM
             if (_mehediConfig.MehediQueues == null) return;
             DateTime shihabNow = DateTime.Now;
             string mehediCurrentHhMm = shihabNow.ToString("HH:mm");
+            string currentYyyyMmDd = shihabNow.ToString("yyyy-MM-dd");
             string shihabDayShort = shihabNow.ToString("ddd", System.Globalization.CultureInfo.InvariantCulture);
 
             for (int mehediQ = 0; mehediQ < _mehediConfig.MehediQueues.Count; mehediQ++)
             {
                 MehediQueueConfig shihabQueue = _mehediConfig.MehediQueues[mehediQ];
-                bool mehediDayMatches = string.IsNullOrEmpty(shihabQueue.MehediActiveDaysCsv) ||
-                    shihabQueue.MehediActiveDaysCsv.IndexOf(shihabDayShort, StringComparison.OrdinalIgnoreCase) >= 0;
+                bool hasOnceDate = !string.IsNullOrWhiteSpace(shihabQueue.ShihabOnceAtDateYyyyMmDd);
+                bool onceDateMatches = hasOnceDate && string.Equals(shihabQueue.ShihabOnceAtDateYyyyMmDd.Trim(), currentYyyyMmDd, StringComparison.OrdinalIgnoreCase);
+                bool mehediDayMatches = hasOnceDate
+                    ? onceDateMatches
+                    : (string.IsNullOrEmpty(shihabQueue.MehediActiveDaysCsv) ||
+                       shihabQueue.MehediActiveDaysCsv.IndexOf(shihabDayShort, StringComparison.OrdinalIgnoreCase) >= 0);
 
                 if (shihabQueue.MehediEnableScheduledStart && mehediDayMatches &&
                     shihabQueue.ShihabStartTimeHhMm == mehediCurrentHhMm &&
                     shihabQueue.ShihabLastAutoStartMinute != mehediCurrentHhMm)
                 {
                     shihabQueue.ShihabLastAutoStartMinute = mehediCurrentHhMm;
+                    if (onceDateMatches)
+                    {
+                        shihabQueue.MehediEnableScheduledStart = false;
+                        shihabQueue.ShihabOnceAtDateYyyyMmDd = "";
+                    }
                     shihabQueue.MehediIsRunningNow = true;
                 }
 
@@ -2692,6 +4158,11 @@ namespace ShihabMehediIDM
                     PumpRunningMehediQueue(shihabQueue);
                 }
             }
+        }
+
+        public void StartMehediQueue(string mehediQueueName)
+        {
+            StartShihabQueue(mehediQueueName);
         }
 
         public void StartShihabQueue(string mehediQueueName)
@@ -2769,6 +4240,32 @@ namespace ShihabMehediIDM
             if (shihabActiveInQueue == 0 && mehediWaiting.Count == 0)
             {
                 shihabQueue.MehediIsRunningNow = false;
+                if (!string.IsNullOrWhiteSpace(shihabQueue.ShihabRunCommandWhenDone))
+                {
+                    try
+                    {
+                        EmitShihabLog("[Scheduler] Running post-queue command: " + shihabQueue.ShihabRunCommandWhenDone);
+                        ProcessStartInfo psi = new ProcessStartInfo("cmd.exe", "/C " + shihabQueue.ShihabRunCommandWhenDone)
+                        {
+                            UseShellExecute = false,
+                            CreateNoWindow = true
+                        };
+                        Process.Start(psi);
+                    }
+                    catch (Exception cmdEx)
+                    {
+                        EmitShihabLog("[Scheduler] Post-queue command failed: " + cmdEx.Message);
+                    }
+                }
+                bool hasPowerAction =
+                    shihabQueue.MehediExitAppWhenQueueFinishes ||
+                    _mehediConfig.MehediHangUpWhenDone ||
+                    (!string.IsNullOrWhiteSpace(shihabQueue.ShihabSystemPowerActionWhenDone) &&
+                     !string.Equals(shihabQueue.ShihabSystemPowerActionWhenDone, "None", StringComparison.OrdinalIgnoreCase));
+                if (hasPowerAction && OnQueueFinishedWithActions != null)
+                {
+                    try { OnQueueFinishedWithActions(shihabQueue); } catch { }
+                }
             }
         }
 

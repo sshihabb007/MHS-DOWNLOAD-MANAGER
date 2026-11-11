@@ -22,6 +22,8 @@ $shihabCsc = 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 $mehediOutExe = Join-Path $mehediBinDir 'mdm.exe'
 $shihabSources = @(
     (Join-Path $shihabProjectRoot 'src\ShihabDownloadModels.cs'),
+    (Join-Path $shihabProjectRoot 'src\ShihabAutoUpdaterAndQr.cs'),
+    (Join-Path $shihabProjectRoot 'src\ShihabAdvancedSubsystems.cs'),
     (Join-Path $shihabProjectRoot 'src\MehediMediaMuxer.cs'),
     (Join-Path $shihabProjectRoot 'src\MehediDynamicSegmentEngine.cs'),
     (Join-Path $shihabProjectRoot 'src\MehediBrowserBridgeAndNativeHost.cs'),
@@ -37,7 +39,11 @@ $shihabSources = @(
     /r:System.Drawing.dll `
     /r:System.Windows.Forms.dll `
     /r:System.Runtime.Serialization.dll `
+    /r:System.Security.dll `
+    /r:System.IO.Compression.dll `
+    /r:System.IO.Compression.FileSystem.dll `
     /r:System.Xml.dll `
+    /r:Microsoft.VisualBasic.dll `
     "/win32icon:$mehediIconIco" `
     "/resource:$mehediIconIco,ShihabMehediIDM.mdm_icon.ico" `
     "/resource:$shihabIconPng,ShihabMehediIDM.mdm_icon.png" `
@@ -90,6 +96,7 @@ try {
     foreach ($mehediExpected in @(
         'mdm.exe',
         'extension/manifest.json',
+        'extension/manifest.firefox.json',
         'extension/mehedi_content.js',
         'extension/mehedi_page_hook.js',
         'extension/shihab_background.js',

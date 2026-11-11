@@ -21,10 +21,15 @@
     <button class="shihab-toggle-btn" id="shihabToggleCaptureBtn">Enabled</button>
   </header>
 
+  <div class="shihab-update-banner" id="shihabUpdateBanner" style="display:none;">
+    <span id="shihabUpdateBannerText">Update Available!</span>
+    <button class="shihab-update-open-btn" id="shihabUpdateBannerBtn">Update</button>
+  </div>
+
   <section class="mehedi-section">
-    <label class="shihab-label">Quick Send URL to MHS Download Manager</label>
+    <label class="shihab-label">Quick Send URL / Magnet to MHS Download Manager</label>
     <div class="mehedi-row">
-      <input type="url" id="shihabQuickUrlInput" placeholder="https://example.com/file.zip" />
+      <input type="text" id="shihabQuickUrlInput" placeholder="https://example.com/file.zip or magnet:?xt=..." />
       <button class="mehedi-primary-btn" id="mehediSendUrlBtn">Send</button>
     </div>
   </section>
@@ -43,7 +48,10 @@
   </section>
 
   <footer class="shihab-footer">
-    <button class="mehedi-wide-btn" id="shihabGrabAllLinksBtn">⬇ Download All Links on Current Tab</button>
+    <div class="mehedi-footer-actions">
+      <button class="mehedi-wide-btn" id="shihabGrabAllLinksBtn">⬇ Download All Links</button>
+      <button class="shihab-secondary-btn" id="shihabOpenDesktopAppBtn" title="Bring MHS Download Manager window to front">Open App</button>
+    </div>
     <div class="mehedi-hint">
       <img src="images/author_shihab.jpg" alt="Mehedi Hasan Shihab" class="shihab-author-avatar" />
       <span>Hold <b>Alt</b> to bypass · By <a href="https://sshihabb007.github.io/" target="_blank" rel="noopener">Mehedi Hasan Shihab</a></span>
