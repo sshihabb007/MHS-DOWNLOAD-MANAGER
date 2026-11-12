@@ -1245,7 +1245,7 @@ namespace ShihabMehediIDM
 
     public static class ShihabThemePalette
     {
-        public const string ShihabMainHeaderTitle = "MHS Download Manager 1.0.3 (Mehedi Hasan Shihab)";
+        public const string ShihabMainHeaderTitle = "MHS Download Manager 1.0.4 (Mehedi Hasan Shihab)";
 
         [DllImport("dwmapi.dll", EntryPoint = "DwmSetWindowAttribute")]
         private static extern int SetMehediDwmWindowAttribute(IntPtr shihabHwnd, int mehediAttr, ref int shihabAttrValue, int mehediAttrSize);

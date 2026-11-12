@@ -1539,7 +1539,7 @@ namespace ShihabMehediIDM
             {
                 MessageBox.Show(
                     this,
-                    "MHS Download Manager 1.0.3 Configuration\nDeveloper: Mehedi Hasan Shihab (https://sshihabb007.github.io/)\n\n" +
+                    "MHS Download Manager 1.0.4 Configuration\nDeveloper: Mehedi Hasan Shihab (https://sshihabb007.github.io/)\n\n" +
                     "• General: Browser integration, startup launch, shortcut keys & web player panels\n" +
                     "• File types: Auto-captured extensions (wildcards like R0* supported), site & URL exclusions\n" +
                     "• Save to: Category folders, extensions, server creation/modification dates & temp directory\n" +
@@ -2709,7 +2709,7 @@ namespace ShihabMehediIDM
                 try
                 {
                     HttpWebRequest shihabReq = (HttpWebRequest)WebRequest.Create(shihabNode.Key);
-                    shihabReq.UserAgent = "Mozilla/5.0 ShihabMehediIDM-Grabber/1.0.3";
+                    shihabReq.UserAgent = "Mozilla/5.0 ShihabMehediIDM-Grabber/1.0.4";
                     shihabReq.Timeout = 10000;
                     using (HttpWebResponse mehediResp = (HttpWebResponse)shihabReq.GetResponse())
                     using (StreamReader shihabSr = new StreamReader(mehediResp.GetResponseStream(), Encoding.UTF8))

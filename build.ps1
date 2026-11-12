@@ -2,7 +2,7 @@ param(
     [string]$OutDir = ''
 )
 $ErrorActionPreference = 'Stop'
-$shihabAppVersion = '1.0.3'
+$shihabAppVersion = '1.0.4'
 $shihabProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $mehediBinDir = if ([string]::IsNullOrWhiteSpace($OutDir)) { Join-Path $shihabProjectRoot 'bin' } else { $OutDir }
 $shihabObjDir = Join-Path $shihabProjectRoot 'obj'
@@ -113,7 +113,7 @@ try {
     $mehediPayloadInspect.Dispose()
 }
 
-# 3. Compile x64 Setup Wizard (MHS-Download-Manager-Setup-1.0.3-x64.exe)
+# 3. Compile x64 Setup Wizard (MHS-Download-Manager-Setup-1.0.4-x64.exe)
 Get-ChildItem -Path $mehediBinDir -Filter 'MHS-Download-Manager-Setup-*-x64.exe' -ErrorAction SilentlyContinue | Remove-Item -Force
 $mehediSetupOutExe = Join-Path $mehediBinDir "MHS-Download-Manager-Setup-$shihabAppVersion-x64.exe"
 $shihabInstallerSrc = Join-Path $shihabProjectRoot 'src\installer\ShihabSetupWizard.cs'

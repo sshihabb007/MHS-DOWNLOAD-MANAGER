@@ -16,13 +16,13 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 using Microsoft.Win32;
 
-[assembly: AssemblyTitle("MHS Download Manager 1.0.3 Setup (Mehedi Hasan Shihab)")]
-[assembly: AssemblyDescription("Official Windows x64 Installer & Uninstaller for MHS Download Manager 1.0.3 (Mehedi Hasan Shihab)")]
+[assembly: AssemblyTitle("MHS Download Manager 1.0.4 Setup (Mehedi Hasan Shihab)")]
+[assembly: AssemblyDescription("Official Windows x64 Installer & Uninstaller for MHS Download Manager 1.0.4 (Mehedi Hasan Shihab)")]
 [assembly: AssemblyCompany("Mehedi Hasan Shihab")]
 [assembly: AssemblyProduct("MHS Download Manager Setup")]
 [assembly: AssemblyCopyright("Copyright (c) 2026 Mehedi Hasan Shihab")]
-[assembly: AssemblyVersion("1.0.3.0")]
-[assembly: AssemblyFileVersion("1.0.3.0")]
+[assembly: AssemblyVersion("1.0.4.0")]
+[assembly: AssemblyFileVersion("1.0.4.0")]
 
 namespace ShihabMehediInstaller
 {
@@ -57,8 +57,8 @@ namespace ShihabMehediInstaller
 
     public static class ShihabSetupTheme
     {
-        public const string ShihabProductTitle = "MHS Download Manager 1.0.3 (Mehedi Hasan Shihab)";
-        public const string MehediVersionText = "1.0.3";
+        public const string ShihabProductTitle = "MHS Download Manager 1.0.4 (Mehedi Hasan Shihab)";
+        public const string MehediVersionText = "1.0.4";
         public const string ShihabUninstallRegKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\MHSDownloadManager";
         public const string MehediRunRegKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
         public const string ShihabRunValueName = "MHSDownloadManager";
@@ -1022,15 +1022,15 @@ namespace ShihabMehediInstaller
             _mehediStepWelcome = new Panel { Bounds = shihabBodyBounds, BackColor = BackColor };
             Label shihabWelHead = new Label
             {
-                Text = "Welcome to MHS Download Manager 1.0.3 Setup",
+                Text = "Welcome to MHS Download Manager 1.0.4 Setup",
                 Location = new Point(22, 16),
                 AutoSize = true,
                 Font = new Font("Segoe UI Semibold", 11f)
             };
             Label mehediWelDesc = new Label
             {
-                Text = "This wizard will install MHS Download Manager 1.0.3 (Mehedi Hasan Shihab) on your computer,\n" +
-                       "keeping the unpacked 'extension' folder inside your installation directory ready to load in Chrome, Brave, and Edge.",
+                Text = "This wizard will install MHS Download Manager 1.0.4 (Mehedi Hasan Shihab) on your computer,\n" +
+                       "keeping the unpacked 'extension' folder inside your installation directory ready to load in Chrome, Brave, Edge, and Firefox.",
                 Location = new Point(22, 44),
                 Size = new Size(595, 42),
                 ForeColor = ShihabSetupTheme.GetShihabMutedText()
@@ -1048,14 +1048,15 @@ namespace ShihabMehediInstaller
                 Font = new Font("Consolas", 8.8f),
                 Text =
                     "Planned Installation Components (<InstallDir>):\r\n" +
-                    "  • mdm.exe          — x64 Download Accelerator (Dark Transfers UI, 1-32 Dynamic Segments)\r\n" +
-                    "  • extension\\       — Ready-to-load Unpacked MV3 Extension (Chrome / Brave / Edge)\r\n" +
+                    "  • mdm.exe          — x64 Download Accelerator (1-128 Sparse Dynamic Segments)\r\n" +
+                    "  • extension\\       — Ready-to-load Unpacked MV3 Extension (Chromium & Firefox)\r\n" +
                     "  • Uninstall.exe    — Clean Windows Uninstaller\r\n\r\n" +
-                    "Included v1.0.3 Capabilities:\r\n" +
-                    "  • Sleek Dark Transfers Dashboard UI + Local Storage & Speed Limiter card\r\n" +
-                    "  • Outside-corner 'Download Video' pill + MHS Stream Sniffer quality dropdown\r\n" +
-                    "  • Strict user-gesture download guard (zero unsolicited popups on browser startup)\r\n" +
-                    "  • High-speed YouTube HD/4K video + lossless MP4 / WebM / MKV muxer\r\n\r\n" +
+                    "Included v1.0.4 Capabilities:\r\n" +
+                    "  • GitHub Releases Auto-Updater + Tray & Popup Update Notifications (SHA-256 verified)\r\n" +
+                    "  • 1-128 Sparse Dynamic Segments + FTP/FTPS + CRC32/MD5/SHA-1/SHA-256/SHA-512 Checksums\r\n" +
+                    "  • BitTorrent & Magnet Client + Managed yt-dlp / ffmpeg / gallery-dl + Debrid Cloud\r\n" +
+                    "  • Encrypted DNS (DoH), SOCKS5/PAC Relay, VPN Kill-Switch, DPAPI Vault, LAN QR Web UI & MCP\r\n" +
+                    "  • Outside-corner 'Download Video' pill + 14-browser integration + lossless MP4/WebM/MKV muxer\r\n\r\n" +
                     "License: MIT License — Copyright (c) 2026 Mehedi Hasan Shihab"
             };
             _mehediStepWelcome.Controls.AddRange(new Control[] { shihabWelHead, mehediWelDesc, shihabPlanBox });
@@ -1161,7 +1162,7 @@ namespace ShihabMehediInstaller
             _mehediStepProgress = new Panel { Bounds = shihabBodyBounds, BackColor = BackColor };
             Label shihabProgTitle = new Label
             {
-                Text = "Installing MHS Download Manager 1.0.3...",
+                Text = "Installing MHS Download Manager 1.0.4...",
                 Location = new Point(22, 16),
                 AutoSize = true,
                 Font = new Font("Segoe UI Semibold", 11f)
@@ -1250,7 +1251,7 @@ namespace ShihabMehediInstaller
 
             _shihabLaunchAppCheck = new CheckBox
             {
-                Text = "Launch MHS Download Manager 1.0.3 now",
+                Text = "Launch MHS Download Manager 1.0.4 now",
                 Location = new Point(24, 152),
                 AutoSize = true,
                 Checked = true,
