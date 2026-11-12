@@ -16,8 +16,8 @@ Developed by **[Mehedi Hasan Shihab](https://sshihabb007.github.io/)** (`@sshiha
 
 <br />
 
-[![Download Setup Installer](https://img.shields.io/badge/%E2%AC%87%20Download%20Setup%20Installer%20(x64)-v1.0.4-0D74E7?style=for-the-badge&logo=windows11&logoColor=white)](https://github.com/sshihabb007/MHS-DOWNLOAD-MANAGER/releases/latest/download/MHS-Download-Manager-Setup-1.0.4-x64.exe)
-[![Download Portable EXE](https://img.shields.io/badge/%E2%AC%87%20Download%20Portable%20EXE%20(x64)-v1.0.4-1E293B?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/sshihabb007/MHS-DOWNLOAD-MANAGER/releases/latest/download/MHS-Download-Manager-Portable-1.0.4-x64.exe)
+[![Download Setup Installer](https://img.shields.io/badge/%E2%AC%87%20Download%20Setup%20Installer%20(x64)-v1.0.5-0D74E7?style=for-the-badge&logo=windows11&logoColor=white)](https://github.com/sshihabb007/MHS-DOWNLOAD-MANAGER/releases/latest/download/MHS-Download-Manager-Setup-1.0.5-x64.exe)
+[![Download Portable EXE](https://img.shields.io/badge/%E2%AC%87%20Download%20Portable%20EXE%20(x64)-v1.0.5-1E293B?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/sshihabb007/MHS-DOWNLOAD-MANAGER/releases/latest/download/MHS-Download-Manager-Portable-1.0.5-x64.exe)
 
 [**Installation Guide**](#installation) · [**Load Browser Extension**](#extension-setup) · [**Key Features**](#key-features) · [**Architecture**](#architecture) · [**CLI Reference**](#cli-reference) · [**Developer**](#developer)
 
@@ -27,7 +27,7 @@ Developed by **[Mehedi Hasan Shihab](https://sshihabb007.github.io/)** (`@sshiha
 
 ## Overview
 
-**MHS Download Manager (`mdm.exe` v1.0.4)** is a clean-room, open-source Windows x64 download accelerator and Manifest V3 Chromium browser extension suite crafted in pure C# and vanilla JavaScript by **Mehedi Hasan Shihab**.
+**MHS Download Manager (`mdm.exe` v1.0.5)** is a clean-room, open-source Windows x64 download accelerator and Manifest V3 Chromium browser extension suite crafted in pure C# and vanilla JavaScript by **Mehedi Hasan Shihab**.
 
 Engineered for maximum throughput and zero bloat, the desktop application, custom lossless container muxer, and graphical Windows Setup Wizard compile directly with the built-in Windows `.NET Framework 4.8` compiler (`csc.exe`) — requiring **zero external NuGet packages, zero third-party DLLs, and no external `ffmpeg.exe` installation**.
 
@@ -42,17 +42,17 @@ Every [GitHub Release](https://github.com/sshihabb007/MHS-DOWNLOAD-MANAGER/relea
 
 | Release Asset | Recommended For | What It Contains |
 | :--- | :--- | :--- |
-| **`MHS-Download-Manager-Setup-1.0.4-x64.exe`** | **Standard Desktop Install *(Recommended)*** | Graphical Windows x64 Setup Wizard that installs `mdm.exe`, `Uninstall.exe`, Desktop & Start Menu shortcuts, Native Messaging host, and keeps the ready-to-load **`extension\`** folder directly inside `<InstallDir>\extension`. |
-| **`MHS-Download-Manager-Portable-1.0.4-x64.exe`** | **Portable / USB / Zero-Install Users** | Standalone single-file `mdm.exe` executable. Run directly from any folder with no installer or registry changes. |
-| **`MHS-Browser-Extension-1.0.4.zip`** | **Portable Users Only** | Unpacked Manifest V3 browser extension archive for Portable users *(Setup `.exe` users already get `<InstallDir>\extension` automatically)*. |
+| **`MHS-Download-Manager-Setup-1.0.5-x64.exe`** | **Standard Desktop Install *(Recommended)*** | Graphical Windows x64 Setup Wizard that installs `mdm.exe`, `Uninstall.exe`, Desktop & Start Menu shortcuts, Native Messaging host, and keeps the ready-to-load **`extension\`** folder directly inside `<InstallDir>\extension`. |
+| **`MHS-Download-Manager-Portable-1.0.5-x64.exe`** | **Portable / USB / Zero-Install Users** | Standalone single-file `mdm.exe` executable. Run directly from any folder with no installer or registry changes. |
+| **`MHS-Browser-Extension-1.0.5.zip`** | **Portable Users Only** | Unpacked Manifest V3 browser extension archive for Portable users *(Setup `.exe` users already get `<InstallDir>\extension` automatically)*. |
 | **`SHA256SUMS.txt`** | **Integrity Verification** | Official SHA-256 hashes for verifying downloaded release binaries. |
 
 ---
 
 ### Option A — Install Using the Setup `.exe` *(Recommended)*
 
-1. Download **[`MHS-Download-Manager-Setup-1.0.4-x64.exe`](https://github.com/sshihabb007/MHS-DOWNLOAD-MANAGER/releases/latest/download/MHS-Download-Manager-Setup-1.0.4-x64.exe)** from [**GitHub Releases**](https://github.com/sshihabb007/MHS-DOWNLOAD-MANAGER/releases/latest).
-2. Double-click `MHS-Download-Manager-Setup-1.0.4-x64.exe` to launch the Setup Wizard.
+1. Download **[`MHS-Download-Manager-Setup-1.0.5-x64.exe`](https://github.com/sshihabb007/MHS-DOWNLOAD-MANAGER/releases/latest/download/MHS-Download-Manager-Setup-1.0.5-x64.exe)** from [**GitHub Releases**](https://github.com/sshihabb007/MHS-DOWNLOAD-MANAGER/releases/latest).
+2. Double-click `MHS-Download-Manager-Setup-1.0.5-x64.exe` to launch the Setup Wizard.
 3. Choose your installation directory (or keep the default user-writable folder — no UAC prompt required):
    ```text
    %LOCALAPPDATA%\Programs\MHS Download Manager
@@ -61,7 +61,7 @@ Every [GitHub Release](https://github.com/sshihabb007/MHS-DOWNLOAD-MANAGER/relea
 4. Click **Install Now**. Setup installs the desktop app and keeps the complete unpacked **`extension\`** folder inside your installation directory:
    ```text
    <InstallDir>\
-   ├── mdm.exe                      # MHS Download Manager 1.0.4 (x64 Desktop App)
+   ├── mdm.exe                      # MHS Download Manager 1.0.5 (x64 Desktop App)
    ├── extension\                   # Unpacked Browser Extension (load this folder in browsers!)
    │   ├── manifest.json            # Manifest V3 configuration
    │   ├── mehedi_content.js        # Floating 'Download Video' pill & MHS Stream Sniffer
@@ -73,20 +73,20 @@ Every [GitHub Release](https://github.com/sshihabb007/MHS-DOWNLOAD-MANAGER/relea
    ├── README.md                    # Documentation
    └── LICENSE                      # MIT License
    ```
-5. Keep **"Launch MHS Download Manager 1.0.4 now"** checked on the final screen and click **Finish**.
+5. Keep **"Launch MHS Download Manager 1.0.5 now"** checked on the final screen and click **Finish**.
 
 ### Option B — Run the Portable `.exe` *(No Installation)*
 
-1. Download **[`MHS-Download-Manager-Portable-1.0.4-x64.exe`](https://github.com/sshihabb007/MHS-DOWNLOAD-MANAGER/releases/latest/download/MHS-Download-Manager-Portable-1.0.4-x64.exe)** and place it in any permanent folder (for example, `D:\Tools\MHS-Download-Manager\`).
-2. *(Optional — for browser integration)* Download **[`MHS-Browser-Extension-1.0.4.zip`](https://github.com/sshihabb007/MHS-DOWNLOAD-MANAGER/releases/latest/download/MHS-Browser-Extension-1.0.4.zip)** and extract it into `D:\Tools\MHS-Download-Manager\extension\`.
-3. Run `MHS-Download-Manager-Portable-1.0.4-x64.exe`. It automatically starts the local browser bridge on `http://127.0.0.1:45779`.
+1. Download **[`MHS-Download-Manager-Portable-1.0.5-x64.exe`](https://github.com/sshihabb007/MHS-DOWNLOAD-MANAGER/releases/latest/download/MHS-Download-Manager-Portable-1.0.5-x64.exe)** and place it in any permanent folder (for example, `D:\Tools\MHS-Download-Manager\`).
+2. *(Optional — for browser integration)* Download **[`MHS-Browser-Extension-1.0.5.zip`](https://github.com/sshihabb007/MHS-DOWNLOAD-MANAGER/releases/latest/download/MHS-Browser-Extension-1.0.5.zip)** and extract it into `D:\Tools\MHS-Download-Manager\extension\`.
+3. Run `MHS-Download-Manager-Portable-1.0.5-x64.exe`. It automatically starts the local browser bridge on `http://127.0.0.1:45779`.
 
 ---
 
 <a id="extension-setup"></a>
 ## 🌐 How to Load the Browser Extension from the Installation Directory
 
-When you install MHS Download Manager via `MHS-Download-Manager-Setup-1.0.4-x64.exe`, the unpacked extension is already placed inside **`<InstallDir>\extension`** so you can load it directly into any Chromium browser.
+When you install MHS Download Manager via `MHS-Download-Manager-Setup-1.0.5-x64.exe`, the unpacked extension is already placed inside **`<InstallDir>\extension`** so you can load it directly into any Chromium browser.
 
 ### Step 1 — Locate Your `<InstallDir>\extension` Path
 
@@ -113,7 +113,7 @@ Use **any** of these 3 quick methods to get the exact folder path:
    - Click the address bar at the top, paste `%LOCALAPPDATA%\Programs\MHS Download Manager\extension` *(or browse to `<YourInstallDir>\extension`)*, and press **Enter**.
    - Make sure you are selecting the **`extension`** folder itself (the folder that directly contains `manifest.json`), then click **Select Folder**.
 5. Click the puzzle-piece **Extensions** icon in your browser toolbar and **Pin** **MHS Download Manager Integration Module**.
-6. Click the pinned **MHS** icon — when `mdm.exe` is running, the status dot turns green and displays **`Connected · mdm.exe v1.0.4`**.
+6. Click the pinned **MHS** icon — when `mdm.exe` is running, the status dot turns green and displays **`Connected · mdm.exe v1.0.5`**.
 
 > **Important Tips:**
 > - **Do not delete `<InstallDir>\extension`:** Chromium loads unpacked extensions directly from that directory on disk.
@@ -126,6 +126,7 @@ Use **any** of these 3 quick methods to get the exact folder path:
 
 | Capability | Details |
 | :--- | :--- |
+| **🎛️ Top Menu Bar & 11-Button Gradient Ribbon** | Full-width top menu bar (`Tasks`, `File`, `Downloads`, `View`, `Help`, `Registration`) and GDI+ 3-stop gradient vector icon toolbar (`Add URL`, `Resume`, `Stop`, `Stop All`, `Delete`, `Delete Completed`, `Options`, `Scheduler`, `Start Queue ▾`, `Stop Queue ▾`, `Tell a Friend`) with live selection state sync, `Sun..Sat` queue scheduler, periodic sync, and QR sharing. |
 | **⚡ 1–128 Sparse Dynamic Segment Engine** | Pre-allocates a unified NTFS sparse `.mhs.part` file (`FSCTL_SET_SPARSE`) with `4096`-byte page-aligned dynamic halving, Connection 1 kept-stream reuse, TTFB stall preemption, slow-connection shedding (`< 1/4` peak speed), RFC 9110 `ETag` + `64`-byte resume overlap verification, multi-segment `FTP`/`FTPS` (`REST`), and `CRC32`/`MD5`/`SHA-1`/`SHA-256`/`SHA-512` checksum verification. |
 | **🔔 GitHub Releases Auto-Updater & Popup** | Automatically checks GitHub Releases (`5s` after launch + every `6h`, or `Ctrl+U`), notifies via Tray + themed Update Popup + browser extension banner, verifies `SHA256SUMS.txt` (fail-closed), and performs one-click silent update + restart for both Setup and Portable modes. |
 | **🧲 BitTorrent, Media Suite & Debrid Cloud** | Full BitTorrent & Magnet client (`BEP-3`, `BEP-9/10` magnet metadata, `BEP-15` UDP trackers, `BEP-19` WebSeeds, `.torrent` creator, IP blocklists), managed `yt-dlp` / `ffmpeg` / `gallery-dl` video/playlist/gallery downloaders, Real-Debrid / AllDebrid / Premiumize unlocking, Google Drive/Docs direct export, and hardened Zip-Slip/bomb-safe archive extraction. |
@@ -178,8 +179,8 @@ MHS-DOWNLOAD-MANAGER/
 │   ├── mdm.png                             # High-resolution brand logo
 │   └── author_shihab.jpg                   # Developer portrait embedded in About dialog
 ├── extension/                              # Manifest V3 Browser Extension (Chromium + Firefox)
-│   ├── manifest.json                       # Chromium MV3 manifest (v1.0.4)
-│   ├── manifest.firefox.json               # Firefox / Gecko MV3 manifest (v1.0.4)
+│   ├── manifest.json                       # Chromium MV3 manifest (v1.0.5)
+│   ├── manifest.firefox.json               # Firefox / Gecko MV3 manifest (v1.0.5)
 │   ├── mehedi_page_hook.js                 # MSE/XHR/fetch & EME DRM stream hook
 │   ├── mehedi_content.js                   # Floating Download Video pill & Stream Sniffer menu
 │   ├── shihab_background.js                # User-gesture guard, DNR, POST & Browser Fetch Relay
@@ -215,13 +216,13 @@ No Visual Studio workload, NuGet restore, or external SDK is required — any st
 git clone https://github.com/sshihabb007/MHS-DOWNLOAD-MANAGER.git
 cd MHS-DOWNLOAD-MANAGER
 
-# Compile both bin\mdm.exe and bin\MHS-Download-Manager-Setup-1.0.4-x64.exe
+# Compile both bin\mdm.exe and bin\MHS-Download-Manager-Setup-1.0.5-x64.exe
 powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
 ```
 
 Build outputs generated in `bin\`:
-- `bin\mdm.exe` — Standalone x64 desktop application (also published as `MHS-Download-Manager-Portable-1.0.4-x64.exe` in Releases)
-- `bin\MHS-Download-Manager-Setup-1.0.4-x64.exe` — Official Windows x64 Setup Installer (embeds `mdm.exe`, `extension\`, `README.md`, and `LICENSE`)
+- `bin\mdm.exe` — Standalone x64 desktop application (also published as `MHS-Download-Manager-Portable-1.0.5-x64.exe` in Releases)
+- `bin\MHS-Download-Manager-Setup-1.0.5-x64.exe` — Official Windows x64 Setup Installer (embeds `mdm.exe`, `extension\`, `README.md`, and `LICENSE`)
 
 ---
 
@@ -254,10 +255,10 @@ mdm.exe /d <URL> [/p <LocalPath>] [/f <LocalFileName>] [/n] [/q] [/a] [/s]
 | `--headless` | Run background download engine, local bridge, and LAN Remote UI without GUI |
 | `--forget-sign-ins` | Purge all DPAPI-encrypted credentials and tokens from the local vault |
 
-### Setup Installer CLI (`MHS-Download-Manager-Setup-1.0.4-x64.exe`)
+### Setup Installer CLI (`MHS-Download-Manager-Setup-1.0.5-x64.exe`)
 
 ```text
-MHS-Download-Manager-Setup-1.0.4-x64.exe [--shihab-silent] [--shihab-install-dir <Path>] [--shihab-no-registry]
+MHS-Download-Manager-Setup-1.0.5-x64.exe [--shihab-silent] [--shihab-install-dir <Path>] [--shihab-no-registry]
 ```
 
 | Flag | Description |

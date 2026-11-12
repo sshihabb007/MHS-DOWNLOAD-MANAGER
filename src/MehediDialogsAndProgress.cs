@@ -66,6 +66,10 @@ namespace ShihabMehediIDM
             {
                 mehediFill = _mehediDark ? Color.FromArgb(16, 17, 23) : Color.FromArgb(236, 239, 246);
             }
+            else if (shihabArgs.ToolStrip is MenuStrip)
+            {
+                mehediFill = _mehediDark ? Color.FromArgb(27, 29, 35) : Color.FromArgb(244, 246, 250);
+            }
             else
             {
                 mehediFill = _mehediDark ? Color.FromArgb(18, 19, 25) : Color.FromArgb(244, 246, 250);
@@ -74,7 +78,15 @@ namespace ShihabMehediIDM
             {
                 shihabArgs.Graphics.FillRectangle(shihabBrush, shihabArgs.AffectedBounds);
             }
-            if (_shihabIsLargeToolbar && !(shihabArgs.ToolStrip is ToolStripDropDown))
+            if (shihabArgs.ToolStrip is MenuStrip)
+            {
+                Color menuBotLine = _mehediDark ? Color.FromArgb(62, 66, 76) : Color.FromArgb(208, 215, 226);
+                using (Pen menuBotPen = new Pen(menuBotLine, 1f))
+                {
+                    shihabArgs.Graphics.DrawLine(menuBotPen, 0, shihabArgs.ToolStrip.Height - 1, shihabArgs.ToolStrip.Width, shihabArgs.ToolStrip.Height - 1);
+                }
+            }
+            else if (_shihabIsLargeToolbar && !(shihabArgs.ToolStrip is ToolStripDropDown))
             {
                 Color shihabBotLine = _mehediDark ? Color.FromArgb(30, 33, 45) : Color.FromArgb(212, 218, 228);
                 using (Pen shihabBotPen = new Pen(shihabBotLine))
@@ -124,7 +136,29 @@ namespace ShihabMehediIDM
         {
             if (shihabTextArgs.Item != null)
             {
-                if (_shihabIsLargeToolbar && !(shihabTextArgs.ToolStrip is ToolStripDropDown))
+                if (!shihabTextArgs.Item.Enabled)
+                {
+                    Color disabledCol = _mehediDark ? Color.FromArgb(108, 114, 128) : Color.FromArgb(148, 163, 184);
+                    TextFormatFlags flags = TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis;
+                    if (shihabTextArgs.TextFormat != TextFormatFlags.Default)
+                    {
+                        flags = shihabTextArgs.TextFormat;
+                    }
+                    TextRenderer.DrawText(
+                        shihabTextArgs.Graphics,
+                        shihabTextArgs.Text,
+                        shihabTextArgs.TextFont,
+                        shihabTextArgs.TextRectangle,
+                        disabledCol,
+                        flags);
+                    return;
+                }
+                if (shihabTextArgs.ToolStrip is MenuStrip)
+                {
+                    shihabTextArgs.TextColor = _mehediDark ? Color.FromArgb(238, 242, 248) : Color.FromArgb(20, 26, 36);
+                    shihabTextArgs.TextFormat &= ~TextFormatFlags.HidePrefix;
+                }
+                else if (_shihabIsLargeToolbar && !(shihabTextArgs.ToolStrip is ToolStripDropDown))
                 {
                     bool mehediPrimaryAdd = Equals(shihabTextArgs.Item.Tag, "add");
                     bool shihabHovered = shihabTextArgs.Item.Selected || shihabTextArgs.Item.Pressed;
@@ -1245,7 +1279,7 @@ namespace ShihabMehediIDM
 
     public static class ShihabThemePalette
     {
-        public const string ShihabMainHeaderTitle = "MHS Download Manager 1.0.4 (Mehedi Hasan Shihab)";
+        public const string ShihabMainHeaderTitle = "MHS Download Manager 1.0.5 (Mehedi Hasan Shihab)";
 
         [DllImport("dwmapi.dll", EntryPoint = "DwmSetWindowAttribute")]
         private static extern int SetMehediDwmWindowAttribute(IntPtr shihabHwnd, int mehediAttr, ref int shihabAttrValue, int mehediAttrSize);

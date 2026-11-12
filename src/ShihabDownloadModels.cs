@@ -331,6 +331,8 @@ namespace ShihabMehediIDM
         [DataMember] public string ShihabOnceAtDateYyyyMmDd { get; set; }
         [DataMember] public string ShihabRunCommandWhenDone { get; set; }
         [DataMember] public string ShihabSystemPowerActionWhenDone { get; set; }
+        [DataMember] public bool MehediEnablePeriodicSync { get; set; }
+        [DataMember] public int ShihabPeriodicSyncMinutes { get; set; }
 
         [IgnoreDataMember]
         public bool MehediExitAppWhenQueueFinishes
@@ -340,10 +342,23 @@ namespace ShihabMehediIDM
         }
 
         [IgnoreDataMember] public bool MehediIsRunningNow { get; set; }
+        [IgnoreDataMember] public bool MehediHadWorkInCurrentRun { get; set; }
         [IgnoreDataMember] public string ShihabLastAutoStartMinute { get; set; }
         [IgnoreDataMember] public string MehediLastAutoStopMinute { get; set; }
+        [IgnoreDataMember] public DateTime ShihabLastPeriodicSyncUtc { get; set; }
+
+        [OnDeserializing]
+        private void InitDefaultsOnDeserializing(StreamingContext ctx)
+        {
+            ApplyDefaultFieldValues();
+        }
 
         public MehediQueueConfig()
+        {
+            ApplyDefaultFieldValues();
+        }
+
+        private void ApplyDefaultFieldValues()
         {
             ShihabQueueName = "Main Download Queue";
             MehediMaxConcurrentFiles = 4;
@@ -359,9 +374,13 @@ namespace ShihabMehediIDM
             ShihabOnceAtDateYyyyMmDd = "";
             ShihabRunCommandWhenDone = "";
             ShihabSystemPowerActionWhenDone = "None";
+            MehediEnablePeriodicSync = false;
+            ShihabPeriodicSyncMinutes = 120;
             MehediIsRunningNow = false;
+            MehediHadWorkInCurrentRun = false;
             ShihabLastAutoStartMinute = "";
             MehediLastAutoStopMinute = "";
+            ShihabLastPeriodicSyncUtc = DateTime.MinValue;
         }
     }
 
@@ -1066,6 +1085,8 @@ namespace ShihabMehediIDM
             MehediQueueConfig mehediSyncQueue = new MehediQueueConfig();
             mehediSyncQueue.ShihabQueueName = "Synchronization Queue";
             mehediSyncQueue.MehediMaxConcurrentFiles = 2;
+            mehediSyncQueue.MehediEnablePeriodicSync = true;
+            mehediSyncQueue.ShihabPeriodicSyncMinutes = 120;
 
             mehediCfg.MehediQueues = new List<MehediQueueConfig> { shihabMainQueue, mehediSyncQueue };
             mehediCfg.ShihabSiteLogins = new List<ShihabSiteLoginCredential>();
@@ -1689,6 +1710,44 @@ namespace ShihabMehediIDM
                                 {
                                     shihabLoaded.MehediQueues = MehediAppConfiguration.CreateShihabDefault(MehediBaseDirectory).MehediQueues;
                                 }
+                                else
+                                {
+                                    bool hasMainQueue = false;
+                                    bool hasSyncQueue = false;
+                                    for (int qi = 0; qi < shihabLoaded.MehediQueues.Count; qi++)
+                                    {
+                                        MehediQueueConfig qc = shihabLoaded.MehediQueues[qi];
+                                        if (qc == null) continue;
+                                        if (qc.ShihabPeriodicSyncMinutes <= 0) qc.ShihabPeriodicSyncMinutes = 120;
+                                        if (string.Equals(qc.ShihabQueueName, "Main Download Queue", StringComparison.OrdinalIgnoreCase))
+                                        {
+                                            hasMainQueue = true;
+                                        }
+                                        else if (string.Equals(qc.ShihabQueueName, "Synchronization Queue", StringComparison.OrdinalIgnoreCase))
+                                        {
+                                            hasSyncQueue = true;
+                                        }
+                                    }
+                                    if (!hasMainQueue)
+                                    {
+                                        shihabLoaded.MehediQueues.Insert(0, new MehediQueueConfig
+                                        {
+                                            ShihabQueueName = "Main Download Queue",
+                                            MehediMaxConcurrentFiles = 4
+                                        });
+                                    }
+                                    if (!hasSyncQueue)
+                                    {
+                                        int insertPos = Math.Min(1, shihabLoaded.MehediQueues.Count);
+                                        shihabLoaded.MehediQueues.Insert(insertPos, new MehediQueueConfig
+                                        {
+                                            ShihabQueueName = "Synchronization Queue",
+                                            MehediMaxConcurrentFiles = 2,
+                                            MehediEnablePeriodicSync = true,
+                                            ShihabPeriodicSyncMinutes = 120
+                                        });
+                                    }
+                                }
                                 if (shihabLoaded.ShihabSiteLogins == null)
                                 {
                                     shihabLoaded.ShihabSiteLogins = new List<ShihabSiteLoginCredential>();
@@ -1753,7 +1812,7 @@ namespace ShihabMehediIDM
                                 {
                                     shihabLoaded.ShihabThemeName = "Obsidian Dark";
                                 }
-                                if (shihabLoaded.ShihabUiScalePercent < 100 || shihabLoaded.ShihabUiScalePercent > 200)
+                                if (shihabLoaded.ShihabUiScalePercent < 80 || shihabLoaded.ShihabUiScalePercent > 200)
                                 {
                                     shihabLoaded.ShihabUiScalePercent = 100;
                                 }

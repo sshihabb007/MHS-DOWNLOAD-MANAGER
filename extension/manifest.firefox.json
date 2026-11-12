@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "MHS Download Manager Integration Module",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Capture downloads, torrents, magnets, and web videos with MHS Download Manager (mdm.exe) by Mehedi Hasan Shihab.",
   "author": "Mehedi Hasan Shihab (sshihabb007)",
   "homepage_url": "https://sshihabb007.github.io/",
@@ -18,7 +18,7 @@
     "128": "images/shihab_logo128.png"
   },
   "action": {
-    "default_title": "MHS Download Manager 1.0.4 (Mehedi Hasan Shihab)",
+    "default_title": "MHS Download Manager 1.0.5 (Mehedi Hasan Shihab)",
     "default_popup": "shihab_popup.html",
     "default_icon": {
       "16": "images/shihab_logo16.png",

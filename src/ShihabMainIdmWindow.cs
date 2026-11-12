@@ -562,6 +562,765 @@ namespace ShihabMehediIDM
         }
     }
 
+    internal sealed class ShihabTopRibbonButtonSpec
+    {
+        public string Id;
+        public string LocalizationKey;
+        public string DefaultText;
+        public string DisplayText;
+        public string ToolTipText;
+        public bool Enabled;
+        public bool HasSplitDropDown;
+        public Action OnPrimaryClick;
+        public Action<Control, Point> OnSplitDropDownClick;
+        public Rectangle Bounds;
+        public Rectangle SplitDropBounds;
+    }
+
+    internal static class ShihabTopRibbonIconRenderer
+    {
+        public static void DrawVectorIcon(Graphics g, Rectangle bounds, string iconId, bool enabled, bool darkMode)
+        {
+            if (g == null || bounds.Width < 12 || bounds.Height < 12) return;
+
+            SmoothingMode prevSmooth = g.SmoothingMode;
+            PixelOffsetMode prevOffset = g.PixelOffsetMode;
+            g.SmoothingMode = SmoothingMode.HighQuality;
+            g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+
+            float size = Math.Min(bounds.Width, bounds.Height);
+            float ox = bounds.X + (bounds.Width - size) * 0.5f;
+            float oy = bounds.Y + (bounds.Height - size) * 0.5f;
+            float s = size / 36f;
+            float strokeW = Math.Max(1.85f, 2.25f * s);
+
+            RectangleF gradRect = new RectangleF(ox, oy, Math.Max(16f, size), Math.Max(16f, size));
+            Color cTop, cMid, cBot;
+            ResolveIconColors(iconId, enabled, darkMode, out cTop, out cMid, out cBot);
+
+            using (LinearGradientBrush gradBrush = new LinearGradientBrush(gradRect, cTop, cBot, LinearGradientMode.Vertical))
+            {
+                ColorBlend blend = new ColorBlend(3);
+                blend.Colors = new Color[] { cTop, cMid, cBot };
+                blend.Positions = new float[] { 0f, 0.52f, 1f };
+                gradBrush.InterpolationColors = blend;
+
+                using (Pen pen = new Pen(gradBrush, strokeW))
+                {
+                    pen.StartCap = LineCap.Round;
+                    pen.EndCap = LineCap.Round;
+                    pen.LineJoin = LineJoin.Round;
+
+                    if (iconId == "add_url")
+                    {
+                        DrawHollowPlusIcon(g, pen, ox, oy, s);
+                    }
+                    else if (iconId == "resume")
+                    {
+                        DrawCircleArrowDownIcon(g, pen, ox, oy, s);
+                    }
+                    else if (iconId == "stop")
+                    {
+                        DrawCircleStopSquareIcon(g, pen, ox, oy, s);
+                    }
+                    else if (iconId == "stop_all")
+                    {
+                        DrawRaisedHandIcon(g, pen, ox, oy, s);
+                    }
+                    else if (iconId == "delete")
+                    {
+                        DrawTrashCanIcon(g, pen, ox, oy, s, false);
+                    }
+                    else if (iconId == "delete_completed")
+                    {
+                        DrawTrashCanIcon(g, pen, ox, oy, s, true);
+                    }
+                    else if (iconId == "options")
+                    {
+                        DrawGearIcon(g, pen, ox, oy, s);
+                    }
+                    else if (iconId == "scheduler")
+                    {
+                        DrawAlarmClockIcon(g, pen, gradBrush, ox, oy, s);
+                    }
+                    else if (iconId == "start_queue")
+                    {
+                        DrawQueueCardsIcon(g, pen, ox, oy, s, true);
+                    }
+                    else if (iconId == "stop_queue")
+                    {
+                        DrawQueueCardsIcon(g, pen, ox, oy, s, false);
+                    }
+                    else if (iconId == "tell_friend")
+                    {
+                        DrawThumbsUpIcon(g, pen, ox, oy, s);
+                    }
+                }
+            }
+
+            g.SmoothingMode = prevSmooth;
+            g.PixelOffsetMode = prevOffset;
+        }
+
+        private static void ResolveIconColors(string iconId, bool enabled, bool darkMode, out Color cTop, out Color cMid, out Color cBot)
+        {
+            if (!enabled)
+            {
+                Color dim = darkMode ? Color.FromArgb(124, 129, 139) : Color.FromArgb(156, 163, 175);
+                cTop = dim;
+                cMid = dim;
+                cBot = dim;
+                return;
+            }
+
+            if (iconId == "add_url")
+            {
+                cTop = darkMode ? Color.FromArgb(124, 232, 190) : Color.FromArgb(16, 185, 129);
+                cMid = darkMode ? Color.FromArgb(94, 224, 200) : Color.FromArgb(20, 184, 166);
+                cBot = darkMode ? Color.FromArgb(96, 196, 228) : Color.FromArgb(14, 165, 233);
+            }
+            else if (iconId == "resume")
+            {
+                cTop = darkMode ? Color.FromArgb(110, 231, 183) : Color.FromArgb(16, 185, 129);
+                cMid = darkMode ? Color.FromArgb(56, 189, 248) : Color.FromArgb(14, 165, 233);
+                cBot = darkMode ? Color.FromArgb(52, 211, 153) : Color.FromArgb(5, 150, 105);
+            }
+            else if (iconId == "stop")
+            {
+                cTop = darkMode ? Color.FromArgb(251, 113, 133) : Color.FromArgb(225, 29, 72);
+                cMid = darkMode ? Color.FromArgb(244, 114, 182) : Color.FromArgb(219, 39, 119);
+                cBot = darkMode ? Color.FromArgb(251, 191, 36) : Color.FromArgb(217, 119, 6);
+            }
+            else if (iconId == "stop_all")
+            {
+                cTop = darkMode ? Color.FromArgb(251, 113, 133) : Color.FromArgb(225, 29, 72);
+                cMid = darkMode ? Color.FromArgb(249, 115, 22) : Color.FromArgb(234, 88, 12);
+                cBot = darkMode ? Color.FromArgb(251, 191, 36) : Color.FromArgb(202, 138, 4);
+            }
+            else if (iconId == "delete")
+            {
+                cTop = darkMode ? Color.FromArgb(244, 63, 94) : Color.FromArgb(225, 29, 72);
+                cMid = darkMode ? Color.FromArgb(217, 70, 239) : Color.FromArgb(168, 85, 247);
+                cBot = darkMode ? Color.FromArgb(139, 92, 246) : Color.FromArgb(99, 102, 241);
+            }
+            else if (iconId == "delete_completed")
+            {
+                cTop = darkMode ? Color.FromArgb(236, 72, 153) : Color.FromArgb(219, 39, 119);
+                cMid = darkMode ? Color.FromArgb(168, 85, 247) : Color.FromArgb(147, 51, 234);
+                cBot = darkMode ? Color.FromArgb(129, 140, 248) : Color.FromArgb(79, 70, 229);
+            }
+            else if (iconId == "options")
+            {
+                cTop = darkMode ? Color.FromArgb(192, 132, 252) : Color.FromArgb(147, 51, 234);
+                cMid = darkMode ? Color.FromArgb(167, 139, 250) : Color.FromArgb(124, 58, 237);
+                cBot = darkMode ? Color.FromArgb(129, 140, 248) : Color.FromArgb(79, 70, 229);
+            }
+            else if (iconId == "scheduler")
+            {
+                cTop = darkMode ? Color.FromArgb(236, 72, 153) : Color.FromArgb(219, 39, 119);
+                cMid = darkMode ? Color.FromArgb(168, 85, 247) : Color.FromArgb(139, 92, 246);
+                cBot = darkMode ? Color.FromArgb(245, 180, 96) : Color.FromArgb(217, 119, 6);
+            }
+            else if (iconId == "start_queue")
+            {
+                cTop = darkMode ? Color.FromArgb(96, 165, 250) : Color.FromArgb(37, 99, 235);
+                cMid = darkMode ? Color.FromArgb(94, 234, 212) : Color.FromArgb(13, 148, 136);
+                cBot = darkMode ? Color.FromArgb(110, 231, 183) : Color.FromArgb(16, 185, 129);
+            }
+            else if (iconId == "stop_queue")
+            {
+                cTop = darkMode ? Color.FromArgb(129, 140, 248) : Color.FromArgb(79, 70, 229);
+                cMid = darkMode ? Color.FromArgb(192, 132, 252) : Color.FromArgb(147, 51, 234);
+                cBot = darkMode ? Color.FromArgb(244, 114, 182) : Color.FromArgb(219, 39, 119);
+            }
+            else
+            {
+                cTop = darkMode ? Color.FromArgb(167, 139, 250) : Color.FromArgb(124, 58, 237);
+                cMid = darkMode ? Color.FromArgb(129, 140, 248) : Color.FromArgb(79, 70, 229);
+                cBot = darkMode ? Color.FromArgb(147, 175, 250) : Color.FromArgb(59, 130, 246);
+            }
+        }
+
+        private static PointF Pt(float ox, float oy, float s, float x, float y)
+        {
+            return new PointF(ox + x * s, oy + y * s);
+        }
+
+        private static void DrawHollowPlusIcon(Graphics g, Pen pen, float ox, float oy, float s)
+        {
+            // Hollow rounded-tip cross matching the Add URL icon in the reference toolbar
+            float cx = 18f, cy = 18f, arm = 13.2f, halfT = 3.7f, r = 1.8f;
+            using (GraphicsPath p = new GraphicsPath())
+            {
+                p.AddArc(ox + (cx - halfT) * s, oy + (cy - arm) * s, 2 * r * s, 2 * r * s, 180f, 90f);
+                p.AddArc(ox + (cx + halfT - 2 * r) * s, oy + (cy - arm) * s, 2 * r * s, 2 * r * s, 270f, 90f);
+                p.AddLine(Pt(ox, oy, s, cx + halfT, cy - arm + r), Pt(ox, oy, s, cx + halfT, cy - halfT));
+                p.AddArc(ox + (cx + arm - 2 * r) * s, oy + (cy - halfT) * s, 2 * r * s, 2 * r * s, 270f, 90f);
+                p.AddArc(ox + (cx + arm - 2 * r) * s, oy + (cy + halfT - 2 * r) * s, 2 * r * s, 2 * r * s, 0f, 90f);
+                p.AddLine(Pt(ox, oy, s, cx + arm - r, cy + halfT), Pt(ox, oy, s, cx + halfT, cy + halfT));
+                p.AddArc(ox + (cx + halfT - 2 * r) * s, oy + (cy + arm - 2 * r) * s, 2 * r * s, 2 * r * s, 0f, 90f);
+                p.AddArc(ox + (cx - halfT) * s, oy + (cy + arm - 2 * r) * s, 2 * r * s, 2 * r * s, 90f, 90f);
+                p.AddLine(Pt(ox, oy, s, cx - halfT, cy + arm - r), Pt(ox, oy, s, cx - halfT, cy + halfT));
+                p.AddArc(ox + (cx - arm) * s, oy + (cy + halfT - 2 * r) * s, 2 * r * s, 2 * r * s, 90f, 90f);
+                p.AddArc(ox + (cx - arm) * s, oy + (cy - halfT) * s, 2 * r * s, 2 * r * s, 180f, 90f);
+                p.AddLine(Pt(ox, oy, s, cx - arm + r, cy - halfT), Pt(ox, oy, s, cx - halfT, cy - halfT));
+                p.CloseFigure();
+                g.DrawPath(pen, p);
+            }
+        }
+
+        private static void DrawCircleArrowDownIcon(Graphics g, Pen pen, float ox, float oy, float s)
+        {
+            g.DrawEllipse(pen, ox + 4.5f * s, oy + 4.5f * s, 27f * s, 27f * s);
+            g.DrawLine(pen, Pt(ox, oy, s, 18f, 11.2f), Pt(ox, oy, s, 18f, 24.4f));
+            g.DrawLines(pen, new PointF[]
+            {
+                Pt(ox, oy, s, 12.8f, 19.2f),
+                Pt(ox, oy, s, 18f, 24.6f),
+                Pt(ox, oy, s, 23.2f, 19.2f)
+            });
+        }
+
+        private static void DrawCircleStopSquareIcon(Graphics g, Pen pen, float ox, float oy, float s)
+        {
+            g.DrawEllipse(pen, ox + 4.5f * s, oy + 4.5f * s, 27f * s, 27f * s);
+            Rectangle sq = new Rectangle(
+                (int)Math.Round(ox + 13.4f * s),
+                (int)Math.Round(oy + 13.4f * s),
+                Math.Max(6, (int)Math.Round(9.2f * s)),
+                Math.Max(6, (int)Math.Round(9.2f * s)));
+            using (GraphicsPath sqPath = ShihabThemePalette.CreateShihabRoundedRect(sq, Math.Max(1, (int)Math.Round(1.6f * s))))
+            {
+                g.DrawPath(pen, sqPath);
+            }
+        }
+
+        private static void DrawRaisedHandIcon(Graphics g, Pen pen, float ox, float oy, float s)
+        {
+            using (GraphicsPath hand = new GraphicsPath())
+            {
+                hand.AddLine(Pt(ox, oy, s, 8.2f, 22.5f), Pt(ox, oy, s, 8.2f, 16.8f));
+                hand.AddArc(ox + 8.2f * s, oy + 15.0f * s, 3.4f * s, 3.4f * s, 180f, 180f);
+                hand.AddLine(Pt(ox, oy, s, 11.6f, 16.8f), Pt(ox, oy, s, 11.6f, 20.0f));
+
+                hand.AddLine(Pt(ox, oy, s, 11.6f, 20.0f), Pt(ox, oy, s, 11.6f, 8.8f));
+                hand.AddArc(ox + 11.6f * s, oy + 6.8f * s, 3.8f * s, 3.8f * s, 180f, 180f);
+                hand.AddLine(Pt(ox, oy, s, 15.4f, 8.8f), Pt(ox, oy, s, 15.4f, 17.6f));
+
+                hand.AddLine(Pt(ox, oy, s, 15.4f, 17.6f), Pt(ox, oy, s, 15.4f, 6.8f));
+                hand.AddArc(ox + 15.4f * s, oy + 4.8f * s, 3.8f * s, 3.8f * s, 180f, 180f);
+                hand.AddLine(Pt(ox, oy, s, 19.2f, 6.8f), Pt(ox, oy, s, 19.2f, 17.6f));
+
+                hand.AddLine(Pt(ox, oy, s, 19.2f, 17.6f), Pt(ox, oy, s, 19.2f, 8.4f));
+                hand.AddArc(ox + 19.2f * s, oy + 6.4f * s, 3.8f * s, 3.8f * s, 180f, 180f);
+                hand.AddLine(Pt(ox, oy, s, 23.0f, 8.4f), Pt(ox, oy, s, 23.0f, 18.4f));
+
+                hand.AddLine(Pt(ox, oy, s, 23.0f, 18.4f), Pt(ox, oy, s, 23.0f, 11.8f));
+                hand.AddArc(ox + 23.0f * s, oy + 9.8f * s, 3.6f * s, 3.6f * s, 180f, 180f);
+                hand.AddLine(Pt(ox, oy, s, 26.6f, 11.8f), Pt(ox, oy, s, 26.6f, 23.0f));
+                hand.AddArc(ox + 8.2f * s, oy + 16.2f * s, 18.4f * s, 15.0f * s, 0f, 180f);
+                hand.CloseFigure();
+                g.DrawPath(pen, hand);
+            }
+        }
+
+        private static void DrawTrashCanIcon(Graphics g, Pen pen, float ox, float oy, float s, bool withCheckmark)
+        {
+            using (GraphicsPath handle = new GraphicsPath())
+            {
+                handle.AddArc(ox + 14.5f * s, oy + 5.0f * s, 7.0f * s, 4.4f * s, 180f, 180f);
+                g.DrawPath(pen, handle);
+            }
+
+            Rectangle lidRect = new Rectangle(
+                (int)Math.Round(ox + 8.0f * s),
+                (int)Math.Round(oy + 8.0f * s),
+                Math.Max(10, (int)Math.Round(20.0f * s)),
+                Math.Max(3, (int)Math.Round(3.6f * s)));
+            using (GraphicsPath lid = ShihabThemePalette.CreateShihabRoundedRect(lidRect, Math.Max(1, (int)Math.Round(1.5f * s))))
+            {
+                g.DrawPath(pen, lid);
+            }
+
+            using (GraphicsPath bin = new GraphicsPath())
+            {
+                bin.AddLine(Pt(ox, oy, s, 10.2f, 11.8f), Pt(ox, oy, s, 11.5f, 28.4f));
+                bin.AddArc(ox + 11.5f * s, oy + 26.6f * s, 4.0f * s, 4.0f * s, 180f, -90f);
+                bin.AddLine(Pt(ox, oy, s, 13.5f, 30.6f), Pt(ox, oy, s, 22.5f, 30.6f));
+                bin.AddArc(ox + 20.5f * s, oy + 26.6f * s, 4.0f * s, 4.0f * s, 90f, -90f);
+                bin.AddLine(Pt(ox, oy, s, 24.5f, 28.4f), Pt(ox, oy, s, 25.8f, 11.8f));
+                g.DrawPath(pen, bin);
+            }
+
+            if (withCheckmark)
+            {
+                g.DrawLines(pen, new PointF[]
+                {
+                    Pt(ox, oy, s, 13.8f, 21.0f),
+                    Pt(ox, oy, s, 16.9f, 24.2f),
+                    Pt(ox, oy, s, 22.4f, 17.8f)
+                });
+            }
+            else
+            {
+                g.DrawLine(pen, Pt(ox, oy, s, 15.8f, 16.0f), Pt(ox, oy, s, 15.8f, 25.4f));
+                g.DrawLine(pen, Pt(ox, oy, s, 20.2f, 16.0f), Pt(ox, oy, s, 20.2f, 25.4f));
+            }
+        }
+
+        private static void DrawGearIcon(Graphics g, Pen pen, float ox, float oy, float s)
+        {
+            int teeth = 8;
+            float cx = ox + 18f * s;
+            float cy = oy + 18f * s;
+            float rOuter = 13.6f * s;
+            float rInner = 10.2f * s;
+            List<PointF> pts = new List<PointF>(teeth * 4);
+            double step = (Math.PI * 2.0) / teeth;
+
+            for (int i = 0; i < teeth; i++)
+            {
+                double baseAng = i * step - Math.PI / 2.0;
+                double a0 = baseAng - step * 0.24;
+                double a1 = baseAng - step * 0.14;
+                double a2 = baseAng + step * 0.14;
+                double a3 = baseAng + step * 0.24;
+
+                pts.Add(new PointF((float)(cx + Math.Cos(a0) * rInner), (float)(cy + Math.Sin(a0) * rInner)));
+                pts.Add(new PointF((float)(cx + Math.Cos(a1) * rOuter), (float)(cy + Math.Sin(a1) * rOuter)));
+                pts.Add(new PointF((float)(cx + Math.Cos(a2) * rOuter), (float)(cy + Math.Sin(a2) * rOuter)));
+                pts.Add(new PointF((float)(cx + Math.Cos(a3) * rInner), (float)(cy + Math.Sin(a3) * rInner)));
+            }
+
+            using (GraphicsPath gear = new GraphicsPath())
+            {
+                gear.AddPolygon(pts.ToArray());
+                g.DrawPath(pen, gear);
+            }
+            g.DrawEllipse(pen, cx - 5.0f * s, cy - 5.0f * s, 10.0f * s, 10.0f * s);
+        }
+
+        private static void DrawAlarmClockIcon(Graphics g, Pen pen, Brush dotBrush, float ox, float oy, float s)
+        {
+            g.DrawArc(pen, ox + 5.5f * s, oy + 5.0f * s, 8.5f * s, 8.5f * s, 150f, 175f);
+            g.DrawArc(pen, ox + 22.0f * s, oy + 5.0f * s, 8.5f * s, 8.5f * s, 215f, 175f);
+            g.DrawEllipse(pen, ox + 6.5f * s, oy + 7.5f * s, 23.0f * s, 23.0f * s);
+            g.DrawLine(pen, Pt(ox, oy, s, 11.2f, 28.8f), Pt(ox, oy, s, 8.8f, 31.6f));
+            g.DrawLine(pen, Pt(ox, oy, s, 24.8f, 28.8f), Pt(ox, oy, s, 27.2f, 31.6f));
+
+            float d = Math.Max(1.6f, 2.0f * s);
+            g.FillEllipse(dotBrush, ox + 18f * s - d * 0.5f, oy + 10.6f * s - d * 0.5f, d, d);
+            g.FillEllipse(dotBrush, ox + 18f * s - d * 0.5f, oy + 27.4f * s - d * 0.5f, d, d);
+            g.FillEllipse(dotBrush, ox + 9.6f * s - d * 0.5f, oy + 19.0f * s - d * 0.5f, d, d);
+            g.FillEllipse(dotBrush, ox + 26.4f * s - d * 0.5f, oy + 19.0f * s - d * 0.5f, d, d);
+
+            g.DrawLines(pen, new PointF[]
+            {
+                Pt(ox, oy, s, 14.5f, 18.8f),
+                Pt(ox, oy, s, 17.6f, 21.6f),
+                Pt(ox, oy, s, 22.4f, 15.6f)
+            });
+        }
+
+        private static void DrawQueueCardsIcon(Graphics g, Pen pen, float ox, float oy, float s, bool startArrow)
+        {
+            using (GraphicsPath backCard = new GraphicsPath())
+            {
+                backCard.AddLine(Pt(ox, oy, s, 9.8f, 23.2f), Pt(ox, oy, s, 7.6f, 23.2f));
+                backCard.AddArc(ox + 6.0f * s, oy + 20.0f * s, 3.2f * s, 3.2f * s, 90f, 90f);
+                backCard.AddLine(Pt(ox, oy, s, 6.0f, 21.6f), Pt(ox, oy, s, 6.0f, 7.6f));
+                backCard.AddArc(ox + 6.0f * s, oy + 6.0f * s, 3.2f * s, 3.2f * s, 180f, 90f);
+                backCard.AddLine(Pt(ox, oy, s, 7.6f, 6.0f), Pt(ox, oy, s, 21.2f, 6.0f));
+                backCard.AddArc(ox + 19.6f * s, oy + 6.0f * s, 3.2f * s, 3.2f * s, 270f, 90f);
+                backCard.AddLine(Pt(ox, oy, s, 22.8f, 7.6f), Pt(ox, oy, s, 22.8f, 9.6f));
+                g.DrawPath(pen, backCard);
+            }
+
+            using (GraphicsPath frontCard = new GraphicsPath())
+            {
+                frontCard.AddLine(Pt(ox, oy, s, 18.2f, 27.6f), Pt(ox, oy, s, 12.2f, 27.6f));
+                frontCard.AddArc(ox + 10.4f * s, oy + 24.0f * s, 3.6f * s, 3.6f * s, 90f, 90f);
+                frontCard.AddLine(Pt(ox, oy, s, 10.4f, 25.8f), Pt(ox, oy, s, 10.4f, 12.0f));
+                frontCard.AddArc(ox + 10.4f * s, oy + 10.2f * s, 3.6f * s, 3.6f * s, 180f, 90f);
+                frontCard.AddLine(Pt(ox, oy, s, 12.2f, 10.2f), Pt(ox, oy, s, 25.6f, 10.2f));
+                frontCard.AddArc(ox + 23.8f * s, oy + 10.2f * s, 3.6f * s, 3.6f * s, 270f, 90f);
+                frontCard.AddLine(Pt(ox, oy, s, 27.4f, 12.0f), Pt(ox, oy, s, 27.4f, 17.6f));
+                g.DrawPath(pen, frontCard);
+            }
+
+            if (startArrow)
+            {
+                g.DrawLine(pen, Pt(ox, oy, s, 25.0f, 18.2f), Pt(ox, oy, s, 25.0f, 30.2f));
+                g.DrawLines(pen, new PointF[]
+                {
+                    Pt(ox, oy, s, 20.6f, 25.8f),
+                    Pt(ox, oy, s, 25.0f, 30.4f),
+                    Pt(ox, oy, s, 29.4f, 25.8f)
+                });
+            }
+            else
+            {
+                Rectangle stopSq = new Rectangle(
+                    (int)Math.Round(ox + 20.4f * s),
+                    (int)Math.Round(oy + 21.0f * s),
+                    Math.Max(6, (int)Math.Round(8.8f * s)),
+                    Math.Max(6, (int)Math.Round(8.8f * s)));
+                using (GraphicsPath sq = ShihabThemePalette.CreateShihabRoundedRect(stopSq, Math.Max(1, (int)Math.Round(1.4f * s))))
+                {
+                    g.DrawPath(pen, sq);
+                }
+            }
+        }
+
+        private static void DrawThumbsUpIcon(Graphics g, Pen pen, float ox, float oy, float s)
+        {
+            Rectangle cuffRect = new Rectangle(
+                (int)Math.Round(ox + 23.4f * s),
+                (int)Math.Round(oy + 15.2f * s),
+                Math.Max(4, (int)Math.Round(5.2f * s)),
+                Math.Max(8, (int)Math.Round(13.8f * s)));
+            using (GraphicsPath cuff = ShihabThemePalette.CreateShihabRoundedRect(cuffRect, Math.Max(1, (int)Math.Round(1.4f * s))))
+            {
+                g.DrawPath(pen, cuff);
+            }
+
+            using (GraphicsPath hand = new GraphicsPath())
+            {
+                hand.AddLine(Pt(ox, oy, s, 23.2f, 16.2f), Pt(ox, oy, s, 20.4f, 13.8f));
+                hand.AddLine(Pt(ox, oy, s, 20.4f, 13.8f), Pt(ox, oy, s, 20.0f, 8.2f));
+                hand.AddArc(ox + 16.4f * s, oy + 6.4f * s, 3.8f * s, 3.8f * s, 0f, -180f);
+                hand.AddLine(Pt(ox, oy, s, 16.4f, 8.2f), Pt(ox, oy, s, 15.4f, 14.6f));
+                hand.AddLine(Pt(ox, oy, s, 15.4f, 14.6f), Pt(ox, oy, s, 10.6f, 14.6f));
+
+                hand.AddArc(ox + 8.6f * s, oy + 14.6f * s, 3.6f * s, 3.5f * s, 270f, -180f);
+                hand.AddArc(ox + 8.2f * s, oy + 18.1f * s, 3.6f * s, 3.5f * s, 270f, -180f);
+                hand.AddArc(ox + 8.6f * s, oy + 21.6f * s, 3.6f * s, 3.5f * s, 270f, -180f);
+                hand.AddArc(ox + 9.4f * s, oy + 25.1f * s, 3.6f * s, 3.5f * s, 270f, -180f);
+
+                hand.AddLine(Pt(ox, oy, s, 11.2f, 28.6f), Pt(ox, oy, s, 23.2f, 28.4f));
+                g.DrawPath(pen, hand);
+            }
+        }
+    }
+
+    internal sealed class ShihabTopIconRibbonControl : Control
+    {
+        public bool ShihabDarkMode { get; set; }
+        public bool CompactMode { get; set; }
+        public int UiScalePercent { get; set; }
+
+        private readonly List<ShihabTopRibbonButtonSpec> _items = new List<ShihabTopRibbonButtonSpec>();
+        private readonly ToolTip _toolTip = new ToolTip();
+        private int _hoveredIndex = -1;
+        private bool _hoveredSplitZone = false;
+        private int _pressedIndex = -1;
+        private bool _pressedSplitZone = false;
+        private int _lastTipIndex = -1;
+
+        public ShihabTopIconRibbonControl()
+        {
+            ShihabDarkMode = true;
+            CompactMode = false;
+            UiScalePercent = 100;
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            Height = 72;
+            _toolTip.InitialDelay = 350;
+            _toolTip.ReshowDelay = 150;
+        }
+
+        public List<ShihabTopRibbonButtonSpec> Items
+        {
+            get { return _items; }
+        }
+
+        public void UpdateMetricsForScale()
+        {
+            float scale = Math.Max(80, Math.Min(150, UiScalePercent > 0 ? UiScalePercent : 100)) / 100f;
+            Height = CompactMode ? (int)Math.Round(52 * scale) : (int)Math.Round(72 * scale);
+            RecalculateItemBounds();
+            Invalidate();
+        }
+
+        public void SetButtonEnabled(string id, bool enabled)
+        {
+            for (int i = 0; i < _items.Count; i++)
+            {
+                if (string.Equals(_items[i].Id, id, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (_items[i].Enabled != enabled)
+                    {
+                        _items[i].Enabled = enabled;
+                        Invalidate(_items[i].Bounds);
+                    }
+                    return;
+                }
+            }
+        }
+
+        protected override void OnResize(EventArgs e)
+        {
+            base.OnResize(e);
+            RecalculateItemBounds();
+        }
+
+        public void RecalculateItemBounds()
+        {
+            if (_items.Count == 0) return;
+            float scale = Math.Max(80, Math.Min(150, UiScalePercent > 0 ? UiScalePercent : 100)) / 100f;
+            int availW = Math.Max(320, ClientSize.Width - 16);
+            int maxSlotW = (int)Math.Round(102 * scale);
+            int minSlotW = 62;
+            bool wideMode = availW >= (int)Math.Round(1140 * scale);
+            int longLabelExtra = wideMode ? (int)Math.Round(18 * scale) : 0;
+
+            int totalExtra = 0;
+            for (int i = 0; i < _items.Count; i++)
+            {
+                if (_items[i].HasSplitDropDown) totalExtra += (int)Math.Round(12 * scale);
+                if (wideMode && string.Equals(_items[i].Id, "delete_completed", StringComparison.OrdinalIgnoreCase))
+                {
+                    totalExtra += longLabelExtra;
+                }
+            }
+
+            int baseSlotW = Math.Max(minSlotW, Math.Min(maxSlotW, (availW - totalExtra - _items.Count) / _items.Count));
+            int curX = 8;
+            int btnTop = 3;
+            int btnH = Math.Max(36, Height - 6);
+
+            for (int i = 0; i < _items.Count; i++)
+            {
+                ShihabTopRibbonButtonSpec item = _items[i];
+                int splitW = item.HasSplitDropDown ? (int)Math.Round(15 * scale) : 0;
+                int w = baseSlotW + (item.HasSplitDropDown ? (int)Math.Round(12 * scale) : 0);
+                if (wideMode && string.Equals(item.Id, "delete_completed", StringComparison.OrdinalIgnoreCase))
+                {
+                    w += longLabelExtra;
+                }
+                item.Bounds = new Rectangle(curX, btnTop, w, btnH);
+                item.SplitDropBounds = item.HasSplitDropDown
+                    ? new Rectangle(curX + w - splitW - 2, btnTop + 4, splitW + 2, Math.Max(24, btnH - 8))
+                    : Rectangle.Empty;
+                curX += w + 1;
+            }
+        }
+
+        private int HitTestItem(Point pt, out bool inSplitZone)
+        {
+            inSplitZone = false;
+            for (int i = 0; i < _items.Count; i++)
+            {
+                if (_items[i].Bounds.Contains(pt))
+                {
+                    if (_items[i].HasSplitDropDown && _items[i].SplitDropBounds.Contains(pt))
+                    {
+                        inSplitZone = true;
+                    }
+                    return i;
+                }
+            }
+            return -1;
+        }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            bool split;
+            int idx = HitTestItem(e.Location, out split);
+            if (idx != _hoveredIndex || split != _hoveredSplitZone)
+            {
+                _hoveredIndex = idx;
+                _hoveredSplitZone = split;
+                Cursor = (idx >= 0 && _items[idx].Enabled) ? Cursors.Hand : Cursors.Default;
+                if (idx != _lastTipIndex)
+                {
+                    _lastTipIndex = idx;
+                    if (idx >= 0 && !string.IsNullOrEmpty(_items[idx].ToolTipText))
+                    {
+                        _toolTip.SetToolTip(this, _items[idx].ToolTipText);
+                    }
+                    else
+                    {
+                        _toolTip.SetToolTip(this, "");
+                    }
+                }
+                Invalidate();
+            }
+        }
+
+        protected override void OnMouseLeave(EventArgs e)
+        {
+            base.OnMouseLeave(e);
+            if (_hoveredIndex != -1 || _pressedIndex != -1)
+            {
+                _hoveredIndex = -1;
+                _hoveredSplitZone = false;
+                _pressedIndex = -1;
+                _pressedSplitZone = false;
+                _lastTipIndex = -1;
+                Cursor = Cursors.Default;
+                Invalidate();
+            }
+        }
+
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            base.OnMouseDown(e);
+            if (e.Button != MouseButtons.Left) return;
+            bool split;
+            int idx = HitTestItem(e.Location, out split);
+            if (idx >= 0 && _items[idx].Enabled)
+            {
+                _pressedIndex = idx;
+                _pressedSplitZone = split;
+                Invalidate();
+            }
+        }
+
+        protected override void OnMouseUp(MouseEventArgs e)
+        {
+            base.OnMouseUp(e);
+            if (e.Button != MouseButtons.Left) return;
+            int prevPressed = _pressedIndex;
+            bool prevSplit = _pressedSplitZone;
+            _pressedIndex = -1;
+            _pressedSplitZone = false;
+            Invalidate();
+
+            bool nowSplit;
+            int nowIdx = HitTestItem(e.Location, out nowSplit);
+            if (prevPressed >= 0 && nowIdx == prevPressed && _items[nowIdx].Enabled)
+            {
+                ShihabTopRibbonButtonSpec item = _items[nowIdx];
+                if (item.HasSplitDropDown && prevSplit && nowSplit && item.OnSplitDropDownClick != null)
+                {
+                    item.OnSplitDropDownClick(this, new Point(item.Bounds.Left, item.Bounds.Bottom));
+                }
+                else if (item.OnPrimaryClick != null)
+                {
+                    item.OnPrimaryClick();
+                }
+            }
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
+
+            Color barBg = ShihabDarkMode ? Color.FromArgb(43, 45, 51) : Color.FromArgb(241, 245, 249);
+            Color botLine = ShihabDarkMode ? Color.FromArgb(62, 66, 76) : Color.FromArgb(203, 213, 225);
+
+            using (SolidBrush bgBr = new SolidBrush(barBg))
+            using (Pen botPen = new Pen(botLine, 1f))
+            {
+                g.FillRectangle(bgBr, ClientRectangle);
+                g.DrawLine(botPen, 0, Height - 1, Width, Height - 1);
+            }
+
+            if (_items.Count == 0) return;
+            if (_items[0].Bounds.Width == 0) RecalculateItemBounds();
+
+            float scale = Math.Max(80, Math.Min(150, UiScalePercent > 0 ? UiScalePercent : 100)) / 100f;
+            int iconSz = CompactMode ? (int)Math.Round(24 * scale) : (int)Math.Round(35 * scale);
+            float fontPt = (CompactMode ? 8.0f : 8.6f) * scale;
+
+            using (Font lblFont = new Font("Segoe UI", fontPt, FontStyle.Regular))
+            {
+                for (int i = 0; i < _items.Count; i++)
+                {
+                    ShihabTopRibbonButtonSpec item = _items[i];
+                    Rectangle r = item.Bounds;
+                    bool hot = (i == _hoveredIndex) && item.Enabled;
+                    bool pressed = (i == _pressedIndex) && item.Enabled;
+
+                    if (hot || pressed)
+                    {
+                        Color hoverFill = ShihabDarkMode
+                            ? (pressed ? Color.FromArgb(56, 60, 70) : Color.FromArgb(52, 56, 65))
+                            : (pressed ? Color.FromArgb(219, 228, 243) : Color.FromArgb(228, 235, 247));
+                        Color hoverEdge = ShihabDarkMode
+                            ? Color.FromArgb(78, 84, 98)
+                            : Color.FromArgb(186, 198, 218);
+
+                        using (GraphicsPath hp = ShihabThemePalette.CreateShihabRoundedRect(r, 6))
+                        using (SolidBrush hBr = new SolidBrush(hoverFill))
+                        using (Pen hPen = new Pen(hoverEdge, 1f))
+                        {
+                            g.FillPath(hBr, hp);
+                            g.DrawPath(hPen, hp);
+                        }
+
+                        if (item.HasSplitDropDown && !item.SplitDropBounds.IsEmpty)
+                        {
+                            Color sepCol = ShihabDarkMode ? Color.FromArgb(78, 84, 98) : Color.FromArgb(186, 198, 218);
+                            using (Pen sepPen = new Pen(sepCol, 1f))
+                            {
+                                g.DrawLine(sepPen, item.SplitDropBounds.Left, r.Top + 6, item.SplitDropBounds.Left, r.Bottom - 6);
+                            }
+                        }
+                    }
+
+                    int contentRight = item.HasSplitDropDown ? (r.Right - item.SplitDropBounds.Width + 2) : r.Right;
+                    int contentW = Math.Max(24, contentRight - r.Left);
+                    int iconX = r.Left + (contentW - iconSz) / 2;
+                    int iconY = r.Top + (CompactMode ? 3 : 5);
+                    Rectangle iconRect = new Rectangle(iconX, iconY, iconSz, iconSz);
+
+                    ShihabTopRibbonIconRenderer.DrawVectorIcon(g, iconRect, item.Id, item.Enabled, ShihabDarkMode);
+
+                    if (item.HasSplitDropDown && !item.SplitDropBounds.IsEmpty)
+                    {
+                        Color arrowCol = item.Enabled
+                            ? (ShihabDarkMode
+                                ? ((hot && _hoveredSplitZone) ? Color.FromArgb(236, 240, 248) : Color.FromArgb(150, 156, 168))
+                                : Color.FromArgb(71, 85, 105))
+                            : (ShihabDarkMode ? Color.FromArgb(100, 105, 114) : Color.FromArgb(156, 163, 175));
+                        int ax = item.SplitDropBounds.Left + item.SplitDropBounds.Width / 2;
+                        int ay = iconRect.Top + iconRect.Height / 2 + 2;
+                        using (SolidBrush arrBr = new SolidBrush(arrowCol))
+                        {
+                            g.FillPolygon(arrBr, new PointF[]
+                            {
+                                new PointF(ax - 3.6f, ay - 2.0f),
+                                new PointF(ax + 3.6f, ay - 2.0f),
+                                new PointF(ax, ay + 2.4f)
+                            });
+                        }
+                    }
+
+                    Color txtCol = item.Enabled
+                        ? (ShihabDarkMode ? Color.FromArgb(242, 244, 248) : Color.FromArgb(15, 23, 42))
+                        : (ShihabDarkMode ? Color.FromArgb(145, 150, 160) : Color.FromArgb(148, 163, 184));
+
+                    Rectangle txtRect = new Rectangle(
+                        r.Left + 2,
+                        iconRect.Bottom + 2,
+                        Math.Max(20, r.Width - 4),
+                        Math.Max(14, r.Bottom - (iconRect.Bottom + 2) - 1));
+                    string textToDraw = !string.IsNullOrEmpty(item.DisplayText) ? item.DisplayText : item.DefaultText;
+                    TextRenderer.DrawText(
+                        g,
+                        textToDraw,
+                        lblFont,
+                        txtRect,
+                        txtCol,
+                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix);
+                }
+            }
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                try { _toolTip.Dispose(); } catch { }
+            }
+            base.Dispose(disposing);
+        }
+    }
+
     public class ShihabMainIdmWindow : Form
     {
         [DllImport("user32.dll", EntryPoint = "SendMessageW", CharSet = CharSet.Unicode)]
@@ -575,6 +1334,15 @@ namespace ShihabMehediIDM
         private readonly Dictionary<string, ShihabDownloadProgressForm> _mehediOpenProgressForms;
 
         private MenuStrip _shihabMenuBar;
+        private ToolStripMenuItem _tasksTopMenu;
+        private ToolStripMenuItem _fileTopMenu;
+        private ToolStripMenuItem _downloadsTopMenu;
+        private ToolStripMenuItem _viewTopMenu;
+        private ToolStripMenuItem _helpTopMenu;
+        private ToolStripMenuItem _registrationTopMenu;
+        private ShihabTopIconRibbonControl _shihabTopRibbonBar;
+        private ContextMenuStrip _shihabStartQueuePopupMenu;
+        private ContextMenuStrip _shihabStopQueuePopupMenu;
         private ContextMenuStrip _mehediOverflowAppMenu;
         private Panel _shihabSidebarPanel;
         private Panel _mehediSidebarTopHeading;
@@ -586,15 +1354,12 @@ namespace ShihabMehediIDM
         private string _shihabHeaderViewTitle = "All Downloads";
         private string _mehediHeaderItemsBadgeText = "0 items";
 
-        private ShihabHeaderPillButton _shihabAddUrlPillBtn;
         private ShihabHeaderPillButton _shihabTorrentPillBtn;
         private ShihabHeaderPillButton _shihabMediaPillBtn;
-        private ShihabHeaderPillButton _mehediStartPillBtn;
-        private ShihabHeaderPillButton _shihabPausePillBtn;
+        private ShihabHeaderPillButton _shihabRssPillBtn;
         private ShihabHeaderPillButton _mehediFolderPillBtn;
         private ShihabHeaderPillButton _shihabRemotePillBtn;
         private ShihabHeaderPillButton _shihabUpdatePillBtn;
-        private ShihabHeaderPillButton _shihabAboutPillBtn;
         private ShihabHeaderPillButton _mehediMenuPillBtn;
         private ShihabRemoteControlServer _shihabRemoteServer;
 
@@ -768,7 +1533,7 @@ namespace ShihabMehediIDM
                 }
                 else if (mehediE.KeyCode == Keys.Delete && !_mehediSearchBox.Focused)
                 {
-                    DeleteSelectedShihabDownloads(mehediE.Shift);
+                    PromptAndDeleteSelectedDownloads(mehediE.Shift);
                     mehediE.Handled = true;
                 }
                 else if (mehediE.Alt && mehediE.KeyCode == Keys.Enter && !_mehediSearchBox.Focused)
@@ -799,7 +1564,16 @@ namespace ShihabMehediIDM
 
         private void BuildShihabLayoutControls()
         {
-            _shihabMenuBar = new MenuStrip { Visible = false };
+            _shihabStartQueuePopupMenu = new ContextMenuStrip();
+            _shihabStartQueuePopupMenu.Opening += delegate { PopulateStartQueueMenuItems(_shihabStartQueuePopupMenu.Items); };
+
+            _shihabStopQueuePopupMenu = new ContextMenuStrip();
+            _shihabStopQueuePopupMenu.Opening += delegate { PopulateStopQueueMenuItems(_shihabStopQueuePopupMenu.Items); };
+
+            _shihabMenuBar = BuildShihabTopMenuStrip();
+            MainMenuStrip = _shihabMenuBar;
+
+            _shihabTopRibbonBar = BuildShihabTopIconRibbon();
             _mehediOverflowAppMenu = BuildMehediFullAppOverflowMenu();
 
             // Left Sidebar (224px wide, #121418, right 1px border #232730)
@@ -874,11 +1648,11 @@ namespace ShihabMehediIDM
                 Dock = DockStyle.Fill
             };
 
-            // Top Action Header Bar (50px tall)
+            // Workspace Sub-Header Bar (42px tall: View Title + Item Count + Non-Duplicate Power Pills + Filter Box)
             _mehediTopActionHeaderBar = new Panel
             {
                 Dock = DockStyle.Top,
-                Height = 50
+                Height = 42
             };
             _mehediTopActionHeaderBar.Paint += delegate(object shihabSender, PaintEventArgs mehediE)
             {
@@ -893,10 +1667,10 @@ namespace ShihabMehediIDM
                 }
 
                 Color shihabTitleCol = _mehediConfig.ShihabDarkMode ? Color.FromArgb(241, 245, 249) : Color.FromArgb(15, 23, 42);
-                using (Font mehediTitleFont = new Font("Segoe UI", 11.5f, FontStyle.Bold))
-                using (Font shihabBadgeFont = new Font("Segoe UI Semibold", 8.2f, FontStyle.Regular))
+                using (Font mehediTitleFont = new Font("Segoe UI", 10.5f, FontStyle.Bold))
+                using (Font shihabBadgeFont = new Font("Segoe UI Semibold", 8.0f, FontStyle.Regular))
                 {
-                    Size mehediTitleSz = TextRenderer.MeasureText(shihabG, _shihabHeaderViewTitle, mehediTitleFont, new Size(340, 32), TextFormatFlags.NoPadding);
+                    Size mehediTitleSz = TextRenderer.MeasureText(shihabG, _shihabHeaderViewTitle, mehediTitleFont, new Size(340, 28), TextFormatFlags.NoPadding);
                     Rectangle shihabTitleRect = new Rectangle(14, 0, mehediTitleSz.Width + 4, _mehediTopActionHeaderBar.Height - 1);
                     TextRenderer.DrawText(
                         shihabG,
@@ -906,9 +1680,9 @@ namespace ShihabMehediIDM
                         shihabTitleCol,
                         TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.NoPrefix);
 
-                    Size shihabBadgeSz = TextRenderer.MeasureText(shihabG, _mehediHeaderItemsBadgeText, shihabBadgeFont, new Size(160, 24), TextFormatFlags.NoPadding);
-                    int mehediBadgeW = shihabBadgeSz.Width + 16;
-                    Rectangle shihabBadgeRect = new Rectangle(shihabTitleRect.Right + 8, (_mehediTopActionHeaderBar.Height - 24) / 2, mehediBadgeW, 24);
+                    Size shihabBadgeSz = TextRenderer.MeasureText(shihabG, _mehediHeaderItemsBadgeText, shihabBadgeFont, new Size(160, 22), TextFormatFlags.NoPadding);
+                    int mehediBadgeW = shihabBadgeSz.Width + 14;
+                    Rectangle shihabBadgeRect = new Rectangle(shihabTitleRect.Right + 8, (_mehediTopActionHeaderBar.Height - 22) / 2, mehediBadgeW, 22);
                     Color mehediBadgeFill = _mehediConfig.ShihabDarkMode ? Color.FromArgb(34, 38, 48) : Color.FromArgb(226, 232, 240);
                     Color shihabBadgeEdge = _mehediConfig.ShihabDarkMode ? Color.FromArgb(46, 52, 66) : Color.FromArgb(203, 213, 225);
                     Color mehediBadgeFg = _mehediConfig.ShihabDarkMode ? Color.FromArgb(154, 163, 181) : Color.FromArgb(71, 85, 105);
@@ -930,42 +1704,16 @@ namespace ShihabMehediIDM
                 }
             };
 
-            _shihabAddUrlPillBtn = new ShihabHeaderPillButton("+ Add URL", 82, true);
-            _shihabAddUrlPillBtn.Click += delegate { PromptAndAddNewShihabUrl(""); };
-
-            _shihabTorrentPillBtn = new ShihabHeaderPillButton("Torrent", 64, false);
+            _shihabTorrentPillBtn = new ShihabHeaderPillButton("Torrent", 62, false);
             _shihabTorrentPillBtn.Click += delegate { OpenShihabTorrentDialog(""); };
 
             _shihabMediaPillBtn = new ShihabHeaderPillButton("Media / YT", 78, false);
             _shihabMediaPillBtn.Click += delegate { OpenShihabMediaAndGalleryDialog(); };
 
-            _mehediStartPillBtn = new ShihabHeaderPillButton("Start", 56, false);
-            _mehediStartPillBtn.Click += delegate
-            {
-                if (_shihabDownloadsListView.SelectedItems.Count > 0)
-                {
-                    ResumeSelectedShihabDownloads();
-                }
-                else
-                {
-                    _shihabEngine.StartShihabQueue("Main Download Queue");
-                }
-            };
+            _shihabRssPillBtn = new ShihabHeaderPillButton("RSS", 48, false);
+            _shihabRssPillBtn.Click += delegate { OpenShihabRssFeedDialog(); };
 
-            _shihabPausePillBtn = new ShihabHeaderPillButton("Pause", 58, false);
-            _shihabPausePillBtn.Click += delegate
-            {
-                if (_shihabDownloadsListView.SelectedItems.Count > 0)
-                {
-                    PauseSelectedMehediDownloads();
-                }
-                else
-                {
-                    _shihabEngine.StopAllMehediDownloads();
-                }
-            };
-
-            _mehediFolderPillBtn = new ShihabHeaderPillButton("Folder", 62, false);
+            _mehediFolderPillBtn = new ShihabHeaderPillButton("Folder", 60, false);
             _mehediFolderPillBtn.Click += delegate
             {
                 if (_shihabDownloadsListView.SelectedItems.Count > 0)
@@ -995,9 +1743,6 @@ namespace ShihabMehediIDM
                 }
             };
 
-            _shihabAboutPillBtn = new ShihabHeaderPillButton("About", 58, false);
-            _shihabAboutPillBtn.Click += delegate { ShowShihabAboutDialog(); };
-
             _mehediMenuPillBtn = new ShihabHeaderPillButton("\u2630", 34, false);
             _mehediMenuPillBtn.Click += delegate
             {
@@ -1006,15 +1751,15 @@ namespace ShihabMehediIDM
 
             _shihabSearchBarPanel = new ShihabRoundedCardPanel
             {
-                Size = new Size(224, 30),
+                Size = new Size(206, 28),
                 MehediCornerRadius = 6,
-                Padding = new Padding(10, 5, 24, 4)
+                Padding = new Padding(10, 4, 24, 4)
             };
 
             _mehediSearchBox = new TextBox
             {
-                Location = new Point(10, 6),
-                Width = 186,
+                Location = new Point(10, 5),
+                Width = 168,
                 BorderStyle = BorderStyle.None,
                 Font = new Font("Segoe UI", 8.8f)
             };
@@ -1034,7 +1779,7 @@ namespace ShihabMehediIDM
             _shihabClearSearchBtn = new Button
             {
                 Text = "\u00D7",
-                Location = new Point(198, 4),
+                Location = new Point(180, 4),
                 Size = new Size(20, 20),
                 FlatStyle = FlatStyle.Flat,
                 Visible = false,
@@ -1056,21 +1801,18 @@ namespace ShihabMehediIDM
 
             _mehediTopActionHeaderBar.Controls.AddRange(new Control[]
             {
-                _shihabAddUrlPillBtn,
                 _shihabTorrentPillBtn,
                 _shihabMediaPillBtn,
-                _mehediStartPillBtn,
-                _shihabPausePillBtn,
+                _shihabRssPillBtn,
                 _mehediFolderPillBtn,
                 _shihabRemotePillBtn,
                 _shihabUpdatePillBtn,
-                _shihabAboutPillBtn,
                 _mehediMenuPillBtn,
                 _shihabSearchBarPanel
             });
             _mehediTopActionHeaderBar.Resize += delegate { RepositionShihabHeaderControls(); };
 
-            // Main Transfers Grid (8 columns matching Screenshot 2)
+            // Main Transfers Grid (8 columns)
             _shihabDownloadsListView = new ShihabModernListView
             {
                 Dock = DockStyle.Fill,
@@ -1090,6 +1832,7 @@ namespace ShihabMehediIDM
             _shihabDownloadsListView.Columns.Add("DATE ADDED", 96);
 
             _shihabDownloadsListView.Resize += delegate { ResizeShihabFileNameColumn(); };
+            _shihabDownloadsListView.SelectedIndexChanged += delegate { UpdateMehediToolbarActionIcons(); };
             _shihabDownloadsListView.ColumnClick += delegate(object shihabS, ColumnClickEventArgs mehediE)
             {
                 string shihabNextKey = "ORDER";
@@ -1147,8 +1890,9 @@ namespace ShihabMehediIDM
             _shihabTrayMenuRef.Items.Add("Add new download...", null, delegate { RestoreAndActivateMainWindow(); PromptAndAddNewShihabUrl(""); });
             _shihabTrayMenuRef.Items.Add("Show drop target", null, delegate { ToggleMehediFloatingDropTarget(); });
             _shihabTrayMenuRef.Items.Add("Start Main Queue", null, delegate { _shihabEngine.StartShihabQueue("Main Download Queue"); });
-            _shihabTrayMenuRef.Items.Add("Stop All Downloads", null, delegate { _shihabEngine.StopAllMehediDownloads(); });
+            _shihabTrayMenuRef.Items.Add("Stop All Downloads", null, delegate { _shihabEngine.StopAllMehediDownloads(); RefreshMehediDownloadsGrid(); });
             _shihabTrayMenuRef.Items.Add(new ToolStripSeparator());
+            _shihabTrayMenuRef.Items.Add("Tell a Friend...", null, delegate { RestoreAndActivateMainWindow(); OpenShihabTellAFriendDialog(); });
             _shihabTrayMenuRef.Items.Add("Check for Updates... (Ctrl+U)", null, delegate { RestoreAndActivateMainWindow(); TriggerShihabUpdateCheck(true); });
             _shihabTrayMenuRef.Items.Add("About MHS Download Manager...", null, delegate { RestoreAndActivateMainWindow(); ShowShihabAboutDialog(); });
             _shihabTrayMenuRef.Items.Add("Exit", null, delegate { ExitShihabApplicationCleanly(); });
@@ -1170,9 +1914,606 @@ namespace ShihabMehediIDM
                 }
             };
 
+            // WinForms docks back-to-front (last added docks outermost):
+            // 1) _shihabMenuBar at y = 0 (very top)
+            // 2) _shihabTopRibbonBar full-width directly underneath _shihabMenuBar
+            // 3) _shihabSidebarPanel on the left below _shihabTopRibbonBar
+            // 4) _shihabRightWorkspacePanel filling remaining area
             Controls.Add(_shihabRightWorkspacePanel);
             Controls.Add(_shihabSidebarPanel);
+            Controls.Add(_shihabTopRibbonBar);
             Controls.Add(_shihabMenuBar);
+        }
+
+        private ShihabTopIconRibbonControl BuildShihabTopIconRibbon()
+        {
+            ShihabTopIconRibbonControl ribbon = new ShihabTopIconRibbonControl
+            {
+                Dock = DockStyle.Top,
+                Height = 72
+            };
+
+            ribbon.Items.Add(new ShihabTopRibbonButtonSpec
+            {
+                Id = "add_url",
+                LocalizationKey = "btn_add_url",
+                DefaultText = "Add URL",
+                DisplayText = "Add URL",
+                ToolTipText = "Add URL (Ctrl+N) — Add a new HTTP, HTTPS, FTP, Magnet, or Media download",
+                Enabled = true,
+                OnPrimaryClick = delegate { PromptAndAddNewShihabUrl(""); }
+            });
+
+            ribbon.Items.Add(new ShihabTopRibbonButtonSpec
+            {
+                Id = "resume",
+                LocalizationKey = "btn_resume",
+                DefaultText = "Resume",
+                DisplayText = "Resume",
+                ToolTipText = "Resume — Continue downloading selected unfinished transfer(s)",
+                Enabled = false,
+                OnPrimaryClick = delegate { ResumeSelectedShihabDownloads(); }
+            });
+
+            ribbon.Items.Add(new ShihabTopRibbonButtonSpec
+            {
+                Id = "stop",
+                LocalizationKey = "btn_stop",
+                DefaultText = "Stop",
+                DisplayText = "Stop",
+                ToolTipText = "Stop — Pause selected active transfer(s)",
+                Enabled = false,
+                OnPrimaryClick = delegate { PauseSelectedMehediDownloads(); }
+            });
+
+            ribbon.Items.Add(new ShihabTopRibbonButtonSpec
+            {
+                Id = "stop_all",
+                LocalizationKey = "btn_stop_all",
+                DefaultText = "Stop All",
+                DisplayText = "Stop All",
+                ToolTipText = "Stop All — Pause all active downloads and running queues",
+                Enabled = false,
+                OnPrimaryClick = delegate
+                {
+                    _shihabEngine.StopAllMehediDownloads();
+                    RefreshMehediDownloadsGrid();
+                }
+            });
+
+            ribbon.Items.Add(new ShihabTopRibbonButtonSpec
+            {
+                Id = "delete",
+                LocalizationKey = "btn_delete",
+                DefaultText = "Delete",
+                DisplayText = "Delete",
+                ToolTipText = "Delete (Del / Shift+Del) — Remove selected transfer(s) from list or disk",
+                Enabled = false,
+                OnPrimaryClick = delegate
+                {
+                    bool shiftHeld = (Control.ModifierKeys & Keys.Shift) == Keys.Shift;
+                    PromptAndDeleteSelectedDownloads(shiftHeld);
+                }
+            });
+
+            ribbon.Items.Add(new ShihabTopRibbonButtonSpec
+            {
+                Id = "delete_completed",
+                LocalizationKey = "btn_delete_completed",
+                DefaultText = "Delete Completed",
+                DisplayText = "Delete Completed",
+                ToolTipText = "Delete Completed — Clear all finished transfers from the list (keeps files on disk)",
+                Enabled = true,
+                OnPrimaryClick = delegate { DeleteAllCompletedMehediDownloads(); }
+            });
+
+            ribbon.Items.Add(new ShihabTopRibbonButtonSpec
+            {
+                Id = "options",
+                LocalizationKey = "btn_options",
+                DefaultText = "Options",
+                DisplayText = "Options",
+                ToolTipText = "Options — Configure connections, browser integration, proxy/DNS, folders, themes & updates",
+                Enabled = true,
+                OnPrimaryClick = delegate { OpenShihabOptionsDialog(); }
+            });
+
+            ribbon.Items.Add(new ShihabTopRibbonButtonSpec
+            {
+                Id = "scheduler",
+                LocalizationKey = "btn_scheduler",
+                DefaultText = "Scheduler",
+                DisplayText = "Scheduler",
+                ToolTipText = "Scheduler — Manage download queues, timed start/stop, active days, sync & post-completion actions",
+                Enabled = true,
+                OnPrimaryClick = delegate { OpenMehediSchedulerDialog(); }
+            });
+
+            ribbon.Items.Add(new ShihabTopRibbonButtonSpec
+            {
+                Id = "start_queue",
+                LocalizationKey = "btn_start_queue",
+                DefaultText = "Start Queue",
+                DisplayText = "Start Queue",
+                ToolTipText = "Start Queue — Start Main Download Queue (click arrow to select any queue)",
+                Enabled = true,
+                HasSplitDropDown = true,
+                OnPrimaryClick = delegate
+                {
+                    _shihabEngine.StartShihabQueue("Main Download Queue");
+                    RefreshMehediDownloadsGrid();
+                },
+                OnSplitDropDownClick = delegate(Control ownerCtrl, Point pt)
+                {
+                    _shihabStartQueuePopupMenu.Show(ownerCtrl, pt);
+                }
+            });
+
+            ribbon.Items.Add(new ShihabTopRibbonButtonSpec
+            {
+                Id = "stop_queue",
+                LocalizationKey = "btn_stop_queue",
+                DefaultText = "Stop Queue",
+                DisplayText = "Stop Queue",
+                ToolTipText = "Stop Queue — Stop Main Download Queue (click arrow to stop a specific queue or all queues)",
+                Enabled = true,
+                HasSplitDropDown = true,
+                OnPrimaryClick = delegate
+                {
+                    _shihabEngine.StopAllShihabQueues();
+                    RefreshMehediDownloadsGrid();
+                },
+                OnSplitDropDownClick = delegate(Control ownerCtrl, Point pt)
+                {
+                    _shihabStopQueuePopupMenu.Show(ownerCtrl, pt);
+                }
+            });
+
+            ribbon.Items.Add(new ShihabTopRibbonButtonSpec
+            {
+                Id = "tell_friend",
+                LocalizationKey = "btn_tell_friend",
+                DefaultText = "Tell a Friend",
+                DisplayText = "Tell a Friend",
+                ToolTipText = "Tell a Friend — Share MHS Download Manager via QR code, link, Email, X, WhatsApp, Telegram or LinkedIn",
+                Enabled = true,
+                OnPrimaryClick = delegate { OpenShihabTellAFriendDialog(); }
+            });
+
+            ribbon.RecalculateItemBounds();
+            return ribbon;
+        }
+
+        private MenuStrip BuildShihabTopMenuStrip()
+        {
+            MenuStrip bar = new MenuStrip
+            {
+                Dock = DockStyle.Top,
+                Visible = true,
+                GripStyle = ToolStripGripStyle.Hidden,
+                Padding = new Padding(4, 2, 4, 2)
+            };
+
+            // 1. Tasks
+            _tasksTopMenu = new ToolStripMenuItem("&Tasks");
+            ToolStripMenuItem taskAddNew = new ToolStripMenuItem("Add new download...", null, delegate { PromptAndAddNewShihabUrl(""); })
+            {
+                ShortcutKeyDisplayString = "Ctrl+N"
+            };
+            ToolStripMenuItem taskAddBatch = new ToolStripMenuItem("Add batch download...", null, delegate { OpenShihabBatchWildcardDialog(); });
+            ToolStripMenuItem taskAddClip = new ToolStripMenuItem("Add batch download from clipboard", null, delegate { ImportShihabClipboardUrlsBatch(); });
+            ToolStripMenuItem taskTorrent = new ToolStripMenuItem("Add BitTorrent / Magnet (.torrent)...", null, delegate { OpenShihabTorrentDialog(""); });
+            ToolStripMenuItem taskMedia = new ToolStripMenuItem("Video / Playlist, Subtitles && Gallery Downloader...", null, delegate { OpenShihabMediaAndGalleryDialog(); });
+            ToolStripMenuItem taskRss = new ToolStripMenuItem("RSS / Atom Feed Reader && Auto-Downloader...", null, delegate { OpenShihabRssFeedDialog(); });
+            ToolStripMenuItem taskGrabber = new ToolStripMenuItem("Run site grabber...", null, delegate { OpenShihabSiteGrabberDialog(); });
+            ToolStripMenuItem taskDropTarget = new ToolStripMenuItem("Show drop target", null, delegate { ToggleMehediFloatingDropTarget(); });
+            ToolStripMenuItem taskRemoteQr = new ToolStripMenuItem("LAN Remote Web UI && Mobile Pairing (QR)...", null, delegate { OpenShihabRemotePairingDialog(); });
+            ToolStripMenuItem taskChecksum = new ToolStripMenuItem("Checksum Verifier && Safe Archive Extractor...", null, delegate { OpenShihabChecksumAndExtractDialog(); });
+
+            ToolStripMenuItem taskExport = new ToolStripMenuItem("Export");
+            taskExport.DropDownItems.Add("To MHS / IDM export file (.ef2)...", null, delegate { ExportShihabList(true); });
+            taskExport.DropDownItems.Add("To text file (.txt)...", null, delegate { ExportShihabList(false); });
+
+            ToolStripMenuItem taskImport = new ToolStripMenuItem("Import");
+            taskImport.DropDownItems.Add("From MHS / IDM export or text file (.ef2 / .txt)...", null, delegate { ImportMehediList(); });
+
+            ToolStripMenuItem taskExit = new ToolStripMenuItem("Exit", null, delegate { ExitShihabApplicationCleanly(); });
+
+            _tasksTopMenu.DropDownOpening += delegate
+            {
+                taskDropTarget.Checked = _shihabDropTargetForm != null && !_shihabDropTargetForm.IsDisposed && _shihabDropTargetForm.Visible;
+            };
+            _tasksTopMenu.DropDownItems.AddRange(new ToolStripItem[]
+            {
+                taskAddNew, taskAddBatch, taskAddClip, taskTorrent, taskMedia, taskRss, taskGrabber,
+                new ToolStripSeparator(),
+                taskDropTarget, taskRemoteQr, taskChecksum,
+                new ToolStripSeparator(),
+                taskExport, taskImport,
+                new ToolStripSeparator(),
+                taskExit
+            });
+
+            // 2. File
+            _fileTopMenu = new ToolStripMenuItem("&File");
+            ToolStripMenuItem fileStop = new ToolStripMenuItem("Stop download", null, delegate { PauseSelectedMehediDownloads(); });
+            ToolStripMenuItem fileResume = new ToolStripMenuItem("Resume download", null, delegate { ResumeSelectedShihabDownloads(); });
+            ToolStripMenuItem fileProgress = new ToolStripMenuItem("Show live progress window", null, delegate { OpenSelectedMehediProgressWindow(); });
+            ToolStripMenuItem fileOpen = new ToolStripMenuItem("Open", null, delegate { OpenSelectedShihabCompletedFile(false); }) { ShortcutKeyDisplayString = "Enter" };
+            ToolStripMenuItem fileOpenWith = new ToolStripMenuItem("Open With...", null, delegate { OpenSelectedShihabCompletedFile(true); });
+            ToolStripMenuItem fileOpenFolder = new ToolStripMenuItem("Open folder", null, delegate
+            {
+                if (_shihabDownloadsListView.SelectedItems.Count > 0) OpenSelectedMehediContainingFolder();
+                else OpenDefaultShihabDownloadsDirectory();
+            });
+            ToolStripMenuItem fileRedownload = new ToolStripMenuItem("Redownload", null, delegate { RedownloadSelectedShihabItem(); });
+            ToolStripMenuItem fileRefreshAddr = new ToolStripMenuItem("Refresh download address...", null, delegate { RefreshSelectedMehediAddress(); });
+            ToolStripMenuItem fileRemove = new ToolStripMenuItem("Remove", null, delegate { PromptAndDeleteSelectedDownloads(false); }) { ShortcutKeyDisplayString = "Del" };
+            ToolStripMenuItem fileRemoveDisk = new ToolStripMenuItem("Remove + delete file from disk...", null, delegate { PromptAndDeleteSelectedDownloads(true); }) { ShortcutKeyDisplayString = "Shift+Del" };
+            ToolStripMenuItem fileProps = new ToolStripMenuItem("Properties...", null, delegate { OpenSelectedShihabProperties(); }) { ShortcutKeyDisplayString = "Alt+Enter" };
+
+            _fileTopMenu.DropDownOpening += delegate
+            {
+                bool hasSel, canResume, canStop, canOpenCompleted;
+                EvaluateSelectionCapabilities(out hasSel, out canResume, out canStop, out canOpenCompleted);
+                fileStop.Enabled = canStop;
+                fileResume.Enabled = canResume;
+                fileProgress.Enabled = hasSel;
+                fileOpen.Enabled = canOpenCompleted;
+                fileOpenWith.Enabled = canOpenCompleted;
+                fileOpenFolder.Enabled = true;
+                fileRedownload.Enabled = hasSel;
+                fileRefreshAddr.Enabled = hasSel;
+                fileRemove.Enabled = hasSel;
+                fileRemoveDisk.Enabled = hasSel;
+                fileProps.Enabled = hasSel;
+            };
+            _fileTopMenu.DropDownItems.AddRange(new ToolStripItem[]
+            {
+                fileStop, fileResume, fileProgress,
+                new ToolStripSeparator(),
+                fileOpen, fileOpenWith, fileOpenFolder,
+                new ToolStripSeparator(),
+                fileRedownload, fileRefreshAddr, fileRemove, fileRemoveDisk,
+                new ToolStripSeparator(),
+                fileProps
+            });
+
+            // 3. Downloads
+            _downloadsTopMenu = new ToolStripMenuItem("&Downloads");
+            ToolStripMenuItem dlPauseAll = new ToolStripMenuItem("Pause all", null, delegate
+            {
+                _shihabEngine.StopAllMehediDownloads();
+                RefreshMehediDownloadsGrid();
+            });
+            ToolStripMenuItem dlDeleteCompleted = new ToolStripMenuItem("Delete all completed", null, delegate { DeleteAllCompletedMehediDownloads(); });
+            ToolStripMenuItem dlFind = new ToolStripMenuItem("Find...", null, delegate
+            {
+                _mehediSearchBox.Focus();
+                _mehediSearchBox.SelectAll();
+            }) { ShortcutKeyDisplayString = "Ctrl+F" };
+            ToolStripMenuItem dlScheduler = new ToolStripMenuItem("Scheduler...", null, delegate { OpenMehediSchedulerDialog(); });
+            ToolStripMenuItem dlStartNowSub = new ToolStripMenuItem("Start Now");
+            ToolStripMenuItem dlStopSub = new ToolStripMenuItem("Stop");
+
+            ToolStripMenuItem dlSpeedSub = new ToolStripMenuItem("Speed Limiter");
+            ToolStripMenuItem dlSpeedOn = new ToolStripMenuItem("Turn On", null, delegate
+            {
+                _mehediConfig.MehediGlobalSpeedLimiterEnabled = true;
+                _shihabStore.SaveMehediConfig(_mehediConfig);
+                UpdateShihabStatusBadges();
+            });
+            ToolStripMenuItem dlSpeedOff = new ToolStripMenuItem("Turn Off", null, delegate
+            {
+                _mehediConfig.MehediGlobalSpeedLimiterEnabled = false;
+                _shihabStore.SaveMehediConfig(_mehediConfig);
+                UpdateShihabStatusBadges();
+            });
+            ToolStripMenuItem dlSpeedSettings = new ToolStripMenuItem("Settings...", null, delegate { OpenShihabOptionsDialog(); });
+            dlSpeedSub.DropDownItems.AddRange(new ToolStripItem[] { dlSpeedOn, dlSpeedOff, new ToolStripSeparator(), dlSpeedSettings });
+
+            ToolStripMenuItem dlCompletionSub = new ToolStripMenuItem("Options on completion");
+            ToolStripMenuItem dlExitDone = new ToolStripMenuItem("Exit MHS Download Manager when done", null, delegate
+            {
+                MehediQueueConfig mq = FindMainQueueConfig();
+                if (mq != null)
+                {
+                    mq.MehediExitAppWhenDone = !mq.MehediExitAppWhenDone;
+                    _shihabStore.SaveMehediConfig(_mehediConfig);
+                }
+            });
+            ToolStripMenuItem dlHangUpDone = new ToolStripMenuItem("Hang up modem / VPN when done", null, delegate
+            {
+                _mehediConfig.MehediHangUpWhenDone = !_mehediConfig.MehediHangUpWhenDone;
+                _shihabStore.SaveMehediConfig(_mehediConfig);
+            });
+            ToolStripMenuItem dlShutdownDone = new ToolStripMenuItem("Shut down computer when done", null, delegate
+            {
+                MehediQueueConfig mq = FindMainQueueConfig();
+                if (mq != null)
+                {
+                    bool currentlyShutdown = string.Equals(mq.ShihabSystemPowerActionWhenDone, "Shutdown", StringComparison.OrdinalIgnoreCase);
+                    mq.ShihabSystemPowerActionWhenDone = currentlyShutdown ? "None" : "Shutdown";
+                    _shihabStore.SaveMehediConfig(_mehediConfig);
+                }
+            });
+            dlCompletionSub.DropDownItems.AddRange(new ToolStripItem[] { dlExitDone, dlHangUpDone, dlShutdownDone });
+
+            ToolStripMenuItem dlOptions = new ToolStripMenuItem("Options...", null, delegate { OpenShihabOptionsDialog(); });
+
+            _downloadsTopMenu.DropDownOpening += delegate
+            {
+                dlPauseAll.Enabled = _shihabEngine.HasAnyActiveDownloadsOrQueues();
+                PopulateStartQueueMenuItems(dlStartNowSub.DropDownItems);
+                PopulateStopQueueMenuItems(dlStopSub.DropDownItems);
+                dlSpeedOn.Checked = _mehediConfig.MehediGlobalSpeedLimiterEnabled;
+                dlSpeedOff.Checked = !_mehediConfig.MehediGlobalSpeedLimiterEnabled;
+                MehediQueueConfig mq = FindMainQueueConfig();
+                dlExitDone.Checked = mq != null && mq.MehediExitAppWhenDone;
+                dlHangUpDone.Checked = _mehediConfig.MehediHangUpWhenDone;
+                dlShutdownDone.Checked = mq != null && string.Equals(mq.ShihabSystemPowerActionWhenDone, "Shutdown", StringComparison.OrdinalIgnoreCase);
+            };
+            _downloadsTopMenu.DropDownItems.AddRange(new ToolStripItem[]
+            {
+                dlPauseAll, dlDeleteCompleted, dlFind,
+                new ToolStripSeparator(),
+                dlScheduler, dlStartNowSub, dlStopSub,
+                new ToolStripSeparator(),
+                dlSpeedSub, dlCompletionSub,
+                new ToolStripSeparator(),
+                dlOptions
+            });
+
+            // 4. View
+            _viewTopMenu = new ToolStripMenuItem("&View");
+            ToolStripMenuItem viewCategories = new ToolStripMenuItem("Show Categories / Transfers Sidebar", null, delegate
+            {
+                _mehediConfig.MehediShowCategoriesPanel = !_mehediConfig.MehediShowCategoriesPanel;
+                _shihabSidebarPanel.Visible = _mehediConfig.MehediShowCategoriesPanel;
+                _shihabStore.SaveMehediConfig(_mehediConfig);
+                ResizeShihabFileNameColumn();
+                RepositionShihabHeaderControls();
+            });
+
+            ToolStripMenuItem viewToolbarSub = new ToolStripMenuItem("Toolbar");
+            ToolStripMenuItem viewShowRibbon = new ToolStripMenuItem("Show Top Icon Toolbar", null, delegate
+            {
+                _shihabTopRibbonBar.Visible = !_shihabTopRibbonBar.Visible;
+            });
+            ToolStripMenuItem viewLargeIcons = new ToolStripMenuItem("Large Gradient Icons", null, delegate
+            {
+                _shihabTopRibbonBar.Visible = true;
+                _shihabTopRibbonBar.CompactMode = false;
+                _shihabTopRibbonBar.UpdateMetricsForScale();
+            });
+            ToolStripMenuItem viewCompactIcons = new ToolStripMenuItem("Compact Icons", null, delegate
+            {
+                _shihabTopRibbonBar.Visible = true;
+                _shihabTopRibbonBar.CompactMode = true;
+                _shihabTopRibbonBar.UpdateMetricsForScale();
+            });
+            viewToolbarSub.DropDownItems.AddRange(new ToolStripItem[] { viewShowRibbon, new ToolStripSeparator(), viewLargeIcons, viewCompactIcons });
+
+            ToolStripMenuItem viewDropTarget = new ToolStripMenuItem("Show Floating Drop Target", null, delegate { ToggleMehediFloatingDropTarget(); });
+
+            ToolStripMenuItem viewArrangeSub = new ToolStripMenuItem("Arrange Files");
+            AddSortMenuOption(viewArrangeSub, "By Order Added", "ORDER", 0);
+            AddSortMenuOption(viewArrangeSub, "By File Name", "NAME", 1);
+            AddSortMenuOption(viewArrangeSub, "By Size", "SIZE", 2);
+            AddSortMenuOption(viewArrangeSub, "By Progress", "PROGRESS", 3);
+            AddSortMenuOption(viewArrangeSub, "By Speed", "SPEED", 4);
+            AddSortMenuOption(viewArrangeSub, "By Status", "STATUS", 6);
+
+            ToolStripMenuItem viewThemeSub = new ToolStripMenuItem("Theme");
+            string[] builtInThemes = new string[] { "Obsidian Dark", "Midnight Violet", "Nordic Slate", "Cyber Emerald", "Classic Light" };
+            for (int t = 0; t < builtInThemes.Length; t++)
+            {
+                string tName = builtInThemes[t];
+                ToolStripMenuItem tItem = new ToolStripMenuItem(tName, null, delegate
+                {
+                    _mehediConfig.ShihabThemeName = tName;
+                    _mehediConfig.ShihabDarkMode = !string.Equals(tName, "Classic Light", StringComparison.OrdinalIgnoreCase);
+                    _shihabStore.SaveMehediConfig(_mehediConfig);
+                    ApplyMehediTheme();
+                });
+                tItem.Tag = tName;
+                viewThemeSub.DropDownItems.Add(tItem);
+            }
+
+            ToolStripMenuItem viewScaleSub = new ToolStripMenuItem("UI Scale");
+            int[] scales = new int[] { 90, 100, 115, 125, 150 };
+            for (int s = 0; s < scales.Length; s++)
+            {
+                int pct = scales[s];
+                ToolStripMenuItem sItem = new ToolStripMenuItem(pct + "%" + (pct == 100 ? " (Default)" : ""), null, delegate
+                {
+                    _mehediConfig.ShihabUiScalePercent = pct;
+                    _shihabStore.SaveMehediConfig(_mehediConfig);
+                    ApplyMehediTheme();
+                });
+                sItem.Tag = pct;
+                viewScaleSub.DropDownItems.Add(sItem);
+            }
+
+            _viewTopMenu.DropDownOpening += delegate
+            {
+                viewCategories.Checked = _shihabSidebarPanel.Visible;
+                viewShowRibbon.Checked = _shihabTopRibbonBar.Visible;
+                viewLargeIcons.Checked = _shihabTopRibbonBar.Visible && !_shihabTopRibbonBar.CompactMode;
+                viewCompactIcons.Checked = _shihabTopRibbonBar.Visible && _shihabTopRibbonBar.CompactMode;
+                viewDropTarget.Checked = _shihabDropTargetForm != null && !_shihabDropTargetForm.IsDisposed && _shihabDropTargetForm.Visible;
+                for (int i = 0; i < viewThemeSub.DropDownItems.Count; i++)
+                {
+                    ToolStripMenuItem ti = viewThemeSub.DropDownItems[i] as ToolStripMenuItem;
+                    if (ti != null) ti.Checked = string.Equals(_mehediConfig.ShihabThemeName, ti.Tag as string, StringComparison.OrdinalIgnoreCase);
+                }
+                for (int i = 0; i < viewScaleSub.DropDownItems.Count; i++)
+                {
+                    ToolStripMenuItem si = viewScaleSub.DropDownItems[i] as ToolStripMenuItem;
+                    if (si != null && si.Tag is int) si.Checked = (_mehediConfig.ShihabUiScalePercent == (int)si.Tag);
+                }
+            };
+            _viewTopMenu.DropDownItems.AddRange(new ToolStripItem[]
+            {
+                viewCategories, viewToolbarSub, viewDropTarget,
+                new ToolStripSeparator(),
+                viewArrangeSub, viewThemeSub, viewScaleSub
+            });
+
+            // 5. Help
+            _helpTopMenu = new ToolStripMenuItem("&Help");
+            _helpTopMenu.DropDownItems.Add("Browser Extension Setup Guide...", null, delegate { ShowShihabExtensionInstructions(); });
+            _helpTopMenu.DropDownItems.Add("Open Browser Extension Folder...", null, delegate { OpenShihabInstalledExtensionFolder(); });
+            _helpTopMenu.DropDownItems.Add("Command-Line && MCP Help...", null, delegate { ShowMehediCliHelp(); });
+            _helpTopMenu.DropDownItems.Add(new ToolStripSeparator());
+            _helpTopMenu.DropDownItems.Add("Tell a Friend...", null, delegate { OpenShihabTellAFriendDialog(); });
+            ToolStripMenuItem helpCheckUpd = new ToolStripMenuItem("Check for Updates...", null, delegate { TriggerShihabUpdateCheck(true); })
+            {
+                ShortcutKeyDisplayString = "Ctrl+U"
+            };
+            _helpTopMenu.DropDownItems.Add(helpCheckUpd);
+            _helpTopMenu.DropDownItems.Add("GitHub Releases Page...", null, delegate
+            {
+                string slug = string.IsNullOrWhiteSpace(_mehediConfig.ShihabUpdateRepoSlug) ? ShihabAutoUpdater.DefaultRepoSlug : _mehediConfig.ShihabUpdateRepoSlug.Trim();
+                try { Process.Start(new ProcessStartInfo("https://github.com/" + slug + "/releases") { UseShellExecute = true }); } catch { }
+            });
+            _helpTopMenu.DropDownItems.Add(new ToolStripSeparator());
+            _helpTopMenu.DropDownItems.Add("About MHS Download Manager...", null, delegate { ShowShihabAboutDialog(); });
+
+            // 6. Registration
+            _registrationTopMenu = new ToolStripMenuItem("&Registration");
+            _registrationTopMenu.DropDownItems.Add("Registration && License Status...", null, delegate { OpenShihabRegistrationDialog(); });
+            _registrationTopMenu.DropDownItems.Add("View Open-Source MIT License...", null, delegate
+            {
+                string slug = string.IsNullOrWhiteSpace(_mehediConfig.ShihabUpdateRepoSlug) ? ShihabAutoUpdater.DefaultRepoSlug : _mehediConfig.ShihabUpdateRepoSlug.Trim();
+                try { Process.Start(new ProcessStartInfo("https://github.com/" + slug + "/blob/main/LICENSE") { UseShellExecute = true }); } catch { }
+            });
+            _registrationTopMenu.DropDownItems.Add("Star && Support on GitHub...", null, delegate
+            {
+                string slug = string.IsNullOrWhiteSpace(_mehediConfig.ShihabUpdateRepoSlug) ? ShihabAutoUpdater.DefaultRepoSlug : _mehediConfig.ShihabUpdateRepoSlug.Trim();
+                try { Process.Start(new ProcessStartInfo("https://github.com/" + slug) { UseShellExecute = true }); } catch { }
+            });
+
+            bar.Items.AddRange(new ToolStripItem[]
+            {
+                _tasksTopMenu,
+                _fileTopMenu,
+                _downloadsTopMenu,
+                _viewTopMenu,
+                _helpTopMenu,
+                _registrationTopMenu
+            });
+            return bar;
+        }
+
+        private void AddSortMenuOption(ToolStripMenuItem parent, string label, string sortKey, int colIdx)
+        {
+            parent.DropDownItems.Add(label, null, delegate
+            {
+                if (_mehediSortColumnKey == sortKey) _shihabSortAscending = !_shihabSortAscending;
+                else
+                {
+                    _mehediSortColumnKey = sortKey;
+                    _shihabSortAscending = (sortKey == "NAME" || sortKey == "STATUS");
+                }
+                _shihabDownloadsListView.MehediSortedColumnIndex = colIdx;
+                _shihabDownloadsListView.ShihabSortAscending = _shihabSortAscending;
+                RefreshMehediDownloadsGrid();
+            });
+        }
+
+        private MehediQueueConfig FindMainQueueConfig()
+        {
+            if (_mehediConfig == null || _mehediConfig.MehediQueues == null) return null;
+            for (int i = 0; i < _mehediConfig.MehediQueues.Count; i++)
+            {
+                MehediQueueConfig q = _mehediConfig.MehediQueues[i];
+                if (q != null && string.Equals(q.ShihabQueueName, "Main Download Queue", StringComparison.OrdinalIgnoreCase))
+                {
+                    return q;
+                }
+            }
+            return _mehediConfig.MehediQueues.Count > 0 ? _mehediConfig.MehediQueues[0] : null;
+        }
+
+        private int CountQueueItems(List<ShihabDownloadItem> all, string queueName)
+        {
+            int c = 0;
+            for (int i = 0; i < all.Count; i++)
+            {
+                ShihabDownloadItem it = all[i];
+                if (it == null) continue;
+                if (!string.IsNullOrWhiteSpace(it.MehediQueueName) &&
+                    string.Equals(MehediDynamicSegmentEngine.ResolveCanonicalQueueName(it.MehediQueueName), queueName, StringComparison.OrdinalIgnoreCase))
+                {
+                    c++;
+                }
+                else if (string.IsNullOrWhiteSpace(it.MehediQueueName) &&
+                         it.GetShihabStatusEnum() == ShihabDownloadStatus.ShihabQueued &&
+                         string.Equals(queueName, "Main Download Queue", StringComparison.OrdinalIgnoreCase))
+                {
+                    c++;
+                }
+            }
+            return c;
+        }
+
+        private void PopulateStartQueueMenuItems(ToolStripItemCollection items)
+        {
+            items.Clear();
+            List<ShihabDownloadItem> all = _shihabEngine.GetShihabDownloadsSnapshot();
+            if (_mehediConfig.MehediQueues != null)
+            {
+                for (int i = 0; i < _mehediConfig.MehediQueues.Count; i++)
+                {
+                    MehediQueueConfig q = _mehediConfig.MehediQueues[i];
+                    if (q == null) continue;
+                    string qName = q.ShihabQueueName;
+                    int count = CountQueueItems(all, qName);
+                    string label = string.Format("Start {0} ({1} {2}){3}",
+                        qName,
+                        count,
+                        count == 1 ? "file" : "files",
+                        q.MehediIsRunningNow ? " — Running" : "");
+                    ToolStripMenuItem mi = new ToolStripMenuItem(label, null, delegate
+                    {
+                        _shihabEngine.StartShihabQueue(qName);
+                        RefreshMehediDownloadsGrid();
+                    });
+                    mi.Checked = q.MehediIsRunningNow;
+                    items.Add(mi);
+                }
+            }
+            items.Add(new ToolStripSeparator());
+            items.Add("Edit Queues in Scheduler...", null, delegate { OpenMehediSchedulerDialog(); });
+        }
+
+        private void PopulateStopQueueMenuItems(ToolStripItemCollection items)
+        {
+            items.Clear();
+            if (_mehediConfig.MehediQueues != null)
+            {
+                for (int i = 0; i < _mehediConfig.MehediQueues.Count; i++)
+                {
+                    MehediQueueConfig q = _mehediConfig.MehediQueues[i];
+                    if (q == null) continue;
+                    string qName = q.ShihabQueueName;
+                    string label = "Stop " + qName + (q.MehediIsRunningNow ? " (Running)" : "");
+                    ToolStripMenuItem mi = new ToolStripMenuItem(label, null, delegate
+                    {
+                        _shihabEngine.StopShihabQueue(qName);
+                        RefreshMehediDownloadsGrid();
+                    });
+                    items.Add(mi);
+                }
+            }
+            items.Add(new ToolStripSeparator());
+            items.Add("Stop All Queues", null, delegate
+            {
+                _shihabEngine.StopAllShihabQueues();
+                RefreshMehediDownloadsGrid();
+            });
+            items.Add("Edit Queues in Scheduler...", null, delegate { OpenMehediSchedulerDialog(); });
         }
 
         private ContextMenuStrip BuildMehediFullAppOverflowMenu()
@@ -1244,30 +2585,27 @@ namespace ShihabMehediIDM
             int shihabBarW = _mehediTopActionHeaderBar.ClientSize.Width;
             int mehediBtnY = (_mehediTopActionHeaderBar.Height - 28) / 2;
 
-            _shihabSearchBarPanel.Location = new Point(Math.Max(340, shihabBarW - _shihabSearchBarPanel.Width - 12), (_mehediTopActionHeaderBar.Height - _shihabSearchBarPanel.Height) / 2);
+            _shihabSearchBarPanel.Location = new Point(Math.Max(280, shihabBarW - _shihabSearchBarPanel.Width - 12), (_mehediTopActionHeaderBar.Height - _shihabSearchBarPanel.Height) / 2);
 
-            int mehediTitleEnd = 210;
+            int mehediTitleEnd = 195;
             using (Graphics shihabMeasureG = _mehediTopActionHeaderBar.CreateGraphics())
-            using (Font mehediTitleFont = new Font("Segoe UI", 11.5f, FontStyle.Bold))
-            using (Font shihabBadgeFont = new Font("Segoe UI Semibold", 8.2f, FontStyle.Regular))
+            using (Font mehediTitleFont = new Font("Segoe UI", 10.5f, FontStyle.Bold))
+            using (Font shihabBadgeFont = new Font("Segoe UI Semibold", 8.0f, FontStyle.Regular))
             {
-                Size mehediT = TextRenderer.MeasureText(shihabMeasureG, _shihabHeaderViewTitle, mehediTitleFont, new Size(340, 32), TextFormatFlags.NoPadding);
-                Size shihabB = TextRenderer.MeasureText(shihabMeasureG, _mehediHeaderItemsBadgeText, shihabBadgeFont, new Size(160, 24), TextFormatFlags.NoPadding);
-                mehediTitleEnd = 14 + mehediT.Width + 4 + 8 + shihabB.Width + 16 + 14;
+                Size mehediT = TextRenderer.MeasureText(shihabMeasureG, _shihabHeaderViewTitle, mehediTitleFont, new Size(340, 28), TextFormatFlags.NoPadding);
+                Size shihabB = TextRenderer.MeasureText(shihabMeasureG, _mehediHeaderItemsBadgeText, shihabBadgeFont, new Size(160, 22), TextFormatFlags.NoPadding);
+                mehediTitleEnd = 14 + mehediT.Width + 4 + 8 + shihabB.Width + 14 + 14;
             }
 
             bool hasUpdateBanner = _shihabLatestDetectedUpdate != null && _shihabLatestDetectedUpdate.UpdateAvailable;
             ShihabHeaderPillButton[] shihabBtns = new ShihabHeaderPillButton[]
             {
-                _shihabAddUrlPillBtn,
                 _shihabTorrentPillBtn,
                 _shihabMediaPillBtn,
-                _mehediStartPillBtn,
-                _shihabPausePillBtn,
+                _shihabRssPillBtn,
                 _mehediFolderPillBtn,
                 _shihabRemotePillBtn,
                 _shihabUpdatePillBtn,
-                _shihabAboutPillBtn,
                 _mehediMenuPillBtn
             };
 
@@ -1338,27 +2676,91 @@ namespace ShihabMehediIDM
             catch { }
         }
 
+        private void EvaluateSelectionCapabilities(out bool hasSelection, out bool canResume, out bool canStop, out bool canOpenCompleted)
+        {
+            hasSelection = false;
+            canResume = false;
+            canStop = false;
+            canOpenCompleted = false;
+
+            if (_shihabDownloadsListView == null || _shihabDownloadsListView.SelectedItems.Count == 0)
+            {
+                return;
+            }
+
+            List<ShihabDownloadItem> selected = GetSelectedShihabItems();
+            hasSelection = selected.Count > 0;
+            for (int i = 0; i < selected.Count; i++)
+            {
+                ShihabDownloadItem it = selected[i];
+                if (it == null) continue;
+                ShihabDownloadStatus st = it.GetShihabStatusEnum();
+                bool active = _shihabEngine.IsMehediItemActive(it.ShihabId) ||
+                              st == ShihabDownloadStatus.ShihabDownloading ||
+                              st == ShihabDownloadStatus.ShihabConnecting ||
+                              st == ShihabDownloadStatus.ShihabRebuilding;
+                if (active)
+                {
+                    canStop = true;
+                }
+                else if (st != ShihabDownloadStatus.ShihabCompleted)
+                {
+                    canResume = true;
+                }
+                if (st == ShihabDownloadStatus.ShihabCompleted)
+                {
+                    canOpenCompleted = true;
+                }
+            }
+        }
+
         private void UpdateMehediToolbarActionIcons()
         {
+            if (_shihabTopRibbonBar == null) return;
+            bool hasSel, canResume, canStop, canOpenCompleted;
+            EvaluateSelectionCapabilities(out hasSel, out canResume, out canStop, out canOpenCompleted);
+            bool anyActiveAnywhere = _shihabEngine.HasAnyActiveDownloadsOrQueues();
+
+            _shihabTopRibbonBar.SetButtonEnabled("resume", canResume);
+            _shihabTopRibbonBar.SetButtonEnabled("stop", canStop);
+            _shihabTopRibbonBar.SetButtonEnabled("stop_all", anyActiveAnywhere);
+            _shihabTopRibbonBar.SetButtonEnabled("delete", hasSel);
         }
 
         private ContextMenuStrip BuildMehediRowContextMenu()
         {
             ContextMenuStrip shihabCtx = new ContextMenuStrip();
-            shihabCtx.Items.Add("Resume Download", null, delegate { ResumeSelectedShihabDownloads(); });
-            shihabCtx.Items.Add("Stop Download", null, delegate { PauseSelectedMehediDownloads(); });
-            shihabCtx.Items.Add("Show Live Progress Window", null, delegate { OpenSelectedMehediProgressWindow(); });
-            shihabCtx.Items.Add(new ToolStripSeparator());
-            shihabCtx.Items.Add("Open", null, delegate { OpenSelectedShihabCompletedFile(false); });
-            shihabCtx.Items.Add("Open With...", null, delegate { OpenSelectedShihabCompletedFile(true); });
-            shihabCtx.Items.Add("Open Folder", null, delegate { OpenSelectedMehediContainingFolder(); });
-            shihabCtx.Items.Add(new ToolStripSeparator());
-            shihabCtx.Items.Add("Refresh Download Address...", null, delegate { RefreshSelectedMehediAddress(); });
-            shihabCtx.Items.Add("Redownload from Beginning", null, delegate { RedownloadSelectedShihabItem(); });
-
+            ToolStripMenuItem ctxResume = new ToolStripMenuItem("Resume Download", null, delegate { ResumeSelectedShihabDownloads(); });
+            ToolStripMenuItem ctxStop = new ToolStripMenuItem("Stop Download", null, delegate { PauseSelectedMehediDownloads(); });
+            ToolStripMenuItem ctxProgress = new ToolStripMenuItem("Show Live Progress Window", null, delegate { OpenSelectedMehediProgressWindow(); });
+            ToolStripMenuItem ctxOpen = new ToolStripMenuItem("Open", null, delegate { OpenSelectedShihabCompletedFile(false); });
+            ToolStripMenuItem ctxOpenWith = new ToolStripMenuItem("Open With...", null, delegate { OpenSelectedShihabCompletedFile(true); });
+            ToolStripMenuItem ctxOpenFolder = new ToolStripMenuItem("Open Folder", null, delegate { OpenSelectedMehediContainingFolder(); });
+            ToolStripMenuItem ctxRefreshAddr = new ToolStripMenuItem("Refresh Download Address...", null, delegate { RefreshSelectedMehediAddress(); });
+            ToolStripMenuItem ctxRedownload = new ToolStripMenuItem("Redownload from Beginning", null, delegate { RedownloadSelectedShihabItem(); });
             ToolStripMenuItem mehediMoveQueue = new ToolStripMenuItem("Move to Queue");
+            ToolStripMenuItem ctxRemove = new ToolStripMenuItem("Remove from List", null, delegate { DeleteSelectedShihabDownloads(false); });
+            ToolStripMenuItem ctxRemoveDisk = new ToolStripMenuItem("Remove + Delete File from Disk...", null, delegate { PromptAndDeleteSelectedDownloads(true); });
+            ToolStripMenuItem ctxProps = new ToolStripMenuItem("Properties...", null, delegate { OpenSelectedShihabProperties(); });
+
             shihabCtx.Opening += delegate
             {
+                bool hasSel, canResume, canStop, canOpenCompleted;
+                EvaluateSelectionCapabilities(out hasSel, out canResume, out canStop, out canOpenCompleted);
+
+                ctxResume.Enabled = canResume;
+                ctxStop.Enabled = canStop;
+                ctxProgress.Enabled = hasSel;
+                ctxOpen.Enabled = canOpenCompleted;
+                ctxOpenWith.Enabled = canOpenCompleted;
+                ctxOpenFolder.Enabled = hasSel;
+                ctxRefreshAddr.Enabled = hasSel;
+                ctxRedownload.Enabled = hasSel;
+                mehediMoveQueue.Enabled = hasSel;
+                ctxRemove.Enabled = hasSel;
+                ctxRemoveDisk.Enabled = hasSel;
+                ctxProps.Enabled = hasSel;
+
                 mehediMoveQueue.DropDownItems.Clear();
                 mehediMoveQueue.DropDownItems.Add("(None — Direct)", null, delegate { AssignSelectedShihabToQueue(""); });
                 for (int shihabQ = 0; shihabQ < _mehediConfig.MehediQueues.Count; shihabQ++)
@@ -1367,13 +2769,19 @@ namespace ShihabMehediIDM
                     mehediMoveQueue.DropDownItems.Add(mehediQName, null, delegate { AssignSelectedShihabToQueue(mehediQName); });
                 }
             };
-            shihabCtx.Items.Add(mehediMoveQueue);
 
-            shihabCtx.Items.Add(new ToolStripSeparator());
-            shihabCtx.Items.Add("Remove from List", null, delegate { DeleteSelectedShihabDownloads(false); });
-            shihabCtx.Items.Add("Remove + Delete File from Disk", null, delegate { DeleteSelectedShihabDownloads(true); });
-            shihabCtx.Items.Add(new ToolStripSeparator());
-            shihabCtx.Items.Add("Properties...", null, delegate { OpenSelectedShihabProperties(); });
+            shihabCtx.Items.AddRange(new ToolStripItem[]
+            {
+                ctxResume, ctxStop, ctxProgress,
+                new ToolStripSeparator(),
+                ctxOpen, ctxOpenWith, ctxOpenFolder,
+                new ToolStripSeparator(),
+                ctxRefreshAddr, ctxRedownload, mehediMoveQueue,
+                new ToolStripSeparator(),
+                ctxRemove, ctxRemoveDisk,
+                new ToolStripSeparator(),
+                ctxProps
+            });
             return shihabCtx;
         }
 
@@ -1403,17 +2811,24 @@ namespace ShihabMehediIDM
                 Font = new Font("Segoe UI", scaledFontPt);
             }
 
-            if (_shihabAddUrlPillBtn != null)
+            string lang = _mehediConfig.ShihabLanguageCode;
+            if (_tasksTopMenu != null) _tasksTopMenu.Text = ShihabThemeManager.TranslateUiString(lang, "menu_tasks", "&Tasks");
+            if (_fileTopMenu != null) _fileTopMenu.Text = ShihabThemeManager.TranslateUiString(lang, "menu_file", "&File");
+            if (_downloadsTopMenu != null) _downloadsTopMenu.Text = ShihabThemeManager.TranslateUiString(lang, "menu_downloads", "&Downloads");
+            if (_viewTopMenu != null) _viewTopMenu.Text = ShihabThemeManager.TranslateUiString(lang, "menu_view", "&View");
+            if (_helpTopMenu != null) _helpTopMenu.Text = ShihabThemeManager.TranslateUiString(lang, "menu_help", "&Help");
+            if (_registrationTopMenu != null) _registrationTopMenu.Text = ShihabThemeManager.TranslateUiString(lang, "menu_registration", "&Registration");
+
+            if (_shihabTopRibbonBar != null)
             {
-                _shihabAddUrlPillBtn.Text = "+ " + ShihabThemeManager.TranslateUiString(_mehediConfig.ShihabLanguageCode, "btn_add_url", "Add URL");
-            }
-            if (_mehediStartPillBtn != null)
-            {
-                _mehediStartPillBtn.Text = "\u25B6 " + ShihabThemeManager.TranslateUiString(_mehediConfig.ShihabLanguageCode, "btn_resume", "Start");
-            }
-            if (_shihabPausePillBtn != null)
-            {
-                _shihabPausePillBtn.Text = "\u275A\u275A " + ShihabThemeManager.TranslateUiString(_mehediConfig.ShihabLanguageCode, "btn_stop", "Pause");
+                _shihabTopRibbonBar.ShihabDarkMode = shihabDark;
+                _shihabTopRibbonBar.UiScalePercent = uiScale;
+                for (int i = 0; i < _shihabTopRibbonBar.Items.Count; i++)
+                {
+                    ShihabTopRibbonButtonSpec spec = _shihabTopRibbonBar.Items[i];
+                    spec.DisplayText = ShihabThemeManager.TranslateUiString(lang, spec.LocalizationKey, spec.DefaultText);
+                }
+                _shihabTopRibbonBar.UpdateMetricsForScale();
             }
 
             ShihabThemePalette.ApplyMehediNativeDarkFrame(this, shihabDark);
@@ -1421,7 +2836,12 @@ namespace ShihabMehediIDM
             ForeColor = shihabFg;
 
             MehediDarkToolStripRenderer shihabMenuRenderer = new MehediDarkToolStripRenderer(shihabDark, false);
+            _shihabMenuBar.BackColor = shihabDark ? Color.FromArgb(27, 29, 35) : Color.FromArgb(244, 246, 250);
+            _shihabMenuBar.ForeColor = shihabFg;
+            _shihabMenuBar.Font = new Font("Segoe UI", 9.0f * (uiScale / 100.0f));
             _shihabMenuBar.Renderer = shihabMenuRenderer;
+            if (_shihabStartQueuePopupMenu != null) _shihabStartQueuePopupMenu.Renderer = shihabMenuRenderer;
+            if (_shihabStopQueuePopupMenu != null) _shihabStopQueuePopupMenu.Renderer = shihabMenuRenderer;
             if (_mehediOverflowAppMenu != null)
             {
                 _mehediOverflowAppMenu.Renderer = shihabMenuRenderer;
@@ -1448,15 +2868,12 @@ namespace ShihabMehediIDM
 
             ShihabHeaderPillButton[] mehediPills = new ShihabHeaderPillButton[]
             {
-                _shihabAddUrlPillBtn,
                 _shihabTorrentPillBtn,
                 _shihabMediaPillBtn,
-                _mehediStartPillBtn,
-                _shihabPausePillBtn,
+                _shihabRssPillBtn,
                 _mehediFolderPillBtn,
                 _shihabRemotePillBtn,
                 _shihabUpdatePillBtn,
-                _shihabAboutPillBtn,
                 _mehediMenuPillBtn
             };
             for (int shihabI = 0; shihabI < mehediPills.Length; shihabI++)
@@ -1773,6 +3190,7 @@ namespace ShihabMehediIDM
             {
                 _shihabDropTargetForm.UpdateShihabLiveSpeed(mehediGlobalSpeedBps);
             }
+            UpdateMehediToolbarActionIcons();
             UpdateShihabStatusBadges();
         }
 
@@ -2122,6 +3540,19 @@ namespace ShihabMehediIDM
             SafeShihabUiInvoke(delegate
             {
                 if (IsDisposed) return;
+                if (_mehediConfig.MehediHangUpWhenDone)
+                {
+                    try
+                    {
+                        ProcessStartInfo rasPsi = new ProcessStartInfo("rasdial.exe", "/disconnect")
+                        {
+                            UseShellExecute = false,
+                            CreateNoWindow = true
+                        };
+                        Process.Start(rasPsi);
+                    }
+                    catch { }
+                }
                 if (queue.MehediExitAppWhenDone)
                 {
                     ExitShihabApplicationCleanly();
@@ -2717,6 +4148,19 @@ namespace ShihabMehediIDM
             }
         }
 
+        private void PromptAndDeleteSelectedDownloads(bool initialDeleteFromDisk)
+        {
+            List<ShihabDownloadItem> shihabSel = GetSelectedShihabItems();
+            if (shihabSel.Count == 0) return;
+            using (ShihabDeleteConfirmDialog dlg = new ShihabDeleteConfirmDialog(shihabSel, initialDeleteFromDisk, _mehediConfig.ShihabDarkMode))
+            {
+                if (dlg.ShowDialog(this) == DialogResult.OK)
+                {
+                    DeleteSelectedShihabDownloads(dlg.AlsoDeleteDiskFiles);
+                }
+            }
+        }
+
         private void DeleteSelectedShihabDownloads(bool mehediAlsoDeleteDiskFile)
         {
             List<ShihabDownloadItem> shihabSel = GetSelectedShihabItems();
@@ -2780,7 +4224,22 @@ namespace ShihabMehediIDM
             List<ShihabDownloadItem> shihabSel = GetSelectedShihabItems();
             for (int mehediI = 0; mehediI < shihabSel.Count; mehediI++)
             {
-                shihabSel[mehediI].MehediQueueName = mehediQueueName;
+                ShihabDownloadItem it = shihabSel[mehediI];
+                if (it == null) continue;
+                it.MehediQueueName = mehediQueueName ?? "";
+                ShihabDownloadStatus st = it.GetShihabStatusEnum();
+                bool active = _shihabEngine.IsMehediItemActive(it.ShihabId);
+                if (!string.IsNullOrWhiteSpace(it.MehediQueueName))
+                {
+                    if (!active && st != ShihabDownloadStatus.ShihabCompleted)
+                    {
+                        it.SetMehediStatusEnum(ShihabDownloadStatus.ShihabQueued, "Queued");
+                    }
+                }
+                else if (!active && st == ShihabDownloadStatus.ShihabQueued)
+                {
+                    it.SetMehediStatusEnum(ShihabDownloadStatus.ShihabPaused, "Paused");
+                }
             }
             _shihabEngine.PersistShihabState();
             RefreshMehediDownloadsGrid();
@@ -3158,6 +4617,25 @@ namespace ShihabMehediIDM
                 ShihabThemePalette.ShihabMainHeaderTitle + " — CLI & MCP Help",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Information);
+        }
+
+        private void OpenShihabTellAFriendDialog()
+        {
+            using (ShihabTellAFriendDialog dlg = new ShihabTellAFriendDialog(_mehediConfig))
+            {
+                dlg.ShowDialog(this);
+            }
+        }
+
+        private void OpenShihabRegistrationDialog()
+        {
+            using (ShihabRegistrationStatusDialog dlg = new ShihabRegistrationStatusDialog(_mehediConfig))
+            {
+                if (dlg.ShowDialog(this) == DialogResult.OK && dlg.CheckUpdatesRequested)
+                {
+                    TriggerShihabUpdateCheck(true);
+                }
+            }
         }
 
         private void ShowShihabAboutDialog()

@@ -1539,7 +1539,7 @@ namespace ShihabMehediIDM
             {
                 MessageBox.Show(
                     this,
-                    "MHS Download Manager 1.0.4 Configuration\nDeveloper: Mehedi Hasan Shihab (https://sshihabb007.github.io/)\n\n" +
+                    "MHS Download Manager 1.0.5 Configuration\nDeveloper: Mehedi Hasan Shihab (https://sshihabb007.github.io/)\n\n" +
                     "• General: Browser integration, startup launch, shortcut keys & web player panels\n" +
                     "• File types: Auto-captured extensions (wildcards like R0* supported), site & URL exclusions\n" +
                     "• Save to: Category folders, extensions, server creation/modification dates & temp directory\n" +
@@ -1921,6 +1921,8 @@ namespace ShihabMehediIDM
 
     public class MehediSchedulerQueuesForm : Form
     {
+        private static readonly string[] DayShortNames = new string[] { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
+
         private readonly MehediAppConfiguration _shihabConfig;
         private readonly MehediDynamicSegmentEngine _mehediEngine;
         private readonly ShihabStateStore _shihabStore;
@@ -1928,15 +1930,21 @@ namespace ShihabMehediIDM
         private CheckBox _shihabEnableStartChk;
         private TextBox _mehediStartHhMmBox;
         private TextBox _shihabOnceDateBox;
+        private CheckBox[] _shihabDayChecks;
         private CheckBox _shihabEnableStopChk;
         private TextBox _mehediStopHhMmBox;
         private CheckBox _shihabStartOnStartupChk;
         private NumericUpDown _shihabMaxConcNum;
         private NumericUpDown _mehediRetryNum;
+        private CheckBox _shihabPeriodicSyncChk;
+        private NumericUpDown _shihabPeriodicSyncMinNum;
         private CheckBox _shihabExitDoneChk;
+        private CheckBox _shihabHangUpDoneChk;
         private TextBox _shihabRunCmdDoneBox;
         private ComboBox _shihabPowerDoneCombo;
         private ListView _mehediFilesInQueueView;
+        private MehediQueueConfig _currentlyLoadedQueue;
+        private bool _suppressQueueSelectionEvent = false;
 
         public MehediSchedulerQueuesForm(
             MehediAppConfiguration shihabConfig,
@@ -1950,7 +1958,7 @@ namespace ShihabMehediIDM
             Color surf = ShihabThemePalette.GetShihabSurfaceBg(mehediDark);
 
             Text = "Scheduler and Queues — " + ShihabThemePalette.ShihabMainHeaderTitle;
-            Size = new Size(730, 505);
+            Size = new Size(780, 560);
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
             StartPosition = FormStartPosition.CenterParent;
@@ -1964,119 +1972,215 @@ namespace ShihabMehediIDM
             _mehediQueueListBox = new ListBox
             {
                 Location = new Point(14, 38),
-                Size = new Size(195, 325),
+                Size = new Size(202, 376),
                 BackColor = surf,
                 ForeColor = ForeColor
             };
 
-            Button shihabNewQBtn = ShihabThemePalette.CreateMehediStyledButton("+ New Queue", ShihabThemePalette.GetShihabAccentBlue(), Color.White, 94);
-            shihabNewQBtn.Location = new Point(14, 372);
+            Button shihabNewQBtn = ShihabThemePalette.CreateMehediStyledButton("+ New Queue", ShihabThemePalette.GetShihabAccentBlue(), Color.White, 98);
+            shihabNewQBtn.Location = new Point(14, 422);
             shihabNewQBtn.Click += delegate
             {
-                string mehediNewName = "Shihab Queue #" + (_shihabConfig.MehediQueues.Count + 1);
-                MehediQueueConfig shihabQ = new MehediQueueConfig { ShihabQueueName = mehediNewName };
+                SaveQueueSettingsFor(_currentlyLoadedQueue);
+                string defaultName = "Custom Queue #" + (_shihabConfig.MehediQueues.Count + 1);
+                string enteredName = PromptForNewQueueName(defaultName, mehediDark);
+                if (string.IsNullOrWhiteSpace(enteredName)) return;
+                enteredName = enteredName.Trim();
+                for (int i = 0; i < _shihabConfig.MehediQueues.Count; i++)
+                {
+                    if (string.Equals(_shihabConfig.MehediQueues[i].ShihabQueueName, enteredName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        MessageBox.Show(this, "A queue named \"" + enteredName + "\" already exists.", "Scheduler & Queues", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+                }
+                MehediQueueConfig shihabQ = new MehediQueueConfig { ShihabQueueName = enteredName };
                 _shihabConfig.MehediQueues.Add(shihabQ);
-                PopulateShihabQueuesList();
-                _mehediQueueListBox.SelectedIndex = _mehediQueueListBox.Items.Count - 1;
+                _shihabStore.SaveMehediConfig(_shihabConfig);
+                PopulateShihabQueuesList(_shihabConfig.MehediQueues.Count - 1);
             };
 
-            Button mehediDelQBtn = ShihabThemePalette.CreateMehediStyledButton("Delete", ShihabThemePalette.GetMehediAccentRed(), Color.White, 94);
-            mehediDelQBtn.Location = new Point(115, 372);
+            Button mehediDelQBtn = ShihabThemePalette.CreateMehediStyledButton("Delete", ShihabThemePalette.GetMehediAccentRed(), Color.White, 98);
+            mehediDelQBtn.Location = new Point(118, 422);
             mehediDelQBtn.Click += delegate
             {
                 int shihabIdx = _mehediQueueListBox.SelectedIndex;
-                if (shihabIdx > 1 && shihabIdx < _shihabConfig.MehediQueues.Count)
+                if (shihabIdx < 0 || shihabIdx >= _shihabConfig.MehediQueues.Count) return;
+                MehediQueueConfig targetQ = _shihabConfig.MehediQueues[shihabIdx];
+                if (targetQ == null) return;
+                if (string.Equals(targetQ.ShihabQueueName, "Main Download Queue", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(targetQ.ShihabQueueName, "Synchronization Queue", StringComparison.OrdinalIgnoreCase))
                 {
-                    _shihabConfig.MehediQueues.RemoveAt(shihabIdx);
-                    PopulateShihabQueuesList();
+                    MessageBox.Show(this, "Built-in queues (Main Download Queue and Synchronization Queue) cannot be deleted.", "Scheduler & Queues", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
                 }
+                _mehediEngine.StopShihabQueue(targetQ.ShihabQueueName);
+                List<ShihabDownloadItem> allItems = _mehediEngine.GetShihabDownloadsSnapshot();
+                bool reassigned = false;
+                for (int j = 0; j < allItems.Count; j++)
+                {
+                    ShihabDownloadItem it = allItems[j];
+                    if (it != null && string.Equals(it.MehediQueueName, targetQ.ShihabQueueName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        it.MehediQueueName = it.GetShihabStatusEnum() == ShihabDownloadStatus.ShihabQueued ? "Main Download Queue" : "";
+                        reassigned = true;
+                    }
+                }
+                if (reassigned) _mehediEngine.PersistShihabState();
+                _currentlyLoadedQueue = null;
+                _shihabConfig.MehediQueues.RemoveAt(shihabIdx);
+                _shihabStore.SaveMehediConfig(_shihabConfig);
+                _mehediEngine.SyncNextScheduledWakeTimer();
+                PopulateShihabQueuesList(Math.Max(0, shihabIdx - 1));
             };
 
             ShihabDarkTabControl shihabRightTabs = new ShihabDarkTabControl
             {
                 ShihabDarkMode = mehediDark,
-                Location = new Point(222, 16),
-                Size = new Size(478, 392)
+                Location = new Point(228, 16),
+                Size = new Size(522, 442)
             };
             TabPage mehediSchedTab = new TabPage("Schedule") { BackColor = BackColor, ForeColor = ForeColor };
             TabPage shihabFilesTab = new TabPage("Files in the queue") { BackColor = BackColor, ForeColor = ForeColor };
 
-            _shihabEnableStartChk = new CheckBox { Text = "Start queue at (HH:mm):", Location = new Point(16, 18), AutoSize = true };
-            _mehediStartHhMmBox = new TextBox { Location = new Point(195, 16), Width = 68, Text = "01:00", BackColor = surf, ForeColor = ForeColor };
-            Label onceDateLbl = new Label { Text = "Once date (YYYY-MM-DD):", Location = new Point(272, 19), AutoSize = true };
-            _shihabOnceDateBox = new TextBox { Location = new Point(358, 44), Width = 98, Text = "", BackColor = surf, ForeColor = ForeColor };
-            onceDateLbl.Location = new Point(195, 47);
+            _shihabEnableStartChk = new CheckBox { Text = "Start queue at (HH:mm):", Location = new Point(16, 16), AutoSize = true };
+            _mehediStartHhMmBox = new TextBox { Location = new Point(195, 14), Width = 66, Text = "01:00", BackColor = surf, ForeColor = ForeColor };
+            Label onceDateLbl = new Label { Text = "Once date (YYYY-MM-DD):", Location = new Point(268, 17), AutoSize = true };
+            _shihabOnceDateBox = new TextBox { Location = new Point(426, 14), Width = 78, Text = "", BackColor = surf, ForeColor = ForeColor };
 
-            _shihabEnableStopChk = new CheckBox { Text = "Stop queue at (HH:mm):", Location = new Point(16, 76), AutoSize = true };
-            _mehediStopHhMmBox = new TextBox { Location = new Point(195, 74), Width = 68, Text = "07:00", BackColor = surf, ForeColor = ForeColor };
-            _shihabStartOnStartupChk = new CheckBox { Text = "Start on app launch", Location = new Point(280, 76), AutoSize = true };
+            Label activeDaysLbl = new Label { Text = "Active days:", Location = new Point(16, 48), AutoSize = true };
+            _shihabDayChecks = new CheckBox[7];
+            for (int d = 0; d < 7; d++)
+            {
+                _shihabDayChecks[d] = new CheckBox
+                {
+                    Text = DayShortNames[d],
+                    Location = new Point(102 + d * 54, 47),
+                    AutoSize = true,
+                    Checked = true
+                };
+            }
 
-            Label mehediConcLbl = new Label { Text = "Download files at the same time:", Location = new Point(16, 112), AutoSize = true };
-            _shihabMaxConcNum = new NumericUpDown { Location = new Point(265, 109), Width = 85, Minimum = 1, Maximum = 16, Value = 4 };
+            _shihabEnableStopChk = new CheckBox { Text = "Stop queue at (HH:mm):", Location = new Point(16, 80), AutoSize = true };
+            _mehediStopHhMmBox = new TextBox { Location = new Point(195, 78), Width = 68, Text = "07:00", BackColor = surf, ForeColor = ForeColor };
+            _shihabStartOnStartupChk = new CheckBox { Text = "Start on app launch", Location = new Point(276, 80), AutoSize = true };
 
-            Label shihabRetLbl = new Label { Text = "Number of retries per failed file:", Location = new Point(16, 146), AutoSize = true };
-            _mehediRetryNum = new NumericUpDown { Location = new Point(265, 143), Width = 85, Minimum = 0, Maximum = 99, Value = 3 };
+            Label mehediConcLbl = new Label { Text = "Download files at the same time:", Location = new Point(16, 114), AutoSize = true };
+            _shihabMaxConcNum = new NumericUpDown { Location = new Point(265, 111), Width = 78, Minimum = 1, Maximum = 16, Value = 4 };
 
-            _shihabExitDoneChk = new CheckBox { Text = "Exit MHS Download Manager when queue finishes", Location = new Point(16, 180), AutoSize = true };
+            Label shihabRetLbl = new Label { Text = "Retries per failed file:", Location = new Point(16, 146), AutoSize = true };
+            _mehediRetryNum = new NumericUpDown { Location = new Point(265, 143), Width = 78, Minimum = 0, Maximum = 99, Value = 3 };
 
-            Label runCmdLbl = new Label { Text = "Run command when done:", Location = new Point(16, 212), AutoSize = true };
-            _shihabRunCmdDoneBox = new TextBox { Location = new Point(185, 209), Width = 270, BackColor = surf, ForeColor = ForeColor };
+            _shihabPeriodicSyncChk = new CheckBox { Text = "Periodic sync check for updated files every (min):", Location = new Point(16, 178), AutoSize = true };
+            _shihabPeriodicSyncMinNum = new NumericUpDown { Location = new Point(328, 176), Width = 78, Minimum = 5, Maximum = 10080, Value = 120 };
 
-            Label pwrDoneLbl = new Label { Text = "System power when done:", Location = new Point(16, 246), AutoSize = true };
-            _shihabPowerDoneCombo = new ComboBox { Location = new Point(185, 243), Width = 165, DropDownStyle = ComboBoxStyle.DropDownList, BackColor = surf, ForeColor = ForeColor };
+            _shihabExitDoneChk = new CheckBox { Text = "Exit MHS Download Manager when queue finishes", Location = new Point(16, 210), AutoSize = true };
+            _shihabHangUpDoneChk = new CheckBox { Text = "Hang up modem / dial-up / VPN connection when done", Location = new Point(16, 238), AutoSize = true };
+
+            Label runCmdLbl = new Label { Text = "Run command when done:", Location = new Point(16, 270), AutoSize = true };
+            _shihabRunCmdDoneBox = new TextBox { Location = new Point(185, 267), Width = 295, BackColor = surf, ForeColor = ForeColor };
+
+            Label pwrDoneLbl = new Label { Text = "System power when done:", Location = new Point(16, 304), AutoSize = true };
+            _shihabPowerDoneCombo = new ComboBox { Location = new Point(185, 301), Width = 165, DropDownStyle = ComboBoxStyle.DropDownList, BackColor = surf, ForeColor = ForeColor };
             _shihabPowerDoneCombo.Items.AddRange(new object[] { "None", "Sleep", "Hibernate", "Shutdown" });
             _shihabPowerDoneCombo.SelectedIndex = 0;
 
-            Button mehediApplyQBtn = ShihabThemePalette.CreateMehediStyledButton("Apply Schedule", ShihabThemePalette.GetShihabAccentBlue(), Color.White, 135);
-            mehediApplyQBtn.Location = new Point(16, 286);
+            Button mehediApplyQBtn = ShihabThemePalette.CreateMehediStyledButton("Apply Schedule", ShihabThemePalette.GetShihabAccentBlue(), Color.White, 140);
+            mehediApplyQBtn.Location = new Point(16, 344);
             mehediApplyQBtn.Click += delegate { SaveSelectedMehediQueueSettings(); };
 
             mehediSchedTab.Controls.AddRange(new Control[]
             {
                 _shihabEnableStartChk, _mehediStartHhMmBox, onceDateLbl, _shihabOnceDateBox,
+                activeDaysLbl,
                 _shihabEnableStopChk, _mehediStopHhMmBox, _shihabStartOnStartupChk,
                 mehediConcLbl, _shihabMaxConcNum, shihabRetLbl, _mehediRetryNum,
-                _shihabExitDoneChk, runCmdLbl, _shihabRunCmdDoneBox, pwrDoneLbl, _shihabPowerDoneCombo, mehediApplyQBtn
+                _shihabPeriodicSyncChk, _shihabPeriodicSyncMinNum,
+                _shihabExitDoneChk, _shihabHangUpDoneChk,
+                runCmdLbl, _shihabRunCmdDoneBox, pwrDoneLbl, _shihabPowerDoneCombo, mehediApplyQBtn
             });
+            for (int d = 0; d < 7; d++) mehediSchedTab.Controls.Add(_shihabDayChecks[d]);
 
             _mehediFilesInQueueView = new ShihabModernListView
             {
                 Location = new Point(12, 12),
-                Size = new Size(444, 298),
+                Size = new Size(468, 340),
                 BorderStyle = BorderStyle.FixedSingle,
+                MultiSelect = true,
                 MehediDarkMode = mehediDark,
                 ShihabShowFileTypeBadges = true,
                 BackColor = surf,
                 ForeColor = ForeColor
             };
-            _mehediFilesInQueueView.Columns.Add("File Name", 220);
+            _mehediFilesInQueueView.Columns.Add("File Name", 238);
             _mehediFilesInQueueView.Columns.Add("Size", 95);
-            _mehediFilesInQueueView.Columns.Add("Status", 110);
+            _mehediFilesInQueueView.Columns.Add("Status", 115);
 
-            Button shihabRemoveFromQ = ShihabThemePalette.CreateMehediStyledButton("Remove from Queue", surf, ForeColor, 155);
-            shihabRemoveFromQ.Location = new Point(12, 318);
+            Button moveUpBtn = ShihabThemePalette.CreateMehediStyledButton("Move Up", surf, ForeColor, 96);
+            moveUpBtn.Location = new Point(12, 362);
+            moveUpBtn.Click += delegate
+            {
+                if (_mehediFilesInQueueView.SelectedItems.Count == 0) return;
+                ShihabDownloadItem sel = _mehediFilesInQueueView.SelectedItems[0].Tag as ShihabDownloadItem;
+                if (sel != null && _mehediEngine.MoveQueueItemOrder(sel, -1))
+                {
+                    LoadSelectedShihabQueueDetails();
+                    SelectItemInQueueListView(sel.ShihabId);
+                }
+            };
+
+            Button moveDownBtn = ShihabThemePalette.CreateMehediStyledButton("Move Down", surf, ForeColor, 106);
+            moveDownBtn.Location = new Point(116, 362);
+            moveDownBtn.Click += delegate
+            {
+                if (_mehediFilesInQueueView.SelectedItems.Count == 0) return;
+                ShihabDownloadItem sel = _mehediFilesInQueueView.SelectedItems[0].Tag as ShihabDownloadItem;
+                if (sel != null && _mehediEngine.MoveQueueItemOrder(sel, 1))
+                {
+                    LoadSelectedShihabQueueDetails();
+                    SelectItemInQueueListView(sel.ShihabId);
+                }
+            };
+
+            Button shihabRemoveFromQ = ShihabThemePalette.CreateMehediStyledButton("Remove from Queue", surf, ForeColor, 160);
+            shihabRemoveFromQ.Location = new Point(320, 362);
             shihabRemoveFromQ.Click += delegate
             {
                 if (_mehediFilesInQueueView.SelectedItems.Count > 0)
                 {
-                    ShihabDownloadItem mehediSel = _mehediFilesInQueueView.SelectedItems[0].Tag as ShihabDownloadItem;
-                    if (mehediSel != null)
+                    foreach (ListViewItem lvi in _mehediFilesInQueueView.SelectedItems)
                     {
-                        mehediSel.MehediQueueName = "";
-                        _mehediEngine.PersistShihabState();
-                        LoadSelectedShihabQueueDetails();
+                        ShihabDownloadItem mehediSel = lvi.Tag as ShihabDownloadItem;
+                        if (mehediSel != null)
+                        {
+                            mehediSel.MehediQueueName = "";
+                            if (mehediSel.GetShihabStatusEnum() == ShihabDownloadStatus.ShihabQueued)
+                            {
+                                mehediSel.SetMehediStatusEnum(ShihabDownloadStatus.ShihabPaused, "Paused");
+                            }
+                        }
                     }
+                    _mehediEngine.PersistShihabState();
+                    LoadSelectedShihabQueueDetails();
                 }
             };
-            shihabFilesTab.Controls.AddRange(new Control[] { _mehediFilesInQueueView, shihabRemoveFromQ });
+            shihabFilesTab.Controls.AddRange(new Control[] { _mehediFilesInQueueView, moveUpBtn, moveDownBtn, shihabRemoveFromQ });
 
             shihabRightTabs.TabPages.Add(mehediSchedTab);
             shihabRightTabs.TabPages.Add(shihabFilesTab);
 
-            _mehediQueueListBox.SelectedIndexChanged += delegate { LoadSelectedShihabQueueDetails(); };
+            _mehediQueueListBox.SelectedIndexChanged += delegate
+            {
+                if (_suppressQueueSelectionEvent) return;
+                if (_currentlyLoadedQueue != null)
+                {
+                    SaveQueueSettingsFor(_currentlyLoadedQueue);
+                }
+                LoadSelectedShihabQueueDetails();
+            };
 
-            Button shihabStartNowBtn = ShihabThemePalette.CreateMehediStyledButton("Start Now", ShihabThemePalette.GetMehediAccentGreen(), Color.White, 120);
-            shihabStartNowBtn.Location = new Point(332, 420);
+            Button shihabStartNowBtn = ShihabThemePalette.CreateMehediStyledButton("Start Now", ShihabThemePalette.GetMehediAccentGreen(), Color.White, 125);
+            shihabStartNowBtn.Location = new Point(352, 472);
             shihabStartNowBtn.Click += delegate
             {
                 SaveSelectedMehediQueueSettings();
@@ -2085,16 +2189,18 @@ namespace ShihabMehediIDM
                 Close();
             };
 
-            Button mehediStopNowBtn = ShihabThemePalette.CreateMehediStyledButton("Stop Queue", ShihabThemePalette.GetShihabAccentAmber(), Color.White, 120);
-            mehediStopNowBtn.Location = new Point(462, 420);
+            Button mehediStopNowBtn = ShihabThemePalette.CreateMehediStyledButton("Stop Queue", ShihabThemePalette.GetShihabAccentAmber(), Color.White, 125);
+            mehediStopNowBtn.Location = new Point(486, 472);
             mehediStopNowBtn.Click += delegate
             {
+                SaveSelectedMehediQueueSettings();
                 MehediQueueConfig shihabQ = GetSelectedShihabQueue();
                 if (shihabQ != null) _mehediEngine.StopShihabQueue(shihabQ.ShihabQueueName);
+                PopulateQueueDisplayNamesOnly();
             };
 
-            Button shihabCloseBtn = ShihabThemePalette.CreateMehediStyledButton("Close", surf, ForeColor, 108);
-            shihabCloseBtn.Location = new Point(592, 420);
+            Button shihabCloseBtn = ShihabThemePalette.CreateMehediStyledButton("Close", surf, ForeColor, 110);
+            shihabCloseBtn.Location = new Point(620, 472);
             shihabCloseBtn.Click += delegate
             {
                 SaveSelectedMehediQueueSettings();
@@ -2102,17 +2208,103 @@ namespace ShihabMehediIDM
             };
 
             Controls.AddRange(new Control[] { shihabQLbl, _mehediQueueListBox, shihabNewQBtn, mehediDelQBtn, shihabRightTabs, shihabStartNowBtn, mehediStopNowBtn, shihabCloseBtn });
-            PopulateShihabQueuesList();
+            PopulateShihabQueuesList(0);
         }
 
-        private void PopulateShihabQueuesList()
+        private string PromptForNewQueueName(string defaultName, bool dark)
         {
-            _mehediQueueListBox.Items.Clear();
-            for (int shihabI = 0; shihabI < _shihabConfig.MehediQueues.Count; shihabI++)
+            using (Form dlg = new Form())
             {
-                _mehediQueueListBox.Items.Add(_shihabConfig.MehediQueues[shihabI].ShihabQueueName);
+                dlg.Text = "Create New Queue";
+                dlg.ClientSize = new Size(380, 134);
+                dlg.FormBorderStyle = FormBorderStyle.FixedDialog;
+                dlg.MaximizeBox = false;
+                dlg.MinimizeBox = false;
+                dlg.StartPosition = FormStartPosition.CenterParent;
+                dlg.BackColor = ShihabThemePalette.GetMehediWindowBg(dark);
+                dlg.ForeColor = ShihabThemePalette.GetShihabPrimaryText(dark);
+                dlg.Font = new Font("Segoe UI", 9f);
+                ShihabThemePalette.ApplyMehediNativeDarkFrame(dlg, dark);
+
+                Label lbl = new Label { Text = "Enter queue name:", Location = new Point(16, 16), AutoSize = true };
+                TextBox box = new TextBox
+                {
+                    Location = new Point(16, 40),
+                    Width = 348,
+                    Text = defaultName,
+                    BackColor = ShihabThemePalette.GetShihabSurfaceBg(dark),
+                    ForeColor = dlg.ForeColor
+                };
+                Button okBtn = ShihabThemePalette.CreateMehediStyledButton("Create", ShihabThemePalette.GetShihabAccentBlue(), Color.White, 96);
+                okBtn.Location = new Point(164, 84);
+                okBtn.DialogResult = DialogResult.OK;
+
+                Button cancelBtn = ShihabThemePalette.CreateMehediStyledButton("Cancel", ShihabThemePalette.GetShihabSurfaceBg(dark), dlg.ForeColor, 96);
+                cancelBtn.Location = new Point(268, 84);
+                cancelBtn.DialogResult = DialogResult.Cancel;
+
+                dlg.Controls.AddRange(new Control[] { lbl, box, okBtn, cancelBtn });
+                dlg.AcceptButton = okBtn;
+                dlg.CancelButton = cancelBtn;
+                return dlg.ShowDialog(this) == DialogResult.OK ? box.Text : "";
             }
-            if (_mehediQueueListBox.Items.Count > 0) _mehediQueueListBox.SelectedIndex = 0;
+        }
+
+        private void SelectItemInQueueListView(string itemId)
+        {
+            for (int i = 0; i < _mehediFilesInQueueView.Items.Count; i++)
+            {
+                ShihabDownloadItem it = _mehediFilesInQueueView.Items[i].Tag as ShihabDownloadItem;
+                if (it != null && string.Equals(it.ShihabId, itemId, StringComparison.Ordinal))
+                {
+                    _mehediFilesInQueueView.Items[i].Selected = true;
+                    _mehediFilesInQueueView.Items[i].EnsureVisible();
+                    break;
+                }
+            }
+        }
+
+        private void PopulateShihabQueuesList(int selectIndex)
+        {
+            _suppressQueueSelectionEvent = true;
+            try
+            {
+                _mehediQueueListBox.Items.Clear();
+                for (int shihabI = 0; shihabI < _shihabConfig.MehediQueues.Count; shihabI++)
+                {
+                    MehediQueueConfig q = _shihabConfig.MehediQueues[shihabI];
+                    string suffix = q.MehediIsRunningNow ? " (Running)" : "";
+                    _mehediQueueListBox.Items.Add(q.ShihabQueueName + suffix);
+                }
+                if (_mehediQueueListBox.Items.Count > 0)
+                {
+                    _mehediQueueListBox.SelectedIndex = Math.Max(0, Math.Min(_mehediQueueListBox.Items.Count - 1, selectIndex));
+                }
+            }
+            finally
+            {
+                _suppressQueueSelectionEvent = false;
+            }
+            LoadSelectedShihabQueueDetails();
+        }
+
+        private void PopulateQueueDisplayNamesOnly()
+        {
+            int cur = _mehediQueueListBox.SelectedIndex;
+            _suppressQueueSelectionEvent = true;
+            try
+            {
+                for (int i = 0; i < _shihabConfig.MehediQueues.Count && i < _mehediQueueListBox.Items.Count; i++)
+                {
+                    MehediQueueConfig q = _shihabConfig.MehediQueues[i];
+                    _mehediQueueListBox.Items[i] = q.ShihabQueueName + (q.MehediIsRunningNow ? " (Running)" : "");
+                }
+                if (cur >= 0 && cur < _mehediQueueListBox.Items.Count) _mehediQueueListBox.SelectedIndex = cur;
+            }
+            finally
+            {
+                _suppressQueueSelectionEvent = false;
+            }
         }
 
         private MehediQueueConfig GetSelectedShihabQueue()
@@ -2125,19 +2317,48 @@ namespace ShihabMehediIDM
             return null;
         }
 
+        private static string NormalizeHhMmInput(string raw, string fallbackHhMm)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) return fallbackHhMm;
+            string[] parts = raw.Trim().Split(':');
+            int h, m;
+            if (parts.Length == 2 && int.TryParse(parts[0], out h) && int.TryParse(parts[1], out m))
+            {
+                if (h >= 0 && h <= 23 && m >= 0 && m <= 59)
+                {
+                    return string.Format("{0:00}:{1:00}", h, m);
+                }
+            }
+            return fallbackHhMm;
+        }
+
         private void LoadSelectedShihabQueueDetails()
         {
             MehediQueueConfig shihabQ = GetSelectedShihabQueue();
+            _currentlyLoadedQueue = shihabQ;
             if (shihabQ == null) return;
+
             _shihabEnableStartChk.Checked = shihabQ.MehediEnableScheduledStart;
             _mehediStartHhMmBox.Text = shihabQ.ShihabStartTimeHhMm ?? "01:00";
             _shihabOnceDateBox.Text = shihabQ.ShihabOnceAtDateYyyyMmDd ?? "";
+
+            string daysCsv = string.IsNullOrEmpty(shihabQ.MehediActiveDaysCsv)
+                ? "Sun,Mon,Tue,Wed,Thu,Fri,Sat"
+                : shihabQ.MehediActiveDaysCsv;
+            for (int d = 0; d < 7; d++)
+            {
+                _shihabDayChecks[d].Checked = daysCsv.IndexOf(DayShortNames[d], StringComparison.OrdinalIgnoreCase) >= 0;
+            }
+
             _shihabEnableStopChk.Checked = shihabQ.MehediEnableScheduledStop;
             _mehediStopHhMmBox.Text = shihabQ.ShihabStopTimeHhMm ?? "07:00";
             _shihabStartOnStartupChk.Checked = shihabQ.ShihabStartOnStartup;
             _shihabMaxConcNum.Value = Math.Max(1, Math.Min(16, shihabQ.MehediMaxConcurrentFiles));
             _mehediRetryNum.Value = Math.Max(0, Math.Min(99, shihabQ.ShihabRetriesPerFile));
+            _shihabPeriodicSyncChk.Checked = shihabQ.MehediEnablePeriodicSync;
+            _shihabPeriodicSyncMinNum.Value = Math.Max(5, Math.Min(10080, shihabQ.ShihabPeriodicSyncMinutes > 0 ? shihabQ.ShihabPeriodicSyncMinutes : 120));
             _shihabExitDoneChk.Checked = shihabQ.MehediExitAppWhenDone;
+            _shihabHangUpDoneChk.Checked = _shihabConfig.MehediHangUpWhenDone;
             _shihabRunCmdDoneBox.Text = shihabQ.ShihabRunCommandWhenDone ?? "";
             int pIdx = _shihabPowerDoneCombo.FindStringExact(shihabQ.ShihabSystemPowerActionWhenDone ?? "None");
             _shihabPowerDoneCombo.SelectedIndex = pIdx >= 0 ? pIdx : 0;
@@ -2147,12 +2368,13 @@ namespace ShihabMehediIDM
             for (int shihabI = 0; shihabI < mehediAll.Count; shihabI++)
             {
                 ShihabDownloadItem mehediIt = mehediAll[shihabI];
-                if (string.Equals(mehediIt.MehediQueueName, shihabQ.ShihabQueueName, StringComparison.OrdinalIgnoreCase))
+                if (!string.IsNullOrWhiteSpace(mehediIt.MehediQueueName) &&
+                    string.Equals(MehediDynamicSegmentEngine.ResolveCanonicalQueueName(mehediIt.MehediQueueName), shihabQ.ShihabQueueName, StringComparison.OrdinalIgnoreCase))
                 {
                     ListViewItem shihabRow = new ListViewItem(new string[]
                     {
                         mehediIt.ShihabFileName,
-                        ShihabFormatHelpers.FormatMehediBytes(mehediIt.ShihabTotalBytes),
+                        mehediIt.ShihabTotalBytes > 0 ? ShihabFormatHelpers.FormatMehediBytes(mehediIt.ShihabTotalBytes) : "--",
                         mehediIt.ShihabStatusText
                     });
                     shihabRow.Tag = mehediIt;
@@ -2163,20 +2385,46 @@ namespace ShihabMehediIDM
 
         private void SaveSelectedMehediQueueSettings()
         {
-            MehediQueueConfig shihabQ = GetSelectedShihabQueue();
+            SaveQueueSettingsFor(GetSelectedShihabQueue());
+        }
+
+        private void SaveQueueSettingsFor(MehediQueueConfig shihabQ)
+        {
             if (shihabQ == null) return;
             shihabQ.MehediEnableScheduledStart = _shihabEnableStartChk.Checked;
-            shihabQ.ShihabStartTimeHhMm = _mehediStartHhMmBox.Text.Trim();
+            shihabQ.ShihabStartTimeHhMm = NormalizeHhMmInput(_mehediStartHhMmBox.Text, "01:00");
+            _mehediStartHhMmBox.Text = shihabQ.ShihabStartTimeHhMm;
             shihabQ.ShihabOnceAtDateYyyyMmDd = _shihabOnceDateBox.Text.Trim();
+
+            List<string> selectedDays = new List<string>();
+            for (int d = 0; d < 7; d++)
+            {
+                if (_shihabDayChecks[d].Checked) selectedDays.Add(DayShortNames[d]);
+            }
+            if (selectedDays.Count == 0)
+            {
+                for (int d = 0; d < 7; d++)
+                {
+                    _shihabDayChecks[d].Checked = true;
+                    selectedDays.Add(DayShortNames[d]);
+                }
+            }
+            shihabQ.MehediActiveDaysCsv = string.Join(",", selectedDays.ToArray());
+
             shihabQ.MehediEnableScheduledStop = _shihabEnableStopChk.Checked;
-            shihabQ.ShihabStopTimeHhMm = _mehediStopHhMmBox.Text.Trim();
+            shihabQ.ShihabStopTimeHhMm = NormalizeHhMmInput(_mehediStopHhMmBox.Text, "07:00");
+            _mehediStopHhMmBox.Text = shihabQ.ShihabStopTimeHhMm;
             shihabQ.ShihabStartOnStartup = _shihabStartOnStartupChk.Checked;
             shihabQ.MehediMaxConcurrentFiles = (int)_shihabMaxConcNum.Value;
             shihabQ.ShihabRetriesPerFile = (int)_mehediRetryNum.Value;
+            shihabQ.MehediEnablePeriodicSync = _shihabPeriodicSyncChk.Checked;
+            shihabQ.ShihabPeriodicSyncMinutes = (int)_shihabPeriodicSyncMinNum.Value;
             shihabQ.MehediExitAppWhenDone = _shihabExitDoneChk.Checked;
+            _shihabConfig.MehediHangUpWhenDone = _shihabHangUpDoneChk.Checked;
             shihabQ.ShihabRunCommandWhenDone = _shihabRunCmdDoneBox.Text.Trim();
             shihabQ.ShihabSystemPowerActionWhenDone = _shihabPowerDoneCombo.SelectedItem != null ? _shihabPowerDoneCombo.SelectedItem.ToString() : "None";
             _shihabStore.SaveMehediConfig(_shihabConfig);
+            _mehediEngine.SyncNextScheduledWakeTimer();
         }
     }
 
@@ -2709,7 +2957,7 @@ namespace ShihabMehediIDM
                 try
                 {
                     HttpWebRequest shihabReq = (HttpWebRequest)WebRequest.Create(shihabNode.Key);
-                    shihabReq.UserAgent = "Mozilla/5.0 ShihabMehediIDM-Grabber/1.0.4";
+                    shihabReq.UserAgent = "Mozilla/5.0 ShihabMehediIDM-Grabber/1.0.5";
                     shihabReq.Timeout = 10000;
                     using (HttpWebResponse mehediResp = (HttpWebResponse)shihabReq.GetResponse())
                     using (StreamReader shihabSr = new StreamReader(mehediResp.GetResponseStream(), Encoding.UTF8))
@@ -3168,6 +3416,11 @@ namespace ShihabMehediIDM
                         ? ("BitTorrent InfoHash: " + currentMeta.InfoHashHex)
                         : "BitTorrent / Magnet Transfer"
                 };
+                if (!startNow)
+                {
+                    ConfiguredTorrentItem.MehediQueueName = "Main Download Queue";
+                    ConfiguredTorrentItem.SetMehediStatusEnum(ShihabDownloadStatus.ShihabQueued, "Queued");
+                }
                 StartImmediately = startNow;
                 DialogResult = DialogResult.OK;
                 Close();
@@ -4085,6 +4338,371 @@ namespace ShihabMehediIDM
                 fileLbl, fileBox, browseBtn, algoLbl, algoCombo,
                 expLbl, expBox, resultBox, computeAllBtn, extractBtn, closeBtn
             });
+        }
+    }
+
+    // =========================================================================
+    // 6. TELL A FRIEND / SHARE MHS DOWNLOAD MANAGER DIALOG
+    // =========================================================================
+    public class ShihabTellAFriendDialog : Form
+    {
+        public ShihabTellAFriendDialog(MehediAppConfiguration config)
+        {
+            bool dark = config != null ? config.ShihabDarkMode : true;
+            Color surf = ShihabThemePalette.GetShihabSurfaceBg(dark);
+            string repoSlug = (config != null && !string.IsNullOrWhiteSpace(config.ShihabUpdateRepoSlug))
+                ? config.ShihabUpdateRepoSlug.Trim()
+                : ShihabAutoUpdater.DefaultRepoSlug;
+            string releaseUrl = "https://github.com/" + repoSlug + "/releases/latest";
+            string repoUrl = "https://github.com/" + repoSlug;
+            string inviteMessage =
+                "Hey! Check out MHS Download Manager (v" + ShihabAutoUpdater.GetCurrentAppVersion() + ") — a super-fast free & open-source Windows download accelerator with multi-segment HTTP/HTTPS/FTP, YouTube 4K/8K, BitTorrent/Magnet, Scheduler & Queues, Browser Extension, and LAN Remote QR:\r\n" +
+                releaseUrl;
+
+            Text = "Tell a Friend — " + ShihabThemePalette.ShihabMainHeaderTitle;
+            ClientSize = new Size(650, 388);
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = false;
+            MinimizeBox = false;
+            StartPosition = FormStartPosition.CenterParent;
+            BackColor = ShihabThemePalette.GetMehediWindowBg(dark);
+            ForeColor = ShihabThemePalette.GetShihabPrimaryText(dark);
+            Font = new Font("Segoe UI", 9f);
+            Icon = ShihabThemePalette.CreateShihabAppIcon();
+            ShihabThemePalette.ApplyMehediNativeDarkFrame(this, dark);
+
+            Label titleLbl = new Label
+            {
+                Text = "Share MHS Download Manager with a Friend",
+                Location = new Point(18, 16),
+                AutoSize = true,
+                Font = new Font("Segoe UI Semibold", 12f)
+            };
+            Label subLbl = new Label
+            {
+                Text = "Scan the QR code, copy the direct installer link, or share via Email, X, WhatsApp, Telegram, or LinkedIn.",
+                Location = new Point(18, 42),
+                AutoSize = true,
+                ForeColor = ShihabThemePalette.GetMehediMutedText(dark)
+            };
+
+            PictureBox qrBox = new PictureBox
+            {
+                Location = new Point(18, 74),
+                Size = new Size(176, 176),
+                BorderStyle = BorderStyle.FixedSingle,
+                SizeMode = PictureBoxSizeMode.Zoom,
+                BackColor = Color.White,
+                Image = ShihabQrCodeEncoder.RenderBitmap(releaseUrl, 5, 4)
+            };
+            Disposed += delegate
+            {
+                if (qrBox.Image != null)
+                {
+                    qrBox.Image.Dispose();
+                    qrBox.Image = null;
+                }
+            };
+
+            Label linkLbl = new Label { Text = "Latest Installer Release URL:", Location = new Point(210, 74), AutoSize = true };
+            TextBox linkBox = new TextBox
+            {
+                Location = new Point(210, 96),
+                Width = 420,
+                ReadOnly = true,
+                Text = releaseUrl,
+                BackColor = surf,
+                ForeColor = ShihabThemePalette.GetShihabAccentBlue(),
+                Font = new Font("Consolas", 9.5f, FontStyle.Bold)
+            };
+
+            Label msgLbl = new Label { Text = "Invite Message (editable):", Location = new Point(210, 128), AutoSize = true };
+            TextBox msgBox = new TextBox
+            {
+                Location = new Point(210, 150),
+                Size = new Size(420, 100),
+                Multiline = true,
+                ScrollBars = ScrollBars.Vertical,
+                Text = inviteMessage,
+                BackColor = surf,
+                ForeColor = ForeColor
+            };
+
+            Label statusToastLbl = new Label
+            {
+                Location = new Point(18, 260),
+                Size = new Size(612, 22),
+                ForeColor = ShihabThemePalette.GetMehediAccentGreen(),
+                Font = new Font("Segoe UI Semibold", 9f),
+                Text = ""
+            };
+
+            Button copyLinkBtn = ShihabThemePalette.CreateMehediStyledButton("Copy Link", ShihabThemePalette.GetShihabAccentBlue(), Color.White, 112);
+            copyLinkBtn.Location = new Point(18, 288);
+            copyLinkBtn.Click += delegate
+            {
+                try
+                {
+                    Clipboard.SetText(releaseUrl);
+                    statusToastLbl.Text = "✔ Copied release download URL to clipboard!";
+                }
+                catch { }
+            };
+
+            Button copyMsgBtn = ShihabThemePalette.CreateMehediStyledButton("Copy Message", ShihabThemePalette.GetMehediAccentGreen(), Color.White, 126);
+            copyMsgBtn.Location = new Point(138, 288);
+            copyMsgBtn.Click += delegate
+            {
+                try
+                {
+                    Clipboard.SetText(msgBox.Text);
+                    statusToastLbl.Text = "✔ Copied invite message to clipboard!";
+                }
+                catch { }
+            };
+
+            Button emailBtn = ShihabThemePalette.CreateMehediStyledButton("Email", surf, ForeColor, 82);
+            emailBtn.Location = new Point(272, 288);
+            emailBtn.Click += delegate
+            {
+                string subj = Uri.EscapeDataString("Check out MHS Download Manager");
+                string body = Uri.EscapeDataString(msgBox.Text);
+                OpenExternalShareUrl("mailto:?subject=" + subj + "&body=" + body);
+            };
+
+            Button xShareBtn = ShihabThemePalette.CreateMehediStyledButton("X / Twitter", surf, ForeColor, 94);
+            xShareBtn.Location = new Point(362, 288);
+            xShareBtn.Click += delegate
+            {
+                string txt = Uri.EscapeDataString("MHS Download Manager — Free & Open-Source Windows Download Accelerator!");
+                OpenExternalShareUrl("https://twitter.com/intent/tweet?text=" + txt + "&url=" + Uri.EscapeDataString(releaseUrl));
+            };
+
+            Button waShareBtn = ShihabThemePalette.CreateMehediStyledButton("WhatsApp", surf, ForeColor, 92);
+            waShareBtn.Location = new Point(464, 288);
+            waShareBtn.Click += delegate
+            {
+                OpenExternalShareUrl("https://wa.me/?text=" + Uri.EscapeDataString(msgBox.Text));
+            };
+
+            Button tgShareBtn = ShihabThemePalette.CreateMehediStyledButton("Telegram", surf, ForeColor, 86);
+            tgShareBtn.Location = new Point(564, 288);
+            tgShareBtn.Width = 68;
+            tgShareBtn.Click += delegate
+            {
+                OpenExternalShareUrl("https://t.me/share/url?url=" + Uri.EscapeDataString(releaseUrl) + "&text=" + Uri.EscapeDataString("MHS Download Manager — Fast Windows Download Accelerator"));
+            };
+
+            Button liShareBtn = ShihabThemePalette.CreateMehediStyledButton("Share on LinkedIn", surf, ForeColor, 140);
+            liShareBtn.Location = new Point(18, 334);
+            liShareBtn.Click += delegate
+            {
+                OpenExternalShareUrl("https://www.linkedin.com/sharing/share-offsite/?url=" + Uri.EscapeDataString(releaseUrl));
+            };
+
+            Button starRepoBtn = ShihabThemePalette.CreateMehediStyledButton("★ Star on GitHub", surf, ForeColor, 140);
+            starRepoBtn.Location = new Point(166, 334);
+            starRepoBtn.Click += delegate
+            {
+                OpenExternalShareUrl(repoUrl);
+            };
+
+            Button closeBtn = ShihabThemePalette.CreateMehediStyledButton("Close", surf, ForeColor, 108);
+            closeBtn.Location = new Point(522, 334);
+            closeBtn.DialogResult = DialogResult.Cancel;
+            closeBtn.Click += delegate { Close(); };
+
+            CancelButton = closeBtn;
+            Shown += delegate
+            {
+                try
+                {
+                    copyLinkBtn.Focus();
+                    linkBox.SelectionStart = 0;
+                    linkBox.SelectionLength = 0;
+                }
+                catch { }
+            };
+            Controls.AddRange(new Control[]
+            {
+                titleLbl, subLbl, qrBox, linkLbl, linkBox, msgLbl, msgBox, statusToastLbl,
+                copyLinkBtn, copyMsgBtn, emailBtn, xShareBtn, waShareBtn, tgShareBtn,
+                liShareBtn, starRepoBtn, closeBtn
+            });
+        }
+
+        private static void OpenExternalShareUrl(string url)
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+            }
+            catch { }
+        }
+    }
+
+    // =========================================================================
+    // 7. REGISTRATION & OPEN-SOURCE LICENSE STATUS DIALOG
+    // =========================================================================
+    public class ShihabRegistrationStatusDialog : Form
+    {
+        public bool CheckUpdatesRequested { get; private set; }
+
+        public ShihabRegistrationStatusDialog(MehediAppConfiguration config)
+        {
+            bool dark = config != null ? config.ShihabDarkMode : true;
+            Color surf = ShihabThemePalette.GetShihabSurfaceBg(dark);
+            string repoSlug = (config != null && !string.IsNullOrWhiteSpace(config.ShihabUpdateRepoSlug))
+                ? config.ShihabUpdateRepoSlug.Trim()
+                : ShihabAutoUpdater.DefaultRepoSlug;
+            string repoUrl = "https://github.com/" + repoSlug;
+            string licenseUrl = repoUrl + "/blob/main/LICENSE";
+
+            Text = "Registration & License — " + ShihabThemePalette.ShihabMainHeaderTitle;
+            ClientSize = new Size(540, 290);
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = false;
+            MinimizeBox = false;
+            StartPosition = FormStartPosition.CenterParent;
+            BackColor = ShihabThemePalette.GetMehediWindowBg(dark);
+            ForeColor = ShihabThemePalette.GetShihabPrimaryText(dark);
+            Font = new Font("Segoe UI", 9f);
+            Icon = ShihabThemePalette.CreateShihabAppIcon();
+            ShihabThemePalette.ApplyMehediNativeDarkFrame(this, dark);
+
+            Label badgeLbl = new Label
+            {
+                Text = "✔ REGISTERED — FREE & OPEN-SOURCE EDITION",
+                Location = new Point(20, 18),
+                AutoSize = true,
+                UseMnemonic = false,
+                Font = new Font("Segoe UI", 11.5f, FontStyle.Bold),
+                ForeColor = ShihabThemePalette.GetMehediAccentGreen()
+            };
+
+            ShihabRoundedCardPanel infoCard = new ShihabRoundedCardPanel
+            {
+                Location = new Point(20, 52),
+                Size = new Size(500, 168),
+                MehediFillColor = surf,
+                ShihabBorderColor = ShihabThemePalette.GetShihabBorder(dark),
+                MehediCornerRadius = 8
+            };
+
+            string userName = "Desktop User";
+            try { userName = Environment.UserName; } catch { }
+
+            Label detailsLbl = new Label
+            {
+                Location = new Point(16, 14),
+                Size = new Size(468, 140),
+                BackColor = surf,
+                ForeColor = ForeColor,
+                UseMnemonic = false,
+                Text =
+                    "Product:         MHS Download Manager (v" + ShihabAutoUpdater.GetCurrentAppVersion() + ")\r\n" +
+                    "Licensed To:     " + userName + " (Unlimited Personal & Commercial Use)\r\n" +
+                    "Edition / Key:   MIT Open-Source Perpetual License — No Trial Limits\r\n" +
+                    "Author:          Mehedi Hasan Shihab\r\n" +
+                    "Repository:      " + repoUrl + "\r\n\r\n" +
+                    "All features — Multi-Segment Acceleration, YouTube 4K/8K, BitTorrent, Scheduler & Queues, Browser Integration, and Auto-Updates — are permanently unlocked."
+            };
+            infoCard.Controls.Add(detailsLbl);
+
+            Button licenseBtn = ShihabThemePalette.CreateMehediStyledButton("View MIT License", surf, ForeColor, 134);
+            licenseBtn.Location = new Point(20, 236);
+            licenseBtn.Click += delegate
+            {
+                try { Process.Start(new ProcessStartInfo(licenseUrl) { UseShellExecute = true }); } catch { }
+            };
+
+            Button checkUpdBtn = ShihabThemePalette.CreateMehediStyledButton("Check for Updates", ShihabThemePalette.GetShihabAccentBlue(), Color.White, 144);
+            checkUpdBtn.Location = new Point(162, 236);
+            checkUpdBtn.Click += delegate
+            {
+                CheckUpdatesRequested = true;
+                DialogResult = DialogResult.OK;
+                Close();
+            };
+
+            Button repoBtn = ShihabThemePalette.CreateMehediStyledButton("GitHub Repo", surf, ForeColor, 108);
+            repoBtn.Location = new Point(314, 236);
+            repoBtn.Click += delegate
+            {
+                try { Process.Start(new ProcessStartInfo(repoUrl) { UseShellExecute = true }); } catch { }
+            };
+
+            Button closeBtn = ShihabThemePalette.CreateMehediStyledButton("Close", surf, ForeColor, 90);
+            closeBtn.Location = new Point(430, 236);
+            closeBtn.DialogResult = DialogResult.Cancel;
+            closeBtn.Click += delegate { Close(); };
+
+            CancelButton = closeBtn;
+            Controls.AddRange(new Control[] { badgeLbl, infoCard, licenseBtn, checkUpdBtn, repoBtn, closeBtn });
+        }
+    }
+
+    // =========================================================================
+    // 8. DELETE / REMOVE TRANSFER CONFIRMATION DIALOG
+    // =========================================================================
+    public class ShihabDeleteConfirmDialog : Form
+    {
+        public bool AlsoDeleteDiskFiles { get; private set; }
+
+        public ShihabDeleteConfirmDialog(List<ShihabDownloadItem> selectedItems, bool initialDeleteFromDisk, bool dark)
+        {
+            Color surf = ShihabThemePalette.GetShihabSurfaceBg(dark);
+            int count = selectedItems != null ? selectedItems.Count : 0;
+            string subject = count == 1 && selectedItems[0] != null
+                ? ("\"" + selectedItems[0].ShihabFileName + "\"")
+                : (count + " selected transfers");
+
+            Text = "Delete Download — " + ShihabThemePalette.ShihabMainHeaderTitle;
+            ClientSize = new Size(460, 174);
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = false;
+            MinimizeBox = false;
+            StartPosition = FormStartPosition.CenterParent;
+            BackColor = ShihabThemePalette.GetMehediWindowBg(dark);
+            ForeColor = ShihabThemePalette.GetShihabPrimaryText(dark);
+            Font = new Font("Segoe UI", 9f);
+            Icon = ShihabThemePalette.CreateShihabAppIcon();
+            ShihabThemePalette.ApplyMehediNativeDarkFrame(this, dark);
+
+            Label promptLbl = new Label
+            {
+                Location = new Point(18, 18),
+                Size = new Size(424, 48),
+                Text = "Are you sure you want to remove " + subject + " from the transfer list?"
+            };
+
+            CheckBox deleteDiskChk = new CheckBox
+            {
+                Location = new Point(18, 72),
+                AutoSize = true,
+                Checked = initialDeleteFromDisk,
+                ForeColor = ShihabThemePalette.GetMehediAccentRed(),
+                Font = new Font("Segoe UI Semibold", 9f),
+                Text = "Also permanently delete downloaded file(s) from hard disk"
+            };
+
+            Button deleteBtn = ShihabThemePalette.CreateMehediStyledButton("Delete", ShihabThemePalette.GetMehediAccentRed(), Color.White, 110);
+            deleteBtn.Location = new Point(220, 120);
+            deleteBtn.Click += delegate
+            {
+                AlsoDeleteDiskFiles = deleteDiskChk.Checked;
+                DialogResult = DialogResult.OK;
+                Close();
+            };
+
+            Button cancelBtn = ShihabThemePalette.CreateMehediStyledButton("Cancel", surf, ForeColor, 108);
+            cancelBtn.Location = new Point(336, 120);
+            cancelBtn.DialogResult = DialogResult.Cancel;
+            cancelBtn.Click += delegate { Close(); };
+
+            AcceptButton = deleteBtn;
+            CancelButton = cancelBtn;
+            Controls.AddRange(new Control[] { promptLbl, deleteDiskChk, deleteBtn, cancelBtn });
         }
     }
 }

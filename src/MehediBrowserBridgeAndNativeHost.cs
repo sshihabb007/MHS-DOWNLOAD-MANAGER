@@ -921,7 +921,7 @@ namespace ShihabMehediIDM
                             }
                             else
                             {
-                                _mehediEngine.StartShihabQueue("Main Queue");
+                                _mehediEngine.StartShihabQueue("Main Download Queue");
                             }
                             WriteMehediJsonTcpResponse(shihabStream, 200, BuildShihabStatusReply("Main Download Queue started"), allowedCorsOrigin);
                             return;

@@ -5559,8 +5559,8 @@ namespace ShihabMehediIDM
                 delegate(string act, string id)
                 {
                     if (engine == null || string.IsNullOrWhiteSpace(act)) return;
-                    if (act == "start_queue") { engine.StartMehediQueue("Main Queue"); return; }
-                    if (act == "stop_queue") { engine.StopShihabQueue("Main Queue"); return; }
+                    if (act == "start_queue") { engine.StartMehediQueue("Main Download Queue"); return; }
+                    if (act == "stop_queue") { engine.StopShihabQueue("Main Download Queue"); return; }
                     if (string.IsNullOrWhiteSpace(id)) return;
                     List<ShihabDownloadItem> snap = engine.GetShihabDownloadsSnapshot();
                     for (int i = 0; i < snap.Count; i++)
@@ -7389,83 +7389,166 @@ function refresh(){
                 if (key == "menu_view") return "ভিউ (&V)";
                 if (key == "menu_tools") return "টুলস (&L)";
                 if (key == "menu_help") return "সাহায্য (&H)";
+                if (key == "menu_registration") return "রেজিস্ট্রেশন (&R)";
                 if (key == "btn_add_url") return "URL যোগ করুন";
                 if (key == "btn_resume") return "চালু করুন";
                 if (key == "btn_stop") return "থামান";
                 if (key == "btn_stop_all") return "সব থামান";
                 if (key == "btn_delete") return "মুছুন";
+                if (key == "btn_delete_completed") return "সম্পন্ন মুছুন";
                 if (key == "btn_options") return "অপশন";
                 if (key == "btn_scheduler") return "শিডিউলার";
                 if (key == "btn_start_queue") return "কিউ শুরু";
                 if (key == "btn_stop_queue") return "কিউ বন্ধ";
+                if (key == "btn_tell_friend") return "বন্ধুকে জানান";
                 if (key == "btn_grabber") return "গ্র্যাবার";
                 if (key == "check_updates") return "আপডেট চেক করুন...";
             }
             else if (iso == "es")
             {
+                if (key == "menu_tasks") return "&Tareas";
+                if (key == "menu_file") return "&Archivo";
+                if (key == "menu_downloads") return "&Descargas";
+                if (key == "menu_view") return "&Ver";
+                if (key == "menu_help") return "A&yuda";
+                if (key == "menu_registration") return "&Registro";
                 if (key == "btn_add_url") return "Añadir URL";
                 if (key == "btn_resume") return "Reanudar";
-                if (key == "btn_stop") return "Pausar";
-                if (key == "btn_stop_all") return "Pausar todo";
+                if (key == "btn_stop") return "Detener";
+                if (key == "btn_stop_all") return "Detener todo";
                 if (key == "btn_delete") return "Eliminar";
+                if (key == "btn_delete_completed") return "Borrar compl.";
                 if (key == "btn_options") return "Opciones";
                 if (key == "btn_scheduler") return "Programador";
+                if (key == "btn_start_queue") return "Iniciar cola";
+                if (key == "btn_stop_queue") return "Detener cola";
+                if (key == "btn_tell_friend") return "Recomendar";
                 if (key == "check_updates") return "Buscar actualizaciones...";
             }
             else if (iso == "fr")
             {
+                if (key == "menu_tasks") return "&Tâches";
+                if (key == "menu_file") return "&Fichier";
+                if (key == "menu_downloads") return "&Téléchargements";
+                if (key == "menu_view") return "&Affichage";
+                if (key == "menu_help") return "Aid&e";
+                if (key == "menu_registration") return "En&registrement";
                 if (key == "btn_add_url") return "Ajouter URL";
                 if (key == "btn_resume") return "Reprendre";
-                if (key == "btn_stop") return "Pause";
+                if (key == "btn_stop") return "Arrêter";
+                if (key == "btn_stop_all") return "Tout arrêter";
                 if (key == "btn_delete") return "Supprimer";
+                if (key == "btn_delete_completed") return "Suppr. terminés";
                 if (key == "btn_options") return "Options";
+                if (key == "btn_scheduler") return "Planificateur";
+                if (key == "btn_start_queue") return "Démarrer file";
+                if (key == "btn_stop_queue") return "Arrêter file";
+                if (key == "btn_tell_friend") return "Partager";
                 if (key == "check_updates") return "Vérifier les mises à jour...";
             }
             else if (iso == "de")
             {
+                if (key == "menu_tasks") return "&Aufgaben";
+                if (key == "menu_file") return "&Datei";
+                if (key == "menu_downloads") return "&Downloads";
+                if (key == "menu_view") return "&Ansicht";
+                if (key == "menu_help") return "&Hilfe";
+                if (key == "menu_registration") return "&Registrierung";
                 if (key == "btn_add_url") return "URL hinzufügen";
                 if (key == "btn_resume") return "Fortsetzen";
                 if (key == "btn_stop") return "Stopp";
+                if (key == "btn_stop_all") return "Alle stoppen";
                 if (key == "btn_delete") return "Löschen";
+                if (key == "btn_delete_completed") return "Fertige löschen";
                 if (key == "btn_options") return "Optionen";
+                if (key == "btn_scheduler") return "Zeitplaner";
+                if (key == "btn_start_queue") return "Warteschl. Start";
+                if (key == "btn_stop_queue") return "Warteschl. Stopp";
+                if (key == "btn_tell_friend") return "Weiterempfehlen";
                 if (key == "check_updates") return "Nach Updates suchen...";
             }
             else if (iso == "ar")
             {
+                if (key == "menu_tasks") return "المهام (&T)";
+                if (key == "menu_file") return "ملف (&F)";
+                if (key == "menu_downloads") return "التحميلات (&D)";
+                if (key == "menu_view") return "عرض (&V)";
+                if (key == "menu_help") return "مساعدة (&H)";
+                if (key == "menu_registration") return "التسجيل (&R)";
                 if (key == "btn_add_url") return "إضافة رابط";
                 if (key == "btn_resume") return "استئناف";
                 if (key == "btn_stop") return "إيقاف";
                 if (key == "btn_stop_all") return "إيقاف الكل";
                 if (key == "btn_delete") return "حذف";
+                if (key == "btn_delete_completed") return "حذف المكتمل";
                 if (key == "btn_options") return "الخيارات";
                 if (key == "btn_scheduler") return "الجدولة";
+                if (key == "btn_start_queue") return "بدء القائمة";
+                if (key == "btn_stop_queue") return "إيقاف القائمة";
+                if (key == "btn_tell_friend") return "أخبر صديقاً";
                 if (key == "check_updates") return "التحقق من التحديثات...";
             }
             else if (iso == "ru")
             {
+                if (key == "menu_tasks") return "&Задачи";
+                if (key == "menu_file") return "&Файл";
+                if (key == "menu_downloads") return "&Загрузки";
+                if (key == "menu_view") return "&Вид";
+                if (key == "menu_help") return "&Справка";
+                if (key == "menu_registration") return "&Регистрация";
                 if (key == "btn_add_url") return "Добавить URL";
                 if (key == "btn_resume") return "Продолжить";
-                if (key == "btn_stop") return "Пауза";
+                if (key == "btn_stop") return "Остановить";
+                if (key == "btn_stop_all") return "Остановить все";
                 if (key == "btn_delete") return "Удалить";
+                if (key == "btn_delete_completed") return "Удалить заверш.";
                 if (key == "btn_options") return "Настройки";
+                if (key == "btn_scheduler") return "Планировщик";
+                if (key == "btn_start_queue") return "Запуск очереди";
+                if (key == "btn_stop_queue") return "Стоп очереди";
+                if (key == "btn_tell_friend") return "Рассказать другу";
                 if (key == "check_updates") return "Проверить обновления...";
             }
             else if (iso == "zh")
             {
+                if (key == "menu_tasks") return "任务(&T)";
+                if (key == "menu_file") return "文件(&F)";
+                if (key == "menu_downloads") return "下载(&D)";
+                if (key == "menu_view") return "视图(&V)";
+                if (key == "menu_help") return "帮助(&H)";
+                if (key == "menu_registration") return "注册(&R)";
                 if (key == "btn_add_url") return "新建任务";
                 if (key == "btn_resume") return "继续";
-                if (key == "btn_stop") return "暂停";
+                if (key == "btn_stop") return "停止";
+                if (key == "btn_stop_all") return "全部停止";
                 if (key == "btn_delete") return "删除";
+                if (key == "btn_delete_completed") return "删除已完成";
                 if (key == "btn_options") return "选项";
+                if (key == "btn_scheduler") return "计划任务";
+                if (key == "btn_start_queue") return "开始队列";
+                if (key == "btn_stop_queue") return "停止队列";
+                if (key == "btn_tell_friend") return "推荐给好友";
                 if (key == "check_updates") return "检查更新...";
             }
             else if (iso == "ja")
             {
+                if (key == "menu_tasks") return "タスク(&T)";
+                if (key == "menu_file") return "ファイル(&F)";
+                if (key == "menu_downloads") return "ダウンロード(&D)";
+                if (key == "menu_view") return "表示(&V)";
+                if (key == "menu_help") return "ヘルプ(&H)";
+                if (key == "menu_registration") return "登録情報(&R)";
                 if (key == "btn_add_url") return "URL追加";
                 if (key == "btn_resume") return "再開";
                 if (key == "btn_stop") return "停止";
+                if (key == "btn_stop_all") return "すべて停止";
                 if (key == "btn_delete") return "削除";
+                if (key == "btn_delete_completed") return "完了済みを削除";
                 if (key == "btn_options") return "設定";
+                if (key == "btn_scheduler") return "スケジューラ";
+                if (key == "btn_start_queue") return "キュー開始";
+                if (key == "btn_stop_queue") return "キュー停止";
+                if (key == "btn_tell_friend") return "友人に紹介";
                 if (key == "check_updates") return "更新を確認...";
             }
             return fallbackEnglish;
