@@ -8,9 +8,21 @@ namespace ShihabMehediIDM
 {
     public class ShihabChromeForm : Form
     {
+        private const int WM_SIZE = 0x0005;
+        private const int WM_SETTEXT = 0x000C;
+        private const int WM_SETTINGCHANGE = 0x001A;
+        private const int WM_GETMINMAXINFO = 0x0024;
+        private const int WM_WINDOWPOSCHANGED = 0x0047;
+        private const int WM_SETICON = 0x0080;
         private const int WM_NCCALCSIZE = 0x0083;
         private const int WM_NCHITTEST = 0x0084;
-        private const int WM_GETMINMAXINFO = 0x0024;
+        private const int WM_NCPAINT = 0x0085;
+        private const int WM_NCACTIVATE = 0x0086;
+        private const int WM_THEMECHANGED = 0x031A;
+        private const int WM_DWMCOMPOSITIONCHANGED = 0x031E;
+        private const int WM_DPICHANGED = 0x02E0;
+        private const int GWL_STYLE = -16;
+        private const long WS_VISIBLE_STYLE = 0x10000000L;
         private const int HTCAPTION = 2;
         private const int HTLEFT = 10;
         private const int HTRIGHT = 11;
@@ -59,8 +71,35 @@ namespace ShihabMehediIDM
         [DllImport("user32.dll")]
         private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
 
+        [DllImport("user32.dll", EntryPoint = "GetWindowLongPtr")]
+        private static extern IntPtr GetWindowLongPtr64(IntPtr hWnd, int nIndex);
+
+        [DllImport("user32.dll", EntryPoint = "GetWindowLong")]
+        private static extern IntPtr GetWindowLong32(IntPtr hWnd, int nIndex);
+
+        [DllImport("user32.dll", EntryPoint = "SetWindowLongPtr")]
+        private static extern IntPtr SetWindowLongPtr64(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
+
+        [DllImport("user32.dll", EntryPoint = "SetWindowLong")]
+        private static extern IntPtr SetWindowLong32(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
+
+        private static IntPtr GetNativeWindowStyle(IntPtr hwnd)
+        {
+            return IntPtr.Size == 8 ? GetWindowLongPtr64(hwnd, GWL_STYLE) : GetWindowLong32(hwnd, GWL_STYLE);
+        }
+
+        private static void SetNativeWindowStyle(IntPtr hwnd, IntPtr style)
+        {
+            if (IntPtr.Size == 8) SetWindowLongPtr64(hwnd, GWL_STYLE, style);
+            else SetWindowLong32(hwnd, GWL_STYLE, style);
+        }
+
         private bool _shihabDarkChrome = true;
-        private Color _shihabChromeBorderColor = Color.FromArgb(46, 52, 64);
+        private bool _shihabWindowActive = true;
+        private Color _shihabChromeBorderColor = Color.FromArgb(46, 52, 66);
+        private Rectangle _shihabNormalBounds = Rectangle.Empty;
+        private bool _shihabInRestoreTransition = false;
+        private FormWindowState _shihabLastWindowState = FormWindowState.Normal;
 
         protected virtual bool ShihabResizableChrome
         {
@@ -71,7 +110,7 @@ namespace ShihabMehediIDM
         {
             FormBorderStyle = FormBorderStyle.None;
             Padding = new Padding(1);
-            SetStyle(ControlStyles.ResizeRedraw, true);
+            SetStyle(ControlStyles.ResizeRedraw | ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint, true);
         }
 
         protected override CreateParams CreateParams
@@ -90,15 +129,50 @@ namespace ShihabMehediIDM
             }
         }
 
+        protected override Size SizeFromClientSize(Size clientSize)
+        {
+            return clientSize;
+        }
+
+        protected override void SetClientSizeCore(int x, int y)
+        {
+            Size = new Size(x, y);
+        }
+
+        protected override void SetBoundsCore(int x, int y, int width, int height, BoundsSpecified specified)
+        {
+            // Prevent Form.RestoreWindowBoundsIfNecessary from re-inflating chromeless bounds
+            // by WS_THICKFRAME non-client insets (~14x14) after Minimize/Maximize -> Normal restore.
+            if (_shihabInRestoreTransition &&
+                specified == BoundsSpecified.All &&
+                WindowState == FormWindowState.Normal &&
+                !_shihabNormalBounds.IsEmpty)
+            {
+                width = _shihabNormalBounds.Width;
+                height = _shihabNormalBounds.Height;
+            }
+            base.SetBoundsCore(x, y, width, height, specified);
+            if (IsHandleCreated && WindowState == FormWindowState.Normal && !_shihabInRestoreTransition && width > 0 && height > 0)
+            {
+                _shihabNormalBounds = Bounds;
+            }
+        }
+
         public void ApplyShihabChromeTheme(bool dark, Color? customBorderColor)
         {
             _shihabDarkChrome = dark;
             _shihabChromeBorderColor = customBorderColor.HasValue
                 ? customBorderColor.Value
-                : (dark ? Color.FromArgb(48, 54, 68) : Color.FromArgb(182, 193, 208));
+                : ShihabThemePalette.GetShihabBorder(dark);
 
             ApplyDwmChromeAttributes();
-            Invalidate();
+            Invalidate(true);
+        }
+
+        public void RefreshShihabChromeSurface()
+        {
+            ApplyDwmChromeAttributes();
+            Invalidate(true);
         }
 
         private void ApplyDwmChromeAttributes()
@@ -106,6 +180,10 @@ namespace ShihabMehediIDM
             if (IsDisposed || !IsHandleCreated) return;
             try
             {
+                int darkFlag = _shihabDarkChrome ? 1 : 0;
+                DwmSetIntAttr(Handle, 20, ref darkFlag, sizeof(int));
+                DwmSetIntAttr(Handle, 19, ref darkFlag, sizeof(int));
+
                 int roundPref = 2; // DWMWCP_ROUND on Windows 11
                 DwmSetIntAttr(Handle, 33, ref roundPref, sizeof(int));
 
@@ -113,6 +191,14 @@ namespace ShihabMehediIDM
                           (_shihabChromeBorderColor.G << 8) |
                           _shihabChromeBorderColor.R;
                 DwmSetIntAttr(Handle, 34, ref bgr, sizeof(int));
+
+                Color capCol = _shihabDarkChrome ? Color.FromArgb(22, 24, 30) : Color.FromArgb(240, 244, 249);
+                int capBgr = (capCol.B << 16) | (capCol.G << 8) | capCol.R;
+                DwmSetIntAttr(Handle, 35, ref capBgr, sizeof(int));
+
+                Color textCol = _shihabDarkChrome ? Color.FromArgb(226, 232, 240) : Color.FromArgb(22, 28, 38);
+                int textBgr = (textCol.B << 16) | (textCol.G << 8) | textCol.R;
+                DwmSetIntAttr(Handle, 36, ref textBgr, sizeof(int));
 
                 DwmMargins margins = new DwmMargins { Left = 1, Right = 1, Top = 1, Bottom = 1 };
                 DwmExtendFrame(Handle, ref margins);
@@ -124,6 +210,35 @@ namespace ShihabMehediIDM
         {
             base.OnHandleCreated(e);
             ApplyDwmChromeAttributes();
+            ShihabThemePalette.ApplyShihabWindowIcons(this);
+        }
+
+        protected override void OnShown(EventArgs e)
+        {
+            base.OnShown(e);
+            if (_shihabNormalBounds.IsEmpty && WindowState == FormWindowState.Normal)
+            {
+                _shihabNormalBounds = Bounds;
+            }
+            ApplyDwmChromeAttributes();
+            ShihabThemePalette.ApplyShihabWindowIcons(this);
+            Invalidate(true);
+        }
+
+        protected override void OnActivated(EventArgs e)
+        {
+            _shihabWindowActive = true;
+            base.OnActivated(e);
+            ApplyDwmChromeAttributes();
+            Invalidate(false);
+        }
+
+        protected override void OnDeactivate(EventArgs e)
+        {
+            _shihabWindowActive = false;
+            base.OnDeactivate(e);
+            ApplyDwmChromeAttributes();
+            Invalidate(false);
         }
 
         protected override void OnSizeChanged(EventArgs e)
@@ -136,6 +251,10 @@ namespace ShihabMehediIDM
             {
                 Padding = targetPad;
             }
+            if (WindowState != FormWindowState.Minimized)
+            {
+                ApplyDwmChromeAttributes();
+            }
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -143,7 +262,10 @@ namespace ShihabMehediIDM
             base.OnPaint(e);
             if (WindowState != FormWindowState.Maximized && ClientSize.Width > 2 && ClientSize.Height > 2)
             {
-                using (Pen borderPen = new Pen(_shihabChromeBorderColor, 1f))
+                Color drawBorder = _shihabWindowActive
+                    ? _shihabChromeBorderColor
+                    : ShihabThemePalette.BlendThemeColor(_shihabChromeBorderColor, BackColor, 0.35);
+                using (Pen borderPen = new Pen(drawBorder, 1f))
                 {
                     e.Graphics.DrawRectangle(borderPen, 0, 0, ClientSize.Width - 1, ClientSize.Height - 1);
                 }
@@ -152,9 +274,48 @@ namespace ShihabMehediIDM
 
         protected override void WndProc(ref Message m)
         {
-            if (m.Msg == WM_NCCALCSIZE && m.WParam != IntPtr.Zero)
+            if (m.Msg == WM_NCCALCSIZE)
+            {
+                // Keep 0px non-client insets on both WParam == 0 and WParam != 0 so WinForms
+                // restore/minimize cycles never re-introduce a 7px WS_THICKFRAME border.
+                m.Result = IntPtr.Zero;
+                return;
+            }
+            if (m.Msg == WM_NCPAINT)
             {
                 m.Result = IntPtr.Zero;
+                return;
+            }
+            if (m.Msg == WM_NCACTIVATE)
+            {
+                // Suppress DefWindowProc classic caption/border painting on activation changes.
+                _shihabWindowActive = (m.WParam != IntPtr.Zero);
+                m.Result = new IntPtr(1);
+                Invalidate(false);
+                return;
+            }
+            if ((m.Msg == WM_SETTEXT || m.Msg == WM_SETICON) && IsHandleCreated)
+            {
+                long styleVal = GetNativeWindowStyle(Handle).ToInt64();
+                if ((styleVal & WS_VISIBLE_STYLE) != 0)
+                {
+                    SetNativeWindowStyle(Handle, new IntPtr(styleVal & ~WS_VISIBLE_STYLE));
+                    try
+                    {
+                        base.WndProc(ref m);
+                    }
+                    finally
+                    {
+                        SetNativeWindowStyle(Handle, new IntPtr(styleVal));
+                    }
+                    return;
+                }
+            }
+            if (m.Msg == WM_DWMCOMPOSITIONCHANGED || m.Msg == WM_THEMECHANGED || m.Msg == WM_SETTINGCHANGE || m.Msg == WM_DPICHANGED)
+            {
+                base.WndProc(ref m);
+                ApplyDwmChromeAttributes();
+                Invalidate(true);
                 return;
             }
             if (m.Msg == WM_GETMINMAXINFO)
@@ -200,7 +361,31 @@ namespace ShihabMehediIDM
                 if (b) { m.Result = (IntPtr)HTBOTTOM; return; }
                 return;
             }
+            if (m.Msg == WM_WINDOWPOSCHANGED)
+            {
+                bool wasMinOrMax = (_shihabLastWindowState != FormWindowState.Normal);
+                _shihabInRestoreTransition = wasMinOrMax;
+                try
+                {
+                    base.WndProc(ref m);
+                }
+                finally
+                {
+                    _shihabInRestoreTransition = false;
+                }
+                FormWindowState curState = WindowState;
+                if (curState == FormWindowState.Normal && IsHandleCreated && Visible && !wasMinOrMax)
+                {
+                    _shihabNormalBounds = Bounds;
+                }
+                _shihabLastWindowState = curState;
+                return;
+            }
             base.WndProc(ref m);
+            if (m.Msg == WM_SIZE)
+            {
+                _shihabLastWindowState = WindowState;
+            }
         }
 
         public static void BeginChromeWindowDrag(Form form)

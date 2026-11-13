@@ -74,8 +74,9 @@ namespace ShihabMehediIDM
                 _shihabTopRibbonBar.UpdateMetricsForScale();
             }
 
+            Color chromeBorder = ShihabThemePalette.GetShihabBorder(shihabDark);
+            ApplyShihabChromeTheme(shihabDark, chromeBorder);
             ShihabThemePalette.ApplyMehediNativeDarkFrame(this, shihabDark);
-            ApplyShihabChromeTheme(shihabDark, shihabDark ? Color.FromArgb(46, 52, 66) : Color.FromArgb(182, 193, 208));
             BackColor = mehediWorkspaceBg;
             ForeColor = shihabFg;
 
@@ -348,6 +349,8 @@ namespace ShihabMehediIDM
             {
                 WindowState = FormWindowState.Normal;
             }
+            RefreshShihabChromeSurface();
+            ShihabThemePalette.ApplyShihabWindowIcons(this);
             Activate();
             BringToFront();
         }

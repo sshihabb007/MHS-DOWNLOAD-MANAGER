@@ -241,7 +241,7 @@ namespace ShihabMehediIDM
                 using (MemoryStream shihabInfo = new MemoryStream())
                 {
                     MuxerBinaryIo.WriteEbmlElement(shihabInfo, 0x2AD7B1, new byte[] { 0x0F, 0x42, 0x40 });
-                    MuxerBinaryIo.WriteEbmlElement(shihabInfo, 0x4D80, Encoding.UTF8.GetBytes("MHS Download Manager 1.0.6"));
+                    MuxerBinaryIo.WriteEbmlElement(shihabInfo, 0x4D80, Encoding.UTF8.GetBytes("MHS Download Manager 1.0.7"));
                     MuxerBinaryIo.WriteEbmlElement(shihabInfo, 0x5741, Encoding.UTF8.GetBytes("mdm.exe"));
                     MuxerBinaryIo.WriteEbmlElement(shihabOut, 0x1549A966, shihabInfo.ToArray());
                 }

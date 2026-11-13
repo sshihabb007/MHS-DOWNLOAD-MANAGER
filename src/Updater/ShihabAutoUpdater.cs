@@ -7,6 +7,7 @@ using System.IO.Compression;
 using System.Net;
 using System.Reflection;
 using System.Security.Cryptography;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -72,7 +73,7 @@ namespace ShihabMehediIDM
                 }
             }
             catch { }
-            return "1.0.6";
+            return "1.0.7";
         }
 
         public static string NormalizeVersionString(string rawTagOrVer)
@@ -1185,6 +1186,8 @@ namespace ShihabMehediIDM
                         }
                     }
 
+                    RefreshPortableShellShortcutsAndIconCache(currentExe);
+
                     if (cleanExitCallback != null) cleanExitCallback();
 
                     ProcessStartInfo relaunchPsi = new ProcessStartInfo(
@@ -1201,6 +1204,84 @@ namespace ShihabMehediIDM
                 errorMessage = "Failed to apply update: " + ex.Message;
                 return false;
             }
+        }
+
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+        private static extern void SHChangeNotify(int wEventId, uint uFlags, string dwItem1, string dwItem2);
+
+        private static void RefreshPortableShellShortcutsAndIconCache(string targetExePath)
+        {
+            const int SHCNE_UPDATEDIR = 0x00001000;
+            const int SHCNE_UPDATEITEM = 0x00002000;
+            const int SHCNE_ASSOCCHANGED = 0x08000000;
+            const uint SHCNF_IDLIST = 0x0000u;
+            const uint SHCNF_PATHW = 0x0005u;
+            const uint SHCNF_FLUSH = 0x1000u;
+
+            try
+            {
+                string normExe = Path.GetFullPath(targetExePath);
+                List<string> dirsToCheck = new List<string>();
+                dirsToCheck.Add(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory));
+                dirsToCheck.Add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "OneDrive\\Desktop"));
+                dirsToCheck.Add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), @"Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"));
+
+                Type shellType = Type.GetTypeFromProgID("WScript.Shell");
+                for (int d = 0; d < dirsToCheck.Count; d++)
+                {
+                    string dir = dirsToCheck[d];
+                    if (string.IsNullOrWhiteSpace(dir) || !Directory.Exists(dir)) continue;
+                    string[] lnks = Directory.GetFiles(dir, "*.lnk", SearchOption.TopDirectoryOnly);
+                    bool updatedDir = false;
+                    for (int i = 0; i < lnks.Length; i++)
+                    {
+                        string lnk = lnks[i];
+                        try
+                        {
+                            if (shellType == null) continue;
+                            object shell = Activator.CreateInstance(shellType);
+                            object sc = shellType.InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, new object[] { lnk });
+                            Type scType = sc.GetType();
+                            object targetObj = scType.InvokeMember("TargetPath", BindingFlags.GetProperty, null, sc, null);
+                            string scTarget = targetObj != null ? targetObj.ToString().Trim() : "";
+                            if (!string.IsNullOrEmpty(scTarget) &&
+                                string.Equals(Path.GetFullPath(scTarget), normExe, StringComparison.OrdinalIgnoreCase))
+                            {
+                                scType.InvokeMember("IconLocation", BindingFlags.SetProperty, null, sc, new object[] { normExe + ",0" });
+                                scType.InvokeMember("Save", BindingFlags.InvokeMethod, null, sc, null);
+                                try { File.SetLastWriteTimeUtc(lnk, DateTime.UtcNow); } catch { }
+                                SHChangeNotify(SHCNE_UPDATEITEM, SHCNF_PATHW | SHCNF_FLUSH, lnk, null);
+                                updatedDir = true;
+                            }
+                        }
+                        catch { }
+                    }
+                    if (updatedDir)
+                    {
+                        SHChangeNotify(SHCNE_UPDATEDIR, SHCNF_PATHW | SHCNF_FLUSH, dir, null);
+                    }
+                }
+
+                SHChangeNotify(SHCNE_UPDATEITEM, SHCNF_PATHW | SHCNF_FLUSH, normExe, null);
+                SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST | SHCNF_FLUSH, null, null);
+            }
+            catch { }
+
+            try
+            {
+                string ie4uinit = ShihabProcessAndPathSafety.ResolveSystem32ToolPath("ie4uinit.exe");
+                if (!string.IsNullOrEmpty(ie4uinit) && File.Exists(ie4uinit))
+                {
+                    ProcessStartInfo psi = new ProcessStartInfo(ie4uinit, "-show");
+                    psi.UseShellExecute = false;
+                    psi.CreateNoWindow = true;
+                    using (Process p = Process.Start(psi))
+                    {
+                        if (p != null) p.WaitForExit(2500);
+                    }
+                }
+            }
+            catch { }
         }
 
         private static void SafeUpdateSiblingExtensionFolder(string extZipPath, string targetExtDir)

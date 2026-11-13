@@ -303,7 +303,7 @@ namespace ShihabMehediIDM
 
     public static class ShihabThemePalette
     {
-        public const string ShihabMainHeaderTitle = "MHS Download Manager 1.0.6 (Mehedi Hasan Shihab)";
+        public const string ShihabMainHeaderTitle = "MHS Download Manager 1.0.7 (Mehedi Hasan Shihab)";
 
         internal static readonly Font UiRegular76Font = new Font("Segoe UI", 7.6f, FontStyle.Regular);
         internal static readonly Font UiBold78Font = new Font("Segoe UI", 7.8f, FontStyle.Bold);
@@ -337,6 +337,12 @@ namespace ShihabMehediIDM
         [DllImport("dwmapi.dll", EntryPoint = "DwmSetWindowAttribute")]
         private static extern int SetMehediDwmWindowAttribute(IntPtr shihabHwnd, int mehediAttr, ref int shihabAttrValue, int mehediAttrSize);
 
+        [DllImport("user32.dll")]
+        private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        private static extern int GetSystemMetrics(int nIndex);
+
         [DllImport("uxtheme.dll", EntryPoint = "#135", SetLastError = true)]
         private static extern int SetMehediPreferredAppMode(int shihabPreferredMode);
 
@@ -356,30 +362,39 @@ namespace ShihabMehediIDM
             catch { }
         }
 
+        private static int ColorToBgrInt(Color c)
+        {
+            return (c.B << 16) | (c.G << 8) | c.R;
+        }
+
         private static void ApplyDwmAttributesToForm(Form form, bool dark)
         {
             try
             {
                 if (form == null || form.IsDisposed || !form.IsHandleCreated) return;
+                ShihabChromeForm chromeForm = form as ShihabChromeForm;
+                if (chromeForm != null)
+                {
+                    chromeForm.RefreshShihabChromeSurface();
+                    return;
+                }
+
                 int mehediUseDark = dark ? 1 : 0;
                 SetMehediDwmWindowAttribute(form.Handle, 20, ref mehediUseDark, sizeof(int));
                 SetMehediDwmWindowAttribute(form.Handle, 19, ref mehediUseDark, sizeof(int));
-                if (dark)
-                {
-                    int shihabObsidianCaptionRef = (25 << 16) | (19 << 8) | 18;
-                    SetMehediDwmWindowAttribute(form.Handle, 35, ref shihabObsidianCaptionRef, sizeof(int));
-                    int mehediCaptionTextRef = (245 << 16) | (234 << 8) | 228;
-                    SetMehediDwmWindowAttribute(form.Handle, 36, ref mehediCaptionTextRef, sizeof(int));
-                    int shihabFrameBorderRef = (56 << 16) | (40 << 8) | 36;
-                    SetMehediDwmWindowAttribute(form.Handle, 34, ref shihabFrameBorderRef, sizeof(int));
-                }
-                else
-                {
-                    int mehediLightCaptionRef = (252 << 16) | (248 << 8) | 245;
-                    SetMehediDwmWindowAttribute(form.Handle, 35, ref mehediLightCaptionRef, sizeof(int));
-                    int shihabLightTextRef = (42 << 16) | (30 << 8) | 24;
-                    SetMehediDwmWindowAttribute(form.Handle, 36, ref shihabLightTextRef, sizeof(int));
-                }
+
+                int roundPref = 2;
+                SetMehediDwmWindowAttribute(form.Handle, 33, ref roundPref, sizeof(int));
+
+                Color capCol = GetMehediWindowBg(dark);
+                Color txtCol = GetShihabPrimaryText(dark);
+                Color bdrCol = GetShihabBorder(dark);
+                int capRef = ColorToBgrInt(capCol);
+                int txtRef = ColorToBgrInt(txtCol);
+                int bdrRef = ColorToBgrInt(bdrCol);
+                SetMehediDwmWindowAttribute(form.Handle, 35, ref capRef, sizeof(int));
+                SetMehediDwmWindowAttribute(form.Handle, 36, ref txtRef, sizeof(int));
+                SetMehediDwmWindowAttribute(form.Handle, 34, ref bdrRef, sizeof(int));
             }
             catch { }
         }
@@ -402,16 +417,19 @@ namespace ShihabMehediIDM
             shihabForm.HandleCreated += delegate
             {
                 ApplyDwmAttributesToForm(shihabForm, state.Dark);
+                ApplyShihabWindowIcons(shihabForm);
             };
             shihabForm.Shown += delegate
             {
                 ApplyDwmAttributesToForm(shihabForm, state.Dark);
+                ApplyShihabWindowIcons(shihabForm);
                 ApplyShihabDarkThemeToControlTree(shihabForm, state.Dark);
             };
 
             if (shihabForm.IsHandleCreated)
             {
                 ApplyDwmAttributesToForm(shihabForm, mehediDark);
+                ApplyShihabWindowIcons(shihabForm);
             }
         }
 
@@ -775,44 +793,126 @@ namespace ShihabMehediIDM
             }
         }
 
+        private static readonly object _iconCacheLock = new object();
+        private static byte[] _shihabOfficialIcoBytes;
         private static Icon _shihabCachedOfficialIcon;
+        private static Icon _shihabCachedSmallIcon;
+        private static Icon _shihabCachedBigIcon;
         private static Bitmap _mehediCachedOfficialPng;
         private static Bitmap _shihabCachedAuthorPortrait;
 
+        private static void EnsureOfficialIconCacheLoaded()
+        {
+            lock (_iconCacheLock)
+            {
+                if (_shihabOfficialIcoBytes == null)
+                {
+                    try
+                    {
+                        using (Stream mehediIcoStream = typeof(ShihabThemePalette).Assembly.GetManifestResourceStream("ShihabMehediIDM.mdm_icon.ico"))
+                        {
+                            if (mehediIcoStream != null)
+                            {
+                                using (MemoryStream ms = new MemoryStream())
+                                {
+                                    mehediIcoStream.CopyTo(ms);
+                                    _shihabOfficialIcoBytes = ms.ToArray();
+                                }
+                            }
+                        }
+                    }
+                    catch { }
+                }
+
+                if (_shihabCachedOfficialIcon == null && _shihabOfficialIcoBytes != null && _shihabOfficialIcoBytes.Length > 0)
+                {
+                    try
+                    {
+                        using (MemoryStream ms = new MemoryStream(_shihabOfficialIcoBytes))
+                        {
+                            _shihabCachedOfficialIcon = new Icon(ms);
+                        }
+                    }
+                    catch { }
+                }
+
+                if (_shihabCachedOfficialIcon == null)
+                {
+                    try
+                    {
+                        using (Process current = Process.GetCurrentProcess())
+                        {
+                            Icon shihabExeIco = Icon.ExtractAssociatedIcon(current.MainModule.FileName);
+                            if (shihabExeIco != null)
+                            {
+                                _shihabCachedOfficialIcon = shihabExeIco;
+                            }
+                        }
+                    }
+                    catch { }
+                }
+
+                if (_shihabOfficialIcoBytes != null && _shihabOfficialIcoBytes.Length > 0)
+                {
+                    try
+                    {
+                        if (_shihabCachedSmallIcon == null)
+                        {
+                            int smW = Math.Max(16, GetSystemMetrics(49)); // SM_CXSMICON
+                            int smH = Math.Max(16, GetSystemMetrics(50)); // SM_CYSMICON
+                            using (MemoryStream ms = new MemoryStream(_shihabOfficialIcoBytes))
+                            {
+                                _shihabCachedSmallIcon = new Icon(ms, new Size(smW, smH));
+                            }
+                        }
+                    }
+                    catch { }
+
+                    try
+                    {
+                        if (_shihabCachedBigIcon == null)
+                        {
+                            int lgW = Math.Max(32, GetSystemMetrics(11)); // SM_CXICON
+                            int lgH = Math.Max(32, GetSystemMetrics(12)); // SM_CYICON
+                            using (MemoryStream ms = new MemoryStream(_shihabOfficialIcoBytes))
+                            {
+                                _shihabCachedBigIcon = new Icon(ms, new Size(lgW, lgH));
+                            }
+                        }
+                    }
+                    catch { }
+                }
+            }
+        }
+
         public static Icon CreateShihabAppIcon()
         {
+            EnsureOfficialIconCacheLoaded();
             if (_shihabCachedOfficialIcon != null)
             {
-                return _shihabCachedOfficialIcon;
+                try { return (Icon)_shihabCachedOfficialIcon.Clone(); } catch { return _shihabCachedOfficialIcon; }
             }
-            try
-            {
-                Stream mehediIcoStream = typeof(ShihabThemePalette).Assembly.GetManifestResourceStream("ShihabMehediIDM.mdm_icon.ico");
-                if (mehediIcoStream != null)
-                {
-                    using (mehediIcoStream)
-                    {
-                        _shihabCachedOfficialIcon = new Icon(mehediIcoStream);
-                        return _shihabCachedOfficialIcon;
-                    }
-                }
-            }
-            catch { }
-
-            try
-            {
-                using (Process current = Process.GetCurrentProcess())
-                {
-                    Icon shihabExeIco = Icon.ExtractAssociatedIcon(current.MainModule.FileName);
-                    if (shihabExeIco != null)
-                    {
-                        _shihabCachedOfficialIcon = shihabExeIco;
-                        return _shihabCachedOfficialIcon;
-                    }
-                }
-            }
-            catch { }
             return SystemIcons.Application;
+        }
+
+        public static void ApplyShihabWindowIcons(Form form)
+        {
+            if (form == null || form.IsDisposed || !form.IsHandleCreated) return;
+            EnsureOfficialIconCacheLoaded();
+            try
+            {
+                Icon smallIco = _shihabCachedSmallIcon ?? _shihabCachedOfficialIcon;
+                Icon bigIco = _shihabCachedBigIcon ?? _shihabCachedOfficialIcon;
+                if (smallIco != null)
+                {
+                    SendMessage(form.Handle, 0x0080, IntPtr.Zero, smallIco.Handle);
+                }
+                if (bigIco != null)
+                {
+                    SendMessage(form.Handle, 0x0080, new IntPtr(1), bigIco.Handle);
+                }
+            }
+            catch { }
         }
 
         public static Bitmap CreateMehediLogoBitmap(int shihabPixelSize)

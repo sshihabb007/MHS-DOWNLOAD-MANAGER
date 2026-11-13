@@ -371,7 +371,7 @@ namespace ShihabMehediIDM
                 req.AllowAutoRedirect = false;
                 req.Timeout = 4500;
                 req.ReadWriteTimeout = 4500;
-                req.UserAgent = "Mozilla/5.0 ShihabMehediIDM/1.0.6";
+                req.UserAgent = "Mozilla/5.0 ShihabMehediIDM/1.0.7";
                 try
                 {
                     using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
@@ -606,7 +606,7 @@ namespace ShihabMehediIDM
             {
                 HttpWebRequest shihabReq = (HttpWebRequest)WebRequest.Create(cur);
                 shihabReq.AllowAutoRedirect = false;
-                shihabReq.UserAgent = "Mozilla/5.0 ShihabMehediIDM-Grabber/1.0.6";
+                shihabReq.UserAgent = "Mozilla/5.0 ShihabMehediIDM-Grabber/1.0.7";
                 shihabReq.Timeout = 10000;
                 shihabReq.ReadWriteTimeout = 10000;
                 using (HttpWebResponse mehediResp = (HttpWebResponse)shihabReq.GetResponse())

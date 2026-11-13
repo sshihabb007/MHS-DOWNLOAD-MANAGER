@@ -2,7 +2,26 @@
 
 All notable releases, new features, security enhancements, and bug fixes for **MHS Download Manager** (`mdm.exe` + Manifest V3 Browser Extension + Windows x64 Setup Wizard) are documented here in **reverse chronological order (newest first)**.
 
-> **Live GitHub Releases:** [All Releases (`v1.0.6` → `v1.0.0`)](https://github.com/sshihabb007/MHS-DOWNLOAD-MANAGER/releases)
+> **Live GitHub Releases:** [All Releases (`v1.0.7` → `v1.0.0`)](https://github.com/sshihabb007/MHS-DOWNLOAD-MANAGER/releases)
+
+---
+
+## [v1.0.7] — 2026-11-13
+
+### Highlights & New Features
+- **Rock-Solid Dark & Light Custom Window Chrome (`ShihabChromeForm`)**:
+  - Updated `ShihabChromeForm` non-client message handling (`WM_NCCALCSIZE`, `WM_NCPAINT`, `WM_NCACTIVATE`, `WM_SETTEXT`, `WM_SETICON`, `WM_DWMCOMPOSITIONCHANGED`, `WM_THEMECHANGED`, `WM_SETTINGCHANGE`, `WM_DPICHANGED`) to prevent Windows classic steel-blue caption bars and thick outer borders from bleeding through after focus changes, tray restore, or theme switches.
+  - Synchronized active/inactive border colors (`DWMWA_BORDER_COLOR` / `DWMWA_CAPTION_COLOR` / `DWMWA_TEXT_COLOR`) across `ShihabMainIdmWindow`, `ShihabDownloadProgressForm`, `MehediDownloadFileInfoForm`, and all modal/utility dialogs.
+  - Added working-area `WM_GETMINMAXINFO` clipping and `WM_WINDOWPOSCHANGED` / `SetBoundsCore` restore stabilization so chromeless `WS_THICKFRAME` windows never grow by `+14×14px` across repeated minimize/maximize/restore cycles.
+- **Automatic Desktop & Taskbar Icon Refresh Across Upgrades**:
+  - Updated `ShihabSetupWizard` (including `--shihab-update-mode`) and `ShihabAutoUpdater` (Portable in-place updates) to refresh Desktop `.lnk` shortcuts, Start Menu shortcuts, and matching pinned Taskbar shortcuts (`User Pinned\TaskBar\*.lnk`), explicitly clear icon resource location (`IconLocation = "<exe>,0"`), and broadcast `SHChangeNotify` (`SHCNE_UPDATEITEM`, `SHCNE_UPDATEDIR`, `SHCNE_ASSOCCHANGED`) + `ie4uinit.exe -show`.
+  - Fixed `ShihabThemePalette.CreateShihabAppIcon()` to return cloned `Icon` instances and explicitly apply `SM_CXSMICON` (`WM_SETICON` `ICON_SMALL`) + `SM_CXICON` (`WM_SETICON` `ICON_BIG`) window HICONs across forms so dialogs cannot dispose a shared process icon.
+
+### Bug Fixes
+- Fixed classic Windows caption `[□] [×] [?]` and mismatched thick outer border appearing over the custom dark UI after updates, deactivation (`WM_NCACTIVATE`), or window restore (`SC_RESTORE`).
+- Fixed `+14×14px` cumulative window growth caused by `Form.RestoreWindowBoundsIfNecessary` re-adding `WS_THICKFRAME` insets on restore.
+- Fixed stale Desktop and Taskbar icons remaining cached from earlier versions (`v1.0.5` -> `v1.0.6`) after silent or GUI upgrades.
+- Fixed shared `Icon` disposal bug when closing `ShihabAutoUpdateDialog` that could revert secondary window/taskbar icons.
 
 ---
 

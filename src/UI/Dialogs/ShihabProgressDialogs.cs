@@ -160,8 +160,9 @@ namespace ShihabMehediIDM
             BackColor = ShihabThemePalette.GetMehediWindowBg(mehediDark);
             ForeColor = ShihabThemePalette.GetShihabPrimaryText(mehediDark);
             Font = ShihabThemePalette.UiRegular9Font;
+            Color progressBorder = ShihabThemePalette.GetShihabBorder(mehediDark);
+            ApplyShihabChromeTheme(mehediDark, progressBorder);
             ShihabThemePalette.ApplyMehediNativeDarkFrame(this, mehediDark);
-            ApplyShihabChromeTheme(mehediDark, mehediDark ? Color.FromArgb(46, 52, 66) : Color.FromArgb(182, 193, 208));
             Icon = ShihabThemePalette.CreateShihabAppIcon();
 
             _shihabTitleBar = new ShihabChromeTitleBar(

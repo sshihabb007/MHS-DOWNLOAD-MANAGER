@@ -175,7 +175,7 @@ namespace ShihabMehediIDM
             {
                 MessageBox.Show(
                     this,
-                    "MHS Download Manager 1.0.6 Configuration\nDeveloper: Mehedi Hasan Shihab (https://sshihabb007.github.io/)\n\n" +
+                    "MHS Download Manager 1.0.7 Configuration\nDeveloper: Mehedi Hasan Shihab (https://sshihabb007.github.io/)\n\n" +
                     "• General: Browser integration, startup launch, shortcut keys & web player panels\n" +
                     "• File types: Auto-captured extensions (wildcards like R0* supported), site & URL exclusions\n" +
                     "• Save to: Category folders, extensions, server creation/modification dates & temp directory\n" +

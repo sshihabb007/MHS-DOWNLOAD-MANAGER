@@ -18,13 +18,13 @@ using System.Windows.Forms;
 using Microsoft.Win32;
 using ShihabMehediShared;
 
-[assembly: AssemblyTitle("MHS Download Manager 1.0.6 Setup (Mehedi Hasan Shihab)")]
-[assembly: AssemblyDescription("Official Windows x64 Installer & Uninstaller for MHS Download Manager 1.0.6 (Mehedi Hasan Shihab)")]
+[assembly: AssemblyTitle("MHS Download Manager 1.0.7 Setup (Mehedi Hasan Shihab)")]
+[assembly: AssemblyDescription("Official Windows x64 Installer & Uninstaller for MHS Download Manager 1.0.7 (Mehedi Hasan Shihab)")]
 [assembly: AssemblyCompany("Mehedi Hasan Shihab")]
 [assembly: AssemblyProduct("MHS Download Manager Setup")]
 [assembly: AssemblyCopyright("Copyright (c) 2026 Mehedi Hasan Shihab")]
-[assembly: AssemblyVersion("1.0.6.0")]
-[assembly: AssemblyFileVersion("1.0.6.0")]
+[assembly: AssemblyVersion("1.0.7.0")]
+[assembly: AssemblyFileVersion("1.0.7.0")]
 
 namespace ShihabMehediInstaller
 {
@@ -59,8 +59,8 @@ namespace ShihabMehediInstaller
 
     public static class ShihabSetupTheme
     {
-        public const string ShihabProductTitle = "MHS Download Manager 1.0.6 (Mehedi Hasan Shihab)";
-        public const string MehediVersionText = "1.0.6";
+        public const string ShihabProductTitle = "MHS Download Manager 1.0.7 (Mehedi Hasan Shihab)";
+        public const string MehediVersionText = "1.0.7";
         public const string ShihabUninstallRegKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\MHSDownloadManager";
         public const string MehediRunRegKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
         public const string ShihabRunValueName = "MHSDownloadManager";
@@ -68,8 +68,68 @@ namespace ShihabMehediInstaller
         [DllImport("dwmapi.dll", EntryPoint = "DwmSetWindowAttribute")]
         private static extern int SetMehediDwmAttribute(IntPtr shihabHwnd, int mehediAttr, ref int shihabValue, int mehediSize);
 
+        [DllImport("user32.dll")]
+        private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+        private static extern void SHChangeNotify(int wEventId, uint uFlags, string dwItem1, string dwItem2);
+
         private static Icon _shihabCachedIcon;
         private static Bitmap _mehediCachedLogo;
+
+        public static void RefreshWindowsShellIconCache(string[] updatedFilePaths, string[] updatedDirPaths)
+        {
+            const int SHCNE_UPDATEDIR = 0x00001000;
+            const int SHCNE_UPDATEITEM = 0x00002000;
+            const int SHCNE_ASSOCCHANGED = 0x08000000;
+            const uint SHCNF_IDLIST = 0x0000u;
+            const uint SHCNF_PATHW = 0x0005u;
+            const uint SHCNF_FLUSH = 0x1000u;
+
+            try
+            {
+                if (updatedFilePaths != null)
+                {
+                    for (int i = 0; i < updatedFilePaths.Length; i++)
+                    {
+                        string fp = updatedFilePaths[i];
+                        if (!string.IsNullOrWhiteSpace(fp))
+                        {
+                            SHChangeNotify(SHCNE_UPDATEITEM, SHCNF_PATHW | SHCNF_FLUSH, fp, null);
+                        }
+                    }
+                }
+                if (updatedDirPaths != null)
+                {
+                    for (int i = 0; i < updatedDirPaths.Length; i++)
+                    {
+                        string dp = updatedDirPaths[i];
+                        if (!string.IsNullOrWhiteSpace(dp))
+                        {
+                            SHChangeNotify(SHCNE_UPDATEDIR, SHCNF_PATHW | SHCNF_FLUSH, dp, null);
+                        }
+                    }
+                }
+                SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST | SHCNF_FLUSH, null, null);
+            }
+            catch { }
+
+            try
+            {
+                string ie4uinit = ShihabProcessAndPathSafety.ResolveSystem32ToolPath("ie4uinit.exe");
+                if (!string.IsNullOrEmpty(ie4uinit) && File.Exists(ie4uinit))
+                {
+                    ProcessStartInfo psi = new ProcessStartInfo(ie4uinit, "-show");
+                    psi.UseShellExecute = false;
+                    psi.CreateNoWindow = true;
+                    using (Process p = Process.Start(psi))
+                    {
+                        if (p != null) p.WaitForExit(2500);
+                    }
+                }
+            }
+            catch { }
+        }
 
         public static Color GetMehediWindowBg() { return Color.FromArgb(18, 19, 25); }
         public static Color GetShihabCardBg() { return Color.FromArgb(24, 26, 36); }
@@ -92,10 +152,20 @@ namespace ShihabMehediInstaller
                     int mehediDark = 1;
                     SetMehediDwmAttribute(mehediForm.Handle, 20, ref mehediDark, sizeof(int));
                     SetMehediDwmAttribute(mehediForm.Handle, 19, ref mehediDark, sizeof(int));
+                    int roundPref = 2;
+                    SetMehediDwmAttribute(mehediForm.Handle, 33, ref roundPref, sizeof(int));
+                    int shihabBorderRef = (68 << 16) | (49 << 8) | 44;
+                    SetMehediDwmAttribute(mehediForm.Handle, 34, ref shihabBorderRef, sizeof(int));
                     int shihabCaptionRef = (25 << 16) | (19 << 8) | 18;
                     SetMehediDwmAttribute(mehediForm.Handle, 35, ref shihabCaptionRef, sizeof(int));
                     int mehediTextRef = (250 << 16) | (240 << 8) | 236;
                     SetMehediDwmAttribute(mehediForm.Handle, 36, ref mehediTextRef, sizeof(int));
+                    Icon ico = LoadShihabEmbeddedIcon();
+                    if (ico != null)
+                    {
+                        SendMessage(mehediForm.Handle, 0x0080, IntPtr.Zero, ico.Handle);
+                        SendMessage(mehediForm.Handle, 0x0080, new IntPtr(1), ico.Handle);
+                    }
                 }
                 catch { }
             };
@@ -517,22 +587,64 @@ namespace ShihabMehediInstaller
                 }
             }
 
+            List<string> updatedShellFiles = new List<string>();
+            List<string> updatedShellDirs = new List<string>();
+            updatedShellFiles.Add(shihabInstalledExe);
+            updatedShellFiles.Add(mehediUninstallerPath);
+            updatedShellDirs.Add(shihabInstallRoot);
+
             if (!mehediOpts.ShihabSkipRegistryAndShortcuts)
             {
                 BackupExistingShihabRegistryState();
 
-                if (mehediOpts.ShihabCreateDesktopShortcut && !mehediOpts.ShihabInPlaceUpdateMode)
+                string shihabDesktopDir = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+                string shihabDesktopLnk = Path.Combine(shihabDesktopDir, "MHS Download Manager.lnk");
+                bool refreshDesktopShortcut = !mehediOpts.ShihabInPlaceUpdateMode
+                    ? mehediOpts.ShihabCreateDesktopShortcut
+                    : File.Exists(shihabDesktopLnk);
+                if (refreshDesktopShortcut)
                 {
-                    mehediReport(82, "Creating Desktop shortcut...");
-                    string shihabDesktopDir = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+                    mehediReport(82, mehediOpts.ShihabInPlaceUpdateMode ? "Refreshing Desktop shortcut icon..." : "Creating Desktop shortcut...");
+                    if (mehediOpts.ShihabInPlaceUpdateMode)
+                    {
+                        try { if (File.Exists(shihabDesktopLnk)) File.Delete(shihabDesktopLnk); } catch { }
+                    }
                     CreateShihabShellShortcut(
-                        Path.Combine(shihabDesktopDir, "MHS Download Manager.lnk"),
+                        shihabDesktopLnk,
                         shihabInstalledExe,
                         "",
                         shihabInstallRoot,
                         ShihabSetupTheme.ShihabProductTitle,
                         shihabInstalledExe + ",0");
+                    updatedShellFiles.Add(shihabDesktopLnk);
+                    updatedShellDirs.Add(shihabDesktopDir);
                 }
+
+                // Also refresh an existing OneDrive Desktop shortcut if present and targeting this exe
+                try
+                {
+                    string userProfileDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                    string oneDriveDesktopLnk = Path.Combine(Path.Combine(userProfileDir, "OneDrive\\Desktop"), "MHS Download Manager.lnk");
+                    if (!string.Equals(oneDriveDesktopLnk, shihabDesktopLnk, StringComparison.OrdinalIgnoreCase) &&
+                        File.Exists(oneDriveDesktopLnk))
+                    {
+                        string existingTarget = TryGetShortcutTargetPath(oneDriveDesktopLnk);
+                        if (string.Equals(existingTarget, shihabInstalledExe, StringComparison.OrdinalIgnoreCase))
+                        {
+                            try { File.Delete(oneDriveDesktopLnk); } catch { }
+                            CreateShihabShellShortcut(
+                                oneDriveDesktopLnk,
+                                shihabInstalledExe,
+                                "",
+                                shihabInstallRoot,
+                                ShihabSetupTheme.ShihabProductTitle,
+                                shihabInstalledExe + ",0");
+                            updatedShellFiles.Add(oneDriveDesktopLnk);
+                            updatedShellDirs.Add(Path.GetDirectoryName(oneDriveDesktopLnk));
+                        }
+                    }
+                }
+                catch { }
 
                 if (mehediOpts.MehediCreateStartMenuShortcuts)
                 {
@@ -542,8 +654,19 @@ namespace ShihabMehediInstaller
                         "MHS Download Manager");
                     Directory.CreateDirectory(mehediStartPrograms);
 
+                    string startAppLnk = Path.Combine(mehediStartPrograms, "MHS Download Manager.lnk");
+                    string startExtLnk = Path.Combine(mehediStartPrograms, "MHS Browser Extension Folder.lnk");
+                    string startUninstLnk = Path.Combine(mehediStartPrograms, "Uninstall MHS Download Manager.lnk");
+
+                    if (mehediOpts.ShihabInPlaceUpdateMode)
+                    {
+                        try { if (File.Exists(startAppLnk)) File.Delete(startAppLnk); } catch { }
+                        try { if (File.Exists(startExtLnk)) File.Delete(startExtLnk); } catch { }
+                        try { if (File.Exists(startUninstLnk)) File.Delete(startUninstLnk); } catch { }
+                    }
+
                     CreateShihabShellShortcut(
-                        Path.Combine(mehediStartPrograms, "MHS Download Manager.lnk"),
+                        startAppLnk,
                         shihabInstalledExe,
                         "",
                         shihabInstallRoot,
@@ -551,7 +674,7 @@ namespace ShihabMehediInstaller
                         shihabInstalledExe + ",0");
 
                     CreateShihabShellShortcut(
-                        Path.Combine(mehediStartPrograms, "MHS Browser Extension Folder.lnk"),
+                        startExtLnk,
                         ShihabProcessAndPathSafety.ResolveSystem32ToolPath("explorer.exe"),
                         ShihabProcessAndPathSafety.QuoteWindowsArgument(mehediExtensionDir),
                         mehediExtensionDir,
@@ -559,13 +682,21 @@ namespace ShihabMehediInstaller
                         shihabInstalledExe + ",0");
 
                     CreateShihabShellShortcut(
-                        Path.Combine(mehediStartPrograms, "Uninstall MHS Download Manager.lnk"),
+                        startUninstLnk,
                         mehediUninstallerPath,
                         "--shihab-uninstall",
                         shihabInstallRoot,
                         "Uninstall MHS Download Manager",
                         mehediUninstallerPath + ",0");
+
+                    updatedShellFiles.Add(startAppLnk);
+                    updatedShellFiles.Add(startExtLnk);
+                    updatedShellFiles.Add(startUninstLnk);
+                    updatedShellDirs.Add(mehediStartPrograms);
                 }
+
+                mehediReport(89, "Refreshing pinned Taskbar shortcut icons (if pinned)...");
+                RefreshPinnedTaskbarShortcuts(shihabInstalledExe, updatedShellFiles, updatedShellDirs);
 
                 if (mehediOpts.ShihabLaunchOnStartup && !mehediOpts.ShihabInPlaceUpdateMode)
                 {
@@ -591,6 +722,9 @@ namespace ShihabMehediInstaller
 
                 mehediReport(98, "Registering Windows Installed Apps entry...");
                 RegisterMehediWindowsUninstaller(shihabInstallRoot, shihabInstalledExe, mehediUninstallerPath, mehediTotalExtractedBytes);
+
+                mehediReport(99, "Refreshing Windows Desktop & Taskbar icon cache...");
+                ShihabSetupTheme.RefreshWindowsShellIconCache(updatedShellFiles.ToArray(), updatedShellDirs.ToArray());
             }
 
             mehediReport(100, "Installation complete! Browser extension ready at: " + mehediExtensionDir);
@@ -757,6 +891,66 @@ namespace ShihabMehediInstaller
             catch { }
         }
 
+        public static string TryGetShortcutTargetPath(string lnkPath)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(lnkPath) || !File.Exists(lnkPath)) return "";
+                Type shellType = Type.GetTypeFromProgID("WScript.Shell");
+                if (shellType == null) return "";
+                object shell = Activator.CreateInstance(shellType);
+                object shortcut = shellType.InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, new object[] { lnkPath });
+                object targetObj = shortcut.GetType().InvokeMember("TargetPath", BindingFlags.GetProperty, null, shortcut, null);
+                string raw = targetObj != null ? targetObj.ToString().Trim() : "";
+                return string.IsNullOrEmpty(raw) ? "" : Path.GetFullPath(raw);
+            }
+            catch
+            {
+                return "";
+            }
+        }
+
+        private static void RefreshPinnedTaskbarShortcuts(
+            string targetExePath,
+            List<string> updatedShellFiles,
+            List<string> updatedShellDirs)
+        {
+            try
+            {
+                string taskBarDir = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    @"Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar");
+                if (!Directory.Exists(taskBarDir)) return;
+
+                string normExe = Path.GetFullPath(targetExePath);
+                string[] lnks = Directory.GetFiles(taskBarDir, "*.lnk", SearchOption.TopDirectoryOnly);
+                bool touchedDir = false;
+                for (int i = 0; i < lnks.Length; i++)
+                {
+                    string lnk = lnks[i];
+                    string existingTarget = TryGetShortcutTargetPath(lnk);
+                    if (string.Equals(existingTarget, normExe, StringComparison.OrdinalIgnoreCase))
+                    {
+                        CreateShihabShellShortcut(
+                            lnk,
+                            normExe,
+                            "",
+                            Path.GetDirectoryName(normExe),
+                            ShihabSetupTheme.ShihabProductTitle,
+                            normExe + ",0");
+                        try { File.SetLastWriteTimeUtc(lnk, DateTime.UtcNow); } catch { }
+                        if (updatedShellFiles != null) updatedShellFiles.Add(lnk);
+                        touchedDir = true;
+                    }
+                }
+                if (touchedDir && updatedShellDirs != null)
+                {
+                    updatedShellDirs.Add(taskBarDir);
+                }
+            }
+            catch { }
+        }
+
         public static void CreateShihabShellShortcut(
             string mehediLnkPath,
             string shihabTargetPath,
@@ -795,6 +989,7 @@ namespace ShihabMehediInstaller
                     shihabScType.InvokeMember("IconLocation", BindingFlags.SetProperty, null, mehediShortcut, new object[] { shihabIconLocation });
                 }
                 shihabScType.InvokeMember("Save", BindingFlags.InvokeMethod, null, mehediShortcut, null);
+                try { File.SetLastWriteTimeUtc(mehediLnkPath, DateTime.UtcNow); } catch { }
             }
             catch { }
         }
@@ -849,10 +1044,25 @@ namespace ShihabMehediInstaller
 
             if (!mehediSkipRegistryAndShortcuts)
             {
+                string deletedDesktopLnk = "";
                 try
                 {
-                    string shihabDesktopLnk = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "MHS Download Manager.lnk");
-                    if (File.Exists(shihabDesktopLnk)) File.Delete(shihabDesktopLnk);
+                    string shihabDesktopDir = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+                    string shihabDesktopLnk = Path.Combine(shihabDesktopDir, "MHS Download Manager.lnk");
+                    if (File.Exists(shihabDesktopLnk))
+                    {
+                        File.Delete(shihabDesktopLnk);
+                        deletedDesktopLnk = shihabDesktopLnk;
+                    }
+                }
+                catch { }
+
+                try
+                {
+                    string shihabDesktopDir = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+                    ShihabSetupTheme.RefreshWindowsShellIconCache(
+                        string.IsNullOrEmpty(deletedDesktopLnk) ? null : new string[] { deletedDesktopLnk },
+                        new string[] { shihabDesktopDir });
                 }
                 catch { }
 
@@ -1069,14 +1279,14 @@ namespace ShihabMehediInstaller
             _mehediStepWelcome = new Panel { Bounds = shihabBodyBounds, BackColor = BackColor };
             Label shihabWelHead = new Label
             {
-                Text = "Welcome to MHS Download Manager 1.0.6 Setup",
+                Text = "Welcome to MHS Download Manager 1.0.7 Setup",
                 Location = new Point(22, 16),
                 AutoSize = true,
                 Font = new Font("Segoe UI Semibold", 11f)
             };
             Label mehediWelDesc = new Label
             {
-                Text = "This wizard will install MHS Download Manager 1.0.6 (Mehedi Hasan Shihab) on your computer,\n" +
+                Text = "This wizard will install MHS Download Manager 1.0.7 (Mehedi Hasan Shihab) on your computer,\n" +
                        "keeping the unpacked 'extension' folder inside your installation directory ready to load in Chrome, Brave, Edge, and Firefox.",
                 Location = new Point(22, 44),
                 Size = new Size(595, 42),
@@ -1098,7 +1308,8 @@ namespace ShihabMehediInstaller
                     "  • mdm.exe          — x64 Download Accelerator (1-128 Sparse Dynamic Segments)\r\n" +
                     "  • extension\\       — Ready-to-load Unpacked MV3 Extension (Chromium & Firefox)\r\n" +
                     "  • Uninstall.exe    — Clean Windows Uninstaller\r\n\r\n" +
-                    "Included v1.0.6 Capabilities:\r\n" +
+                    "Included v1.0.7 Capabilities:\r\n" +
+                    "  • Rock-Solid DWM Custom Dark/Light Chrome + Auto Desktop & Taskbar Icon Cache Refresh\r\n" +
                     "  • Modular C# Core + Zero-Duplicate Brave/Chrome/Edge/Firefox Popup Suppression\r\n" +
                     "  • Background Minimize Button (Top-Right Tray Action) & Glowing 3D App Branding\r\n" +
                     "  • Resilient Auto-Updater (REST + Web Fallback + Browser Popup) with SHA-256 Verify\r\n" +
@@ -1211,7 +1422,7 @@ namespace ShihabMehediInstaller
             _mehediStepProgress = new Panel { Bounds = shihabBodyBounds, BackColor = BackColor };
             Label shihabProgTitle = new Label
             {
-                Text = "Installing MHS Download Manager 1.0.6...",
+                Text = "Installing MHS Download Manager 1.0.7...",
                 Location = new Point(22, 16),
                 AutoSize = true,
                 Font = new Font("Segoe UI Semibold", 11f)
@@ -1304,7 +1515,7 @@ namespace ShihabMehediInstaller
 
             _shihabLaunchAppCheck = new CheckBox
             {
-                Text = "Launch MHS Download Manager 1.0.6 now",
+                Text = "Launch MHS Download Manager 1.0.7 now",
                 Location = new Point(24, 152),
                 AutoSize = true,
                 Checked = true,
