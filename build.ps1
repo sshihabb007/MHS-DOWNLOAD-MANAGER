@@ -2,7 +2,7 @@ param(
     [string]$OutDir = ''
 )
 $ErrorActionPreference = 'Stop'
-$shihabAppVersion = '1.0.5'
+$shihabAppVersion = '1.0.6'
 $shihabProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $mehediBinDir = if ([string]::IsNullOrWhiteSpace($OutDir)) { Join-Path $shihabProjectRoot 'bin' } else { $OutDir }
 $shihabObjDir = Join-Path $shihabProjectRoot 'obj'
@@ -20,20 +20,19 @@ if (-not (Test-Path $mehediIconIco) -or -not (Test-Path $shihabIconPng) -or -not
 # 1. Compile x64 mdm.exe (MHS Download Manager) using .NET Framework 4.8 csc.exe with embedded Win32 & managed icons
 $shihabCsc = 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 $mehediOutExe = Join-Path $mehediBinDir 'mdm.exe'
+$shihabSrcRoot = Join-Path $shihabProjectRoot 'src'
+$shihabInstallerDir = Join-Path $shihabSrcRoot 'installer'
 $shihabSources = @(
-    (Join-Path $shihabProjectRoot 'src\ShihabDownloadModels.cs'),
-    (Join-Path $shihabProjectRoot 'src\ShihabAutoUpdaterAndQr.cs'),
-    (Join-Path $shihabProjectRoot 'src\ShihabAdvancedSubsystems.cs'),
-    (Join-Path $shihabProjectRoot 'src\MehediMediaMuxer.cs'),
-    (Join-Path $shihabProjectRoot 'src\MehediDynamicSegmentEngine.cs'),
-    (Join-Path $shihabProjectRoot 'src\MehediBrowserBridgeAndNativeHost.cs'),
-    (Join-Path $shihabProjectRoot 'src\MehediDialogsAndProgress.cs'),
-    (Join-Path $shihabProjectRoot 'src\ShihabToolsWindows.cs'),
-    (Join-Path $shihabProjectRoot 'src\ShihabMainIdmWindow.cs'),
-    (Join-Path $shihabProjectRoot 'src\MehediProgramEntry.cs')
+    Get-ChildItem -Path $shihabSrcRoot -Filter '*.cs' -Recurse -File |
+    Where-Object { -not $_.FullName.StartsWith($shihabInstallerDir + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase) } |
+    Sort-Object FullName |
+    ForEach-Object { $_.FullName }
 )
+if ($shihabSources.Count -lt 10) {
+    throw "Expected modular C# sources under $shihabSrcRoot, found $($shihabSources.Count)"
+}
 
-& $shihabCsc /nologo /target:winexe /platform:x64 /optimize+ `
+& $shihabCsc /nologo /target:winexe /platform:x64 /optimize+ /highentropyva+ /langversion:5 `
     /r:System.dll `
     /r:System.Core.dll `
     /r:System.Drawing.dll `
@@ -101,7 +100,14 @@ try {
         'extension/mehedi_page_hook.js',
         'extension/shihab_background.js',
         'extension/shihab_popup.html',
+        'extension/shihab_popup.css',
         'extension/mehedi_popup.js',
+        'extension/shihab_captured.html',
+        'extension/mehedi_captured.js',
+        'extension/images/shihab_logo16.png',
+        'extension/images/shihab_logo24.png',
+        'extension/images/shihab_logo32.png',
+        'extension/images/shihab_logo48.png',
         'extension/images/shihab_logo128.png',
         'extension/images/author_shihab.jpg'
     )) {
@@ -113,12 +119,13 @@ try {
     $mehediPayloadInspect.Dispose()
 }
 
-# 3. Compile x64 Setup Wizard (MHS-Download-Manager-Setup-1.0.5-x64.exe)
+# 3. Compile x64 Setup Wizard (MHS-Download-Manager-Setup-1.0.6-x64.exe)
 Get-ChildItem -Path $mehediBinDir -Filter 'MHS-Download-Manager-Setup-*-x64.exe' -ErrorAction SilentlyContinue | Remove-Item -Force
 $mehediSetupOutExe = Join-Path $mehediBinDir "MHS-Download-Manager-Setup-$shihabAppVersion-x64.exe"
+$shihabSharedSafetySrc = Join-Path $shihabProjectRoot 'src\Shared\ShihabProcessAndPathSafety.cs'
 $shihabInstallerSrc = Join-Path $shihabProjectRoot 'src\installer\ShihabSetupWizard.cs'
 
-& $shihabCsc /nologo /target:winexe /platform:x64 /optimize+ `
+& $shihabCsc /nologo /target:winexe /platform:x64 /optimize+ /highentropyva+ /langversion:5 `
     /r:System.dll `
     /r:System.Core.dll `
     /r:System.Drawing.dll `
@@ -130,6 +137,7 @@ $shihabInstallerSrc = Join-Path $shihabProjectRoot 'src\installer\ShihabSetupWiz
     "/resource:$shihabIconPng,ShihabMehediInstaller.mdm_icon.png" `
     "/resource:$shihabPayloadZip,ShihabMehediInstaller.payload.zip" `
     "/out:$mehediSetupOutExe" `
+    $shihabSharedSafetySrc `
     $shihabInstallerSrc
 
 if ($LASTEXITCODE -ne 0) {

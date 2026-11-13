@@ -62,35 +62,48 @@ document.addEventListener("DOMContentLoaded", async () => {
     return mehediAll.slice(0, 6);
   }
 
+  function mehediRenderUpdateBanner(shihabRes) {
+    if (!shihabUpdateBanner) return;
+    const bridgeUpd = shihabRes && shihabRes.shihabBridgeInfo && shihabRes.shihabBridgeInfo.updateAvailable
+      ? shihabRes.shihabBridgeInfo
+      : null;
+    const webUpd = shihabRes && shihabRes.shihabUpdateNotice && shihabRes.shihabUpdateNotice.updateAvailable
+      ? shihabRes.shihabUpdateNotice
+      : null;
+    const picked = bridgeUpd || webUpd;
+    if (picked) {
+      const latestVer = picked.latestVersion || "";
+      mehediLatestReleaseUrl = picked.latestHtmlUrl || "https://github.com/sshihabb007/MHS-DOWNLOAD-MANAGER/releases";
+      shihabUpdateBannerText.textContent = latestVer
+        ? `New GitHub Release Ready: v${latestVer}`
+        : "New GitHub Release Available!";
+      shihabUpdateBanner.style.display = "flex";
+    } else {
+      mehediLatestReleaseUrl = "";
+      shihabUpdateBanner.style.display = "none";
+    }
+  }
+
   async function mehediRefreshPopupState() {
     const shihabRes = await chrome.runtime.sendMessage({
       shihabCmd: "shihab_query_tab_streams",
       mehediTabId: shihabActiveTabId
     });
+    mehediRenderUpdateBanner(shihabRes);
+
     if (!shihabRes || !shihabRes.mehediOnline) {
       shihabDot.classList.remove("online");
-      mehediSub.textContent = "Offline — Launch mdm.exe v1.0.5";
+      mehediSub.textContent = "Offline — Launch mdm.exe v1.0.6";
       shihabToggleBtn.textContent = "Offline";
       return;
     }
 
-    const mehediBridgeVer = (shihabRes.shihabBridgeInfo && shihabRes.shihabBridgeInfo.version) || "1.0.5";
+    const mehediBridgeVer = (shihabRes.shihabBridgeInfo && shihabRes.shihabBridgeInfo.version) || "1.0.6";
     shihabDot.classList.add("online");
     mehediSub.textContent = shihabRes.shihabEnabled
       ? `Connected · mdm.exe v${mehediBridgeVer}`
       : "Integration Paused";
     shihabToggleBtn.textContent = shihabRes.shihabEnabled ? "Enabled" : "Paused";
-
-    if (shihabUpdateBanner && shihabRes.shihabBridgeInfo && shihabRes.shihabBridgeInfo.updateAvailable) {
-      const latestVer = shihabRes.shihabBridgeInfo.latestVersion || "";
-      mehediLatestReleaseUrl = shihabRes.shihabBridgeInfo.latestHtmlUrl || "";
-      shihabUpdateBannerText.textContent = latestVer
-        ? `New GitHub Release Ready: v${latestVer}`
-        : "New GitHub Release Available!";
-      shihabUpdateBanner.style.display = "flex";
-    } else if (shihabUpdateBanner) {
-      shihabUpdateBanner.style.display = "none";
-    }
 
     const mehediStreams = await mehediResolveIsolatedSelectedStreams(shihabRes.mehediStreams);
     mehediCountBadge.textContent = String(mehediStreams.length);
@@ -213,9 +226,15 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   if (shihabUpdateBannerBtn) {
     shihabUpdateBannerBtn.addEventListener("click", async () => {
-      await chrome.runtime.sendMessage({ shihabCmd: "shihab_show_desktop_app" });
-      if (mehediLatestReleaseUrl) {
-        chrome.tabs.create({ url: mehediLatestReleaseUrl }).catch(() => {});
+      try {
+        await chrome.runtime.sendMessage({
+          shihabCmd: "shihab_open_updater",
+          latestHtmlUrl: mehediLatestReleaseUrl || ""
+        });
+      } catch (_) {
+        if (mehediLatestReleaseUrl && /^https?:\/\//i.test(mehediLatestReleaseUrl)) {
+          chrome.tabs.create({ url: mehediLatestReleaseUrl }).catch(() => {});
+        }
       }
       window.close();
     });

@@ -49,7 +49,7 @@
 
   // Official MHS Download Manager 24x24 icon embedded inline so strict site CSP img-src never blocks it
   const SHIHAB_MHS_ICON_DATA_URI =
-    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAASlSURBVEhL7dNdTFNnGMBxsgWzmCzRC7JpQrZlH5HooobgGF8SUZiAVqBAgdID1BZpLaVQaCnQwylQSlsqLS20yIceikIRkWGR4nBi6gfDIARcRYbHAKOWxn24xGRu+iz1ou50N5rs0n/y5L16f8978/r5ve2NuwLv+k6k5/w/eqfjufa9nhfuzS1P3B/q3O6PTqy5v1A/dO/SrLhD6+9b96LzH/jeeaM2tP0pfx9/MR6gfzwe2PRo/DP18vgO5dJ4sNzxXWTD4rV96HSV753XywL+G41PKzd1POvcols//bFmFd+mIvBdigV8T+08HlU9jcdW3cIPVdgHqKLvz2UKRy15/IuWguPnLYKCXksF29wvZ+F4HcPwpS/9sg1tTyM29wFs7QEIbHL++rl62bld+ZMzWO5whstmnTHobefByhvOJPGEkya87EIEVld+4QUXn9PnKmWbXVXMLldTvnldSTfU+tov26T/LW7r6b8hULeuDGpcFu5WEdieurtYFHYHi636AUsst2MpZVdkdMGomlk0rObyBmSC/F6snIVjWF47Vs9oxbT0ZsyQrkLP0BqLcQpKIS3YonUnBjY9WgpSPijZ3foEQjWrEK1cgji5AyiyWUhHbwNSYYccgXUxv/DCYlnRMEh550FecBY0LBwMue3QkW2AM1laGM44ATaqHIYTykK8Cz7RrKV82rgyulNx/1Ro0xpEymZhPzoFCRXXIUV8FRjiq5BbdPHH45w+Gp/TRxOzzPM1bDPUI0bQ0JvBQGuEjlQFmJNkMHC4CkYSxDB2ULDDuyBI/SBtu2rJFFI7P7FXsUjCM4VjwC69DPm8wcniY2dxIdvcXZ3XflPF7PwXXv8S7z9cCbZDErDF8lescbwN3gU76+5RghX3aiOxmdUD2B0SniewAk9gBT7HMiVh4aaKo11tCkbrZDNiIr3cgw/Hi+Bmghiu7uOOeXFPoXVzYeE1s+h+9PbzxMobJPwY7zxIikdAxOpewHLbWjGGydiUqXWcRkzQTn31cg8+FieAuW+EcDOarSQtCEMdW2LQKdWRmjkSXsAbhLLCIZAU9NqkR7uOKxFTlzq75ZQ+o5HblaYa7U9VkPBrMVxY2M+D6fCcDNICT4kS+xkadoeEF3H6QMo9B9K8jhEFQ5+iR0zP2um6v9qp9dQeCmq9mFxDwqei8+FuZC7c+4r23w+XLLoyzZDYSbiYbQY0rxO0bDM00Jux1nTVjba0hltmirR6lCqHb+PLvPhkNBscUUxwhGY8mtlxYCMJTyqxBWQIx/5gltjIOLMT5IgRtIwWMGXqfulIVaT2JNVSLxypfnwpUULCZyJy4OcIBB6EpE6QcE9ZpZciuBXXobB4BEp5g1DF6YNathnUzE7QI0Y4maWDgWw9dCfJrg8kltvtyTUwcVAIkwf4MLuvABaimPAwLBtehCOwtpti8vX96CW2AE7h0Hgxb5AQsbsJlNlJyBEjocnSEYb0RuIktZ7Aj1QT/Ycr14fiReujsXxiIoZL3NrLImYiEMIRmkEsh6QSvwcnzz/eFf+1r+/NIrX4S6lS71hIQ/W3bHs18z4D26j+vt7bXqt/ALd76PrzDh/aAAAAAElFTkSuQmCC";
+    "data:image/png;base64,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";
 
   let shihabTabStreamsCache = [];
   let mehediShowFloatingBar = true;
@@ -286,16 +286,20 @@
       return;
     }
     if (shihabEvent.data.__shihabMehediTopPanelActive === true && window !== window.top) {
-      shihabTopFrameActiveUntilMs = Date.now() + 2200;
-      if (Date.now() >= shihabHoveredUntilMs && mehediShadowHost) {
-        mehediShadowHost.style.display = "none";
+      if (shihabEvent.source === window.top) {
+        shihabTopFrameActiveUntilMs = Date.now() + 2200;
+        if (Date.now() >= shihabHoveredUntilMs && mehediShadowHost && mehediShadowHost.style.display !== "none") {
+          mehediShadowHost.style.display = "none";
+        }
       }
       return;
     }
     if (shihabEvent.data.__shihabMehediSubframeVideoHovered === true && window === window.top) {
-      mehediSubframeHoveredUntilMs = Date.now() + 4500;
-      if (!mehediPointerInsideBar && !shihabDropdownOpen && mehediShadowHost) {
-        mehediShadowHost.style.display = "none";
+      if (shihabEvent.source && shihabEvent.source !== window) {
+        mehediSubframeHoveredUntilMs = Date.now() + 4500;
+        if (!mehediPointerInsideBar && !shihabDropdownOpen && mehediShadowHost && mehediShadowHost.style.display !== "none") {
+          mehediShadowHost.style.display = "none";
+        }
       }
       return;
     }
@@ -2168,7 +2172,35 @@
     return mehediEntries;
   }
 
+  let shihabRenderRafId = 0;
+  let mehediRenderCooldownTimerId = null;
+  let shihabLastRenderAtMs = 0;
+
+  function shihabScheduleFloatingPanelRender() {
+    if (mehediInstanceDisposed || shihabRenderRafId || mehediRenderCooldownTimerId) return;
+    const mehediElapsed = Date.now() - shihabLastRenderAtMs;
+    if (mehediElapsed < 65) {
+      mehediRenderCooldownTimerId = setTimeout(() => {
+        mehediRenderCooldownTimerId = null;
+        if (!mehediInstanceDisposed && !shihabRenderRafId) {
+          shihabRenderRafId = requestAnimationFrame(() => {
+            shihabRenderRafId = 0;
+            shihabLastRenderAtMs = Date.now();
+            shihabRenderFloatingIdmVideoPanel();
+          });
+        }
+      }, 65 - mehediElapsed);
+      return;
+    }
+    shihabRenderRafId = requestAnimationFrame(() => {
+      shihabRenderRafId = 0;
+      shihabLastRenderAtMs = Date.now();
+      shihabRenderFloatingIdmVideoPanel();
+    });
+  }
+
   function shihabRenderFloatingIdmVideoPanel() {
+    shihabLastRenderAtMs = Date.now();
     if (!shihabVerifyActiveSingletonOwnership()) return;
 
     if (location.href !== mehediLastObservedPageHref) {
@@ -2223,7 +2255,10 @@
 
     const shihabStreams = shihabCollectMediaFromDomAndSniffer(shihabTargetVideo);
     const mehediSnifferRows = shihabBuildStreamSnifferEntries(shihabStreams);
-    shihabRefs.mehediCountPill.textContent = String(mehediSnifferRows.length);
+    const shihabNextCountStr = String(mehediSnifferRows.length);
+    if (shihabRefs.mehediCountPill.textContent !== shihabNextCountStr) {
+      shihabRefs.mehediCountPill.textContent = shihabNextCountStr;
+    }
 
     shihabRefs.mehediBar.classList.toggle("mehedi-open", shihabDropdownOpen);
 
@@ -2486,8 +2521,11 @@
 
   // Execute Browser-Tab Relay Job inside the tab's authentic Origin/TLS context (eliminates 403 Forbidden!)
   async function mehediExecuteTabRelayJobInPageContext(shihabJob) {
-    const mehediJobId = shihabJob.jobId;
-    const shihabTargetUrl = shihabJob.url || "";
+    const mehediJobId = String((shihabJob && shihabJob.jobId) || "").trim();
+    const shihabTargetUrl = String((shihabJob && shihabJob.url) || "").trim();
+    if (!mehediJobId || !/^https?:\/\//i.test(shihabTargetUrl)) {
+      throw new Error("Blocked invalid relay job target");
+    }
     const mehediOmitCookies = Boolean(shihabJob.omitCookies);
     let shihabTotalBytes = Number(shihabJob.totalBytes || -1);
     const mehediIsGv = shihabTargetUrl.includes("googlevideo.com") || shihabTargetUrl.includes("/videoplayback");
@@ -2623,7 +2661,133 @@
     return shihabCollected;
   }
 
-  function mehediOnRuntimeMessage(shihabMsg, _mehediSender, shihabReply) {
+  let mehediUpdateToastHost = null;
+  let shihabUpdateToastTimerId = 0;
+
+  function shihabRemovePageUpdateToast() {
+    if (shihabUpdateToastTimerId) {
+      clearTimeout(shihabUpdateToastTimerId);
+      shihabUpdateToastTimerId = 0;
+    }
+    if (mehediUpdateToastHost) {
+      try { mehediUpdateToastHost.remove(); } catch (_) {}
+      mehediUpdateToastHost = null;
+    }
+  }
+
+  function shihabShowPageUpdateToast(notice) {
+    if (window !== window.top || mehediInstanceDisposed) return;
+    if (!notice || !notice.updateAvailable || notice.dismissed || !notice.latestVersion) return;
+    if (!document.documentElement) return;
+    if (mehediUpdateToastHost && mehediUpdateToastHost.isConnected) return;
+
+    const host = document.createElement("div");
+    host.id = "__shihab_mehedi_update_toast_host";
+    host.style.cssText = "position:fixed;right:18px;bottom:18px;z-index:2147483645;pointer-events:auto;";
+    const shadow = host.attachShadow({ mode: "closed" });
+
+    const style = document.createElement("style");
+    style.textContent = `
+      .card {
+        display: flex; align-items: center; gap: 10px;
+        background: rgba(15, 23, 42, 0.96); color: #f8fafc;
+        border: 1px solid rgba(124, 58, 237, 0.65); border-radius: 10px;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+        padding: 10px 12px; font-family: "Segoe UI", system-ui, sans-serif; font-size: 12.5px;
+        max-width: 340px; backdrop-filter: blur(8px);
+      }
+      .icon { width: 28px; height: 28px; flex-shrink: 0; border-radius: 6px; }
+      .meta { flex: 1; min-width: 0; line-height: 1.3; }
+      .title { font-weight: 600; color: #e2e8f0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .sub { font-size: 11px; color: #94a3b8; margin-top: 2px; }
+      .btn {
+        border: 0; border-radius: 6px; padding: 6px 10px; font-size: 11.5px; font-weight: 600;
+        cursor: pointer; background: linear-gradient(135deg, #2563eb, #7c3aed); color: #fff;
+        white-space: nowrap;
+      }
+      .btn:hover { filter: brightness(1.1); }
+      .close {
+        border: 0; background: transparent; color: #94a3b8; font-size: 15px; line-height: 1;
+        cursor: pointer; padding: 2px 5px; border-radius: 4px;
+      }
+      .close:hover { color: #fff; background: rgba(255, 255, 255, 0.08); }
+    `;
+
+    const card = document.createElement("div");
+    card.className = "card";
+    const img = document.createElement("img");
+    img.className = "icon";
+    img.src = SHIHAB_MHS_ICON_DATA_URI;
+    img.alt = "MHS";
+
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    const title = document.createElement("div");
+    title.className = "title";
+    title.textContent = `MHS Download Manager v${notice.latestVersion}`;
+    const sub = document.createElement("div");
+    sub.className = "sub";
+    sub.textContent = "New update ready — click Update to install";
+    meta.appendChild(title);
+    meta.appendChild(sub);
+
+    const updBtn = document.createElement("button");
+    updBtn.type = "button";
+    updBtn.className = "btn";
+    updBtn.textContent = "Update";
+    updBtn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      try {
+        chrome.runtime.sendMessage({
+          shihabCmd: "shihab_open_updater",
+          latestHtmlUrl: notice.latestHtmlUrl || ""
+        }).catch(() => {});
+        chrome.runtime.sendMessage({
+          shihabCmd: "shihab_dismiss_update_notice",
+          version: notice.latestVersion
+        }).catch(() => {});
+      } catch (_) {}
+      shihabRemovePageUpdateToast();
+    });
+
+    const closeBtn = document.createElement("button");
+    closeBtn.type = "button";
+    closeBtn.className = "close";
+    closeBtn.textContent = "×";
+    closeBtn.title = "Dismiss update notice";
+    closeBtn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      try {
+        chrome.runtime.sendMessage({
+          shihabCmd: "shihab_dismiss_update_notice",
+          version: notice.latestVersion
+        }).catch(() => {});
+      } catch (_) {}
+      shihabRemovePageUpdateToast();
+    });
+
+    card.appendChild(img);
+    card.appendChild(meta);
+    card.appendChild(updBtn);
+    card.appendChild(closeBtn);
+    shadow.appendChild(style);
+    shadow.appendChild(card);
+
+    (document.body || document.documentElement).appendChild(host);
+    mehediUpdateToastHost = host;
+  }
+
+  function mehediOnRuntimeMessage(shihabMsg, mehediSender, shihabReply) {
+    if (mehediSender && mehediSender.id && chrome.runtime && chrome.runtime.id && mehediSender.id !== chrome.runtime.id) {
+      return false;
+    }
+    if (shihabMsg && shihabMsg.shihabCmd === "shihab_update_available") {
+      if (window === window.top && shihabMsg.notice) {
+        shihabShowPageUpdateToast(shihabMsg.notice);
+      }
+      shihabReply({ ok: true });
+      return false;
+    }
     if (shihabMsg && shihabMsg.shihabCmd === "mehedi_streams_updated") {
       shihabTabStreamsCache = Array.isArray(shihabMsg.mehediStreams) ? shihabMsg.mehediStreams : [];
       if (typeof shihabMsg.shihabShowPanel === "boolean") {
@@ -2760,6 +2924,7 @@
     }
   }
 
+    let mehediLastPointerDeepCheckMs = 0;
   function mehediTrackPointerOverVideo(shihabPointerEv) {
     if (mehediInstanceDisposed) return;
     const mehediPath = typeof shihabPointerEv.composedPath === "function" ? shihabPointerEv.composedPath() : [shihabPointerEv.target];
@@ -2786,10 +2951,15 @@
           shihabDropdownOpen = false;
         }
         shihabRefreshBackgroundStreamsThrottled(false);
-        shihabRenderFloatingIdmVideoPanel();
+        shihabScheduleFloatingPanelRender();
         return;
       }
     }
+    const mehediNowMs = Date.now();
+    if (shihabPointerEv.type === "pointermove" && (mehediNowMs - mehediLastPointerDeepCheckMs) < 90) {
+      return;
+    }
+    mehediLastPointerDeepCheckMs = mehediNowMs;
     const mehediX = shihabPointerEv.clientX;
     const shihabY = shihabPointerEv.clientY;
     if (typeof mehediX === "number" && typeof shihabY === "number") {
@@ -2802,14 +2972,14 @@
           const mehediSwitched = mehediHoveredVideoEl !== shihabVid;
           mehediHoveredVideoEl = shihabVid;
           mehediLastSelectedVideoEl = shihabVid;
-          shihabHoveredUntilMs = Date.now() + 6000;
+          shihabHoveredUntilMs = mehediNowMs + 6000;
           mehediNotifyTopIfSubframeHovered();
           mehediEnsureVideoUidAndInspect(shihabVid, false);
           if (mehediSwitched && !mehediLockedDropdownVideoEl) {
             shihabDropdownOpen = false;
           }
           shihabRefreshBackgroundStreamsThrottled(false);
-          shihabRenderFloatingIdmVideoPanel();
+          shihabScheduleFloatingPanelRender();
           return;
         }
       }
@@ -2824,7 +2994,7 @@
         mehediLastSelectedVideoEl = shihabEv.target;
       }
       shihabRefreshBackgroundStreamsThrottled(false);
-      shihabRenderFloatingIdmVideoPanel();
+      shihabScheduleFloatingPanelRender();
     }
   }
 
@@ -2869,6 +3039,14 @@
     }
     mehediInstanceDisposed = true;
     mehediPointerInsideBar = false;
+    if (shihabRenderRafId) {
+      try { cancelAnimationFrame(shihabRenderRafId); } catch (_) {}
+      shihabRenderRafId = 0;
+    }
+    if (mehediRenderCooldownTimerId) {
+      clearTimeout(mehediRenderCooldownTimerId);
+      mehediRenderCooldownTimerId = null;
+    }
     if (mehediPeriodicTimerId) {
       clearInterval(mehediPeriodicTimerId);
       mehediPeriodicTimerId = null;
@@ -2890,9 +3068,9 @@
     window.removeEventListener("keydown", mehediCloseDropdownOnOutsideEvent, true);
     window.removeEventListener("pointerover", mehediTrackPointerOverVideo, { capture: true });
     window.removeEventListener("pointermove", mehediTrackPointerOverVideo, { capture: true });
-    window.removeEventListener("scroll", shihabRenderFloatingIdmVideoPanel, { capture: true });
-    window.removeEventListener("resize", shihabRenderFloatingIdmVideoPanel);
-    document.removeEventListener("fullscreenchange", shihabRenderFloatingIdmVideoPanel);
+    window.removeEventListener("scroll", shihabScheduleFloatingPanelRender, { capture: true });
+    window.removeEventListener("resize", shihabScheduleFloatingPanelRender);
+    document.removeEventListener("fullscreenchange", shihabScheduleFloatingPanelRender);
     for (const mehediMediaEvt of ["play", "playing", "loadedmetadata", "loadeddata", "canplay"]) {
       document.removeEventListener(mehediMediaEvt, mehediMediaLifecycleListener, true);
     }
@@ -2905,6 +3083,7 @@
       try { mehediShadowHost.remove(); } catch (_) {}
       mehediShadowHost = null;
     }
+    shihabRemovePageUpdateToast();
     shihabRefs = null;
   }
 
@@ -2934,21 +3113,38 @@
     }
 
     shihabRefreshBackgroundStreamsThrottled(true).then(() => {
-      shihabRenderFloatingIdmVideoPanel();
+      shihabScheduleFloatingPanelRender();
     });
 
     shihabDomObserver = new MutationObserver((mehediRecords) => {
       if (mehediInstanceDisposed) return;
       if (
-        mehediShadowHost &&
         Array.isArray(mehediRecords) &&
         mehediRecords.length > 0 &&
-        mehediRecords.every((shihabRec) => shihabRec.target === mehediShadowHost || mehediShadowHost.contains(shihabRec.target))
+        mehediRecords.every((shihabRec) =>
+          (mehediShadowHost && (shihabRec.target === mehediShadowHost || mehediShadowHost.contains(shihabRec.target))) ||
+          (mehediUpdateToastHost && (shihabRec.target === mehediUpdateToastHost || mehediUpdateToastHost.contains(shihabRec.target)))
+        )
       ) {
         return;
       }
-      shihabRenderFloatingIdmVideoPanel();
+      shihabScheduleFloatingPanelRender();
     });
+
+    if (window === window.top) {
+      shihabUpdateToastTimerId = setTimeout(() => {
+        if (mehediInstanceDisposed) return;
+        try {
+          chrome.runtime.sendMessage({ shihabCmd: "shihab_get_update_notice" })
+            .then((res) => {
+              if (res && res.ok && res.notice) {
+                shihabShowPageUpdateToast(res.notice);
+              }
+            })
+            .catch(() => {});
+        } catch (_) {}
+      }, 2200);
+    }
     if (document.documentElement) {
       shihabDomObserver.observe(document.documentElement, {
         childList: true,
@@ -2966,14 +3162,14 @@
     window.addEventListener("keydown", mehediCloseDropdownOnOutsideEvent, { capture: true, passive: true });
     window.addEventListener("pointerover", mehediTrackPointerOverVideo, { capture: true, passive: true });
     window.addEventListener("pointermove", mehediTrackPointerOverVideo, { capture: true, passive: true });
-    window.addEventListener("scroll", shihabRenderFloatingIdmVideoPanel, { capture: true, passive: true });
-    window.addEventListener("resize", shihabRenderFloatingIdmVideoPanel, { passive: true });
-    document.addEventListener("fullscreenchange", shihabRenderFloatingIdmVideoPanel, { passive: true });
+    window.addEventListener("scroll", shihabScheduleFloatingPanelRender, { capture: true, passive: true });
+    window.addEventListener("resize", shihabScheduleFloatingPanelRender, { passive: true });
+    document.addEventListener("fullscreenchange", shihabScheduleFloatingPanelRender, { passive: true });
 
     mehediPeriodicTimerId = setInterval(() => {
       if (!shihabVerifyActiveSingletonOwnership()) return;
       if (!document.hidden) {
-        shihabRenderFloatingIdmVideoPanel();
+        shihabScheduleFloatingPanelRender();
       }
     }, 900);
   }

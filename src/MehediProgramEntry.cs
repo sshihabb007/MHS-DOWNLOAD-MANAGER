@@ -7,14 +7,14 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
-[assembly: AssemblyTitle("MHS Download Manager 1.0.5 (Mehedi Hasan Shihab)")]
-[assembly: AssemblyDescription("MHS Download Manager 1.0.5 (Mehedi Hasan Shihab) — Multi-Segment Download Accelerator & Browser Video Suite")]
+[assembly: AssemblyTitle("MHS Download Manager 1.0.6 (Mehedi Hasan Shihab)")]
+[assembly: AssemblyDescription("MHS Download Manager 1.0.6 (Mehedi Hasan Shihab) — Multi-Segment Download Accelerator & Browser Video Suite")]
 [assembly: AssemblyCompany("Mehedi Hasan Shihab (sshihabb007)")]
-[assembly: AssemblyProduct("MHS Download Manager 1.0.5 (Mehedi Hasan Shihab)")]
+[assembly: AssemblyProduct("MHS Download Manager 1.0.6 (Mehedi Hasan Shihab)")]
 [assembly: AssemblyCopyright("Copyright © Mehedi Hasan Shihab — https://sshihabb007.github.io/")]
-[assembly: AssemblyVersion("1.0.5.0")]
-[assembly: AssemblyFileVersion("1.0.5.0")]
-[assembly: AssemblyInformationalVersion("1.0.5")]
+[assembly: AssemblyVersion("1.0.6.0")]
+[assembly: AssemblyFileVersion("1.0.6.0")]
+[assembly: AssemblyInformationalVersion("1.0.6")]
 
 namespace ShihabMehediIDM
 {
@@ -160,84 +160,105 @@ namespace ShihabMehediIDM
                         mehediBridge.StartShihabBridge();
                         shihabEngine.StartStartupQueues();
 
-                        ShihabRemoteControlServer remoteServer = new ShihabRemoteControlServer(
+                        using (ShihabRemoteControlServer remoteServer = new ShihabRemoteControlServer(
                             shihabStore,
                             mehediConfig,
-                            shihabEngine);
-                        if (mehediConfig.ShihabRemoteWebEnabled) remoteServer.Start();
-
-                        System.Windows.Forms.Timer tickTimer = new System.Windows.Forms.Timer();
-                        tickTimer.Interval = 5000;
-                        int rssTickCounter = 0;
-                        bool rssPolling = false;
-                        tickTimer.Tick += delegate
+                            shihabEngine))
+                        using (System.Windows.Forms.Timer tickTimer = new System.Windows.Forms.Timer())
                         {
-                            shihabEngine.TickMehediQueuesAndScheduler();
-                            rssTickCounter++;
-                            if (rssTickCounter >= 12 && !rssPolling)
+                            if (mehediConfig.ShihabRemoteWebEnabled) remoteServer.Start();
+
+                            tickTimer.Interval = 5000;
+                            int rssTickCounter = 0;
+                            int rssPollingFlag = 0;
+                            int updTickCounter = 4319;
+                            int updPollingFlag = 0;
+                            tickTimer.Tick += delegate
                             {
-                                rssTickCounter = 0;
-                                rssPolling = true;
-                                Task.Run(delegate
+                                shihabEngine.TickMehediQueuesAndScheduler();
+                                updTickCounter++;
+                                if (mehediConfig.ShihabAutoCheckUpdates &&
+                                    updTickCounter >= 4320 &&
+                                    Interlocked.CompareExchange(ref updPollingFlag, 1, 0) == 0)
                                 {
-                                    try
+                                    updTickCounter = 0;
+                                    Task.Run(delegate
                                     {
-                                        bool dirty = ShihabRssFeedManager.PollDueFeedsInBackground(
-                                            mehediConfig,
-                                            delegate(ShihabRssFeedConfig sub, ShihabRssEntryItem entry)
-                                            {
-                                                string fName = ShihabFormatHelpers.SanitizeShihabFileName(
-                                                    string.IsNullOrWhiteSpace(entry.Title) ? ShihabFormatHelpers.ExtractMehediFileNameFromUrl(entry.DownloadUrl) : entry.Title);
-                                                ShihabCategoryRule cat = mehediConfig.ResolveMehediCategoryForFile(fName);
-                                                string saveDir = !string.IsNullOrWhiteSpace(sub.ShihabSaveDirectory) ? sub.ShihabSaveDirectory : cat.ShihabDefaultFolder;
-                                                if (string.IsNullOrWhiteSpace(saveDir))
-                                                {
-                                                    saveDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
-                                                }
-                                                ShihabDownloadItem rssIt = new ShihabDownloadItem
-                                                {
-                                                    MehediUrl = entry.DownloadUrl,
-                                                    ShihabFileName = fName,
-                                                    MehediSaveDirectory = saveDir,
-                                                    ShihabCategoryName = !string.IsNullOrWhiteSpace(sub.MehediCategoryName) ? sub.MehediCategoryName : cat.ShihabName
-                                                };
-                                                if (entry.DownloadUrl.StartsWith("magnet:?", StringComparison.OrdinalIgnoreCase) ||
-                                                    entry.DownloadUrl.EndsWith(".torrent", StringComparison.OrdinalIgnoreCase))
-                                                {
-                                                    rssIt.ShihabIsTorrent = true;
-                                                    rssIt.ShihabTorrentMagnetOrPath = entry.DownloadUrl;
-                                                }
-                                                shihabEngine.AddShihabDownloadItem(rssIt, true);
-                                            });
-                                        if (dirty) shihabStore.SaveMehediConfig(mehediConfig);
-                                    }
-                                    finally
+                                        try
+                                        {
+                                            ShihabAutoUpdater.CheckForUpdates(mehediConfig, false);
+                                        }
+                                        catch { }
+                                        finally
+                                        {
+                                            Interlocked.Exchange(ref updPollingFlag, 0);
+                                        }
+                                    });
+                                }
+                                rssTickCounter++;
+                                if (rssTickCounter >= 12 && Interlocked.CompareExchange(ref rssPollingFlag, 1, 0) == 0)
+                                {
+                                    rssTickCounter = 0;
+                                    Task.Run(delegate
                                     {
-                                        rssPolling = false;
-                                    }
-                                });
-                            }
-                        };
-                        tickTimer.Start();
+                                        try
+                                        {
+                                            bool dirty = ShihabRssFeedManager.PollDueFeedsInBackground(
+                                                mehediConfig,
+                                                delegate(ShihabRssFeedConfig sub, ShihabRssEntryItem entry)
+                                                {
+                                                    string fName = ShihabFormatHelpers.SanitizeShihabFileName(
+                                                        string.IsNullOrWhiteSpace(entry.Title) ? ShihabFormatHelpers.ExtractMehediFileNameFromUrl(entry.DownloadUrl) : entry.Title);
+                                                    ShihabCategoryRule cat = mehediConfig.ResolveMehediCategoryForFile(fName);
+                                                    string saveDir = !string.IsNullOrWhiteSpace(sub.ShihabSaveDirectory) ? sub.ShihabSaveDirectory : cat.ShihabDefaultFolder;
+                                                    if (string.IsNullOrWhiteSpace(saveDir))
+                                                    {
+                                                        saveDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
+                                                    }
+                                                    ShihabDownloadItem rssIt = new ShihabDownloadItem
+                                                    {
+                                                        MehediUrl = entry.DownloadUrl,
+                                                        ShihabFileName = fName,
+                                                        MehediSaveDirectory = saveDir,
+                                                        ShihabCategoryName = !string.IsNullOrWhiteSpace(sub.MehediCategoryName) ? sub.MehediCategoryName : cat.ShihabName
+                                                    };
+                                                    if (entry.DownloadUrl.StartsWith("magnet:?", StringComparison.OrdinalIgnoreCase) ||
+                                                        entry.DownloadUrl.EndsWith(".torrent", StringComparison.OrdinalIgnoreCase))
+                                                    {
+                                                        rssIt.ShihabIsTorrent = true;
+                                                        rssIt.ShihabTorrentMagnetOrPath = entry.DownloadUrl;
+                                                    }
+                                                    shihabEngine.AddShihabDownloadItem(rssIt, true);
+                                                });
+                                            if (dirty) shihabStore.SaveMehediConfig(mehediConfig);
+                                        }
+                                        finally
+                                        {
+                                            Interlocked.Exchange(ref rssPollingFlag, 0);
+                                        }
+                                    });
+                                }
+                            };
+                            tickTimer.Start();
 
-                        Application.Run(headlessCtx);
+                            Application.Run(headlessCtx);
 
-                        tickTimer.Stop();
-                        remoteServer.Dispose();
-                        shihabEngine.PersistShihabState();
+                            tickTimer.Stop();
+                            shihabEngine.PersistShihabState();
+                        }
                     }
                     return 0;
                 }
 
                 // 8. Standard Desktop GUI Mode
                 using (MehediBrowserBridgeServer mehediBridge = new MehediBrowserBridgeServer(shihabStore, mehediConfig, shihabEngine))
+                using (ShihabMainIdmWindow shihabWindow = new ShihabMainIdmWindow(
+                    shihabStore,
+                    mehediConfig,
+                    shihabEngine,
+                    mehediBridge,
+                    mehediCli))
                 {
-                    ShihabMainIdmWindow shihabWindow = new ShihabMainIdmWindow(
-                        shihabStore,
-                        mehediConfig,
-                        shihabEngine,
-                        mehediBridge,
-                        mehediCli);
                     Application.Run(shihabWindow);
                 }
             }
