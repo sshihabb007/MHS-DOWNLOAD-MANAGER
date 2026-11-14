@@ -476,7 +476,7 @@
     let mehediTxt = String(shihabRaw)
       .replace(/^\(\d+\+?\)\s*/, "")
       .replace(/^[▶►•·\s]+/, "")
-      .replace(/^(?:Suggested for you|Sponsored|Reels)\s*[·•\-]?\s*/gi, "")
+      .replace(/^(?:Suggested for you|Sponsored|Reels)\s*[·•-]?\s*/gi, "")
       .replace(/\s*(?:[|\-·•—:]\s*(?:Facebook|Watch|Reels|YouTube|Instagram|TikTok|X|Twitter|Reddit|Vimeo|Dailymotion|Twitch))+\s*$/gi, "")
       .replace(/\s*(?:Hide translation|See translation|See original|Translated from [A-Za-z ]+)\s*$/gi, "")
       .replace(/\b(?:Hide translation|See translation|See original)\s*$/gi, "")
@@ -1184,7 +1184,13 @@
       shihabAudioCompanionBytes: typeof shihabEntryObj.shihabAudioCompanionBytes === "number" ? shihabEntryObj.shihabAudioCompanionBytes : -1,
       shihabOrigin: shihabEntryObj.shihabOrigin || "",
       mehediCapturedReferer: shihabEntryObj.mehediCapturedReferer || "",
+      mehediCustomUserAgent: shihabEntryObj.mehediCustomUserAgent || "",
       mehediOmitCookies: Boolean(shihabEntryObj.mehediOmitCookies),
+      shihabIsOriginalAudio: Boolean(shihabEntryObj.shihabIsOriginalAudio),
+      mehediIsHdr: Boolean(shihabEntryObj.mehediIsHdr),
+      shihabCodecs: shihabEntryObj.shihabCodecs || "",
+      mehediBandwidth: Number(shihabEntryObj.mehediBandwidth || 0),
+      shihabDetectedAt: Number(shihabEntryObj.shihabDetectedAt || 0),
       shihabIsAudioOnly: mehediIsAud
     });
   }

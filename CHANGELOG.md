@@ -2,7 +2,28 @@
 
 All notable releases, new features, security enhancements, and bug fixes for **MHS Download Manager** (`mdm.exe` + Manifest V3 Browser Extension + Windows x64 Setup Wizard) are documented here in **reverse chronological order (newest first)**.
 
-> **Live GitHub Releases:** [All Releases (`v1.0.7` → `v1.0.0`)](https://github.com/sshihabb007/MHS-DOWNLOAD-MANAGER/releases)
+> **Live GitHub Releases:** [All Releases (`v1.0.8` → `v1.0.0`)](https://github.com/sshihabb007/MHS-DOWNLOAD-MANAGER/releases)
+
+---
+
+## [v1.0.8] — 2026-11-14
+
+### Highlights & New Features
+- **Windows x64 PE Application Manifests & Installer Heuristic Hardening (`mdm.exe` + `Setup.exe`)**:
+  - Added dedicated Win32 Side-by-Side (SxS) application manifests (`src/mdm.manifest` -> `ShihabMehediIDM.Mdm` and `src/installer/setup.manifest` -> `ShihabMehediIDM.Setup`) declaring `requestedExecutionLevel="asInvoker"`, Windows 10/11 `<supportedOS>` compatibility GUIDs, `PerMonitorV2` DPI awareness, and `longPathAware` support — replacing the default `csc.exe` `MyApplication.app` stub manifest.
+  - Replaced all late-bound `WScript.Shell` COM reflection (`wshom.ocx`) in `ShihabSetupWizard` and `ShihabAutoUpdater` with typed Win32 `IShellLinkW` + `IPersistFile` COM interop (`ShihabProcessAndPathSafety.TryCreateWindowsShortcut`, `TryGetWindowsShortcutTargetPath`, `TryRefreshMatchingShortcutIcon`) and removed obsolete `ie4uinit.exe -show` child-process spawns.
+  - Upgraded 14-browser Native Messaging registration (`com.shihab.mehedi.idm.json` & `com.shihab.mehedi.idm.firefox.json`) to invoke the windowless `mdm.exe` executable directly over `stdio` (accepting Chromium `chrome-extension://... --parent-window=...` and Firefox manifest/addon arguments) and automatically purge legacy `shihab_native_host_launcher.cmd` batch wrappers — eliminating `.cmd` script-dropper AV false positives and per-message `cmd.exe` spawns.
+- **End-to-End Authenticode Code-Signing & AST Verification Pipeline (`build.ps1` + GitHub Actions CI)**:
+  - Added optional Authenticode code-signing with RFC3161 SHA-256 timestamping in `build.ps1` and `.github/workflows/build.yml` (supporting Azure Artifact Signing `dlib`/`dmdf`, `signtool.exe` / `Set-AuthenticodeSignature` with `.pfx` or `MHS_SIGN_PFX_BASE64`, and Windows Certificate Store thumbprints), signing `mdm.exe` prior to packaging into `shihab_installer_payload.zip` as well as signing the final `MHS-Download-Manager-Setup-1.0.8-x64.exe`.
+  - Added `.oxlintrc.json` and automated AST undeclared-identifier & scope verification (`oxlint` + `node --check`) to prevent runtime `ReferenceError` regressions in `extension/`.
+
+### Bug Fixes
+- **Fixed Chrome / Brave / Edge `chrome://extensions` Error (`ReferenceError: shihabHVal is not defined`)**: Resolved an undeclared variable typo in `shihabParseResponseHeadersMeta` (`extension/shihab_background.js`) triggered by `chrome.webRequest.onHeadersReceived` on HTTP `206 Partial Content` responses containing a `Content-Range` header, restoring full `206` stream byte-size parsing and clearing the red **Errors** badge on `chrome://extensions`.
+- **Fixed MV3 Context-Menu Race & Unchecked `runtime.lastError` Warnings**: Serialized `mehediInstallContextMenus()` rebuilds across concurrent `onInstalled` / `onStartup` service-worker wakeups and consumed `chrome.runtime.lastError` in `chrome.contextMenus` and `chrome.downloads.search` callbacks (`extension/shihab_background.js`).
+- **Fixed Unhandled Badge & Config Sync Promise Rejections**: Wrapped `chrome.action.setBadgeText` and `setBadgeBackgroundColor` (`mehediUpdateToolbarBadgeForTab`) and startup `shihabSyncDesktopConfiguration()` calls with Promise `.catch()` guards so async stream probes completing after a tab closes never log `Uncaught (in promise) Error: No tab with id`.
+- **Fixed Dropped YouTube Custom User-Agent & Rich Stream Metadata**: Preserved `mehediCustomUserAgent`, `shihabIsOriginalAudio`, `mehediIsHdr`, `shihabCodecs`, `mehediBandwidth`, and `shihabDetectedAt` inside `shihabPushRichStreamEntry` (`extension/mehedi_content.js`) so InnerTube streams retain their required client User-Agent and avoid HTTP `403 Forbidden` failures.
+- **Fixed Video Duration Ternary Precedence Bug**: Fixed `shihabNode.video_duration || (shihabNode.playable_duration_in_ms ? ...)` operator precedence in `extension/mehedi_page_hook.js` where `||` previously evaluated `playable_duration_in_ms` as `NaN` whenever `video_duration` was present.
+- **Fixed Missing Web-Accessible 128px Logo**: Added `images/shihab_logo128.png` to `web_accessible_resources` in both `extension/manifest.json` and `extension/manifest.firefox.json` for `shihab_captured.html`.
 
 ---
 

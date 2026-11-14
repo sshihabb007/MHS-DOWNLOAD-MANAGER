@@ -7,14 +7,14 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
-[assembly: AssemblyTitle("MHS Download Manager 1.0.7 (Mehedi Hasan Shihab)")]
-[assembly: AssemblyDescription("MHS Download Manager 1.0.7 (Mehedi Hasan Shihab) — Multi-Segment Download Accelerator & Browser Video Suite")]
+[assembly: AssemblyTitle("MHS Download Manager 1.0.8 (Mehedi Hasan Shihab)")]
+[assembly: AssemblyDescription("MHS Download Manager 1.0.8 (Mehedi Hasan Shihab) — Multi-Segment Download Accelerator & Browser Video Suite")]
 [assembly: AssemblyCompany("Mehedi Hasan Shihab (sshihabb007)")]
-[assembly: AssemblyProduct("MHS Download Manager 1.0.7 (Mehedi Hasan Shihab)")]
+[assembly: AssemblyProduct("MHS Download Manager 1.0.8 (Mehedi Hasan Shihab)")]
 [assembly: AssemblyCopyright("Copyright © Mehedi Hasan Shihab — https://sshihabb007.github.io/")]
-[assembly: AssemblyVersion("1.0.7.0")]
-[assembly: AssemblyFileVersion("1.0.7.0")]
-[assembly: AssemblyInformationalVersion("1.0.7")]
+[assembly: AssemblyVersion("1.0.8.0")]
+[assembly: AssemblyFileVersion("1.0.8.0")]
+[assembly: AssemblyInformationalVersion("1.0.8")]
 
 namespace ShihabMehediIDM
 {

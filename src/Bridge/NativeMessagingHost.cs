@@ -171,21 +171,24 @@ namespace ShihabMehediIDM
             }
 
             Directory.CreateDirectory(shihabDataDir);
-            string shihabExePath = Process.GetCurrentProcess().MainModule.FileName;
-            string mehediWrapperBat = Path.Combine(shihabDataDir, "shihab_native_host_launcher.cmd");
-            File.WriteAllText(
-                mehediWrapperBat,
-                "@echo off\r\n" + ShihabProcessAndPathSafety.QuoteWindowsArgument(shihabExePath) + " --shihab-native-messaging-host\r\n",
-                Encoding.ASCII);
-            ShihabSecretsVault.ApplyRestrictedUserFileAcl(mehediWrapperBat);
+            string shihabExePath = Path.GetFullPath(Process.GetCurrentProcess().MainModule.FileName);
+            string legacyWrapperCmd = Path.Combine(shihabDataDir, "shihab_native_host_launcher.cmd");
+            try
+            {
+                if (File.Exists(legacyWrapperCmd))
+                {
+                    File.Delete(legacyWrapperCmd);
+                }
+            }
+            catch { }
 
             string shihabManifestPath = Path.Combine(shihabDataDir, "com.shihab.mehedi.idm.json");
-            string mehediEscapedBat = ShihabJsonCodec.EscapeString(mehediWrapperBat);
+            string mehediEscapedExe = ShihabJsonCodec.EscapeString(shihabExePath);
             string shihabManifestJson =
                 "{\r\n" +
                 "  \"name\": \"com.shihab.mehedi.idm\",\r\n" +
                 "  \"description\": \"MHS Download Manager Native Messaging Host (mdm.exe)\",\r\n" +
-                "  \"path\": \"" + mehediEscapedBat + "\",\r\n" +
+                "  \"path\": \"" + mehediEscapedExe + "\",\r\n" +
                 "  \"type\": \"stdio\",\r\n" +
                 "  \"allowed_origins\": [\r\n" +
                 "    \"chrome-extension://" + mehediCleanId + "/\"\r\n" +
@@ -200,7 +203,7 @@ namespace ShihabMehediIDM
                 "{\r\n" +
                 "  \"name\": \"com.shihab.mehedi.idm\",\r\n" +
                 "  \"description\": \"MHS Download Manager Native Messaging Host (mdm.exe)\",\r\n" +
-                "  \"path\": \"" + mehediEscapedBat + "\",\r\n" +
+                "  \"path\": \"" + mehediEscapedExe + "\",\r\n" +
                 "  \"type\": \"stdio\",\r\n" +
                 "  \"allowed_extensions\": [\r\n" +
                 "    \"idm@shihab.mehedi\"\r\n" +

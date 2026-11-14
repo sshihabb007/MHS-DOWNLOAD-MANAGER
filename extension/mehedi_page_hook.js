@@ -826,7 +826,7 @@
 
       const mehediNodeDurationSec = Number(
         shihabNode.video_duration ||
-        shihabNode.playable_duration_in_ms ? (Number(shihabNode.playable_duration_in_ms) / 1000) : 0
+        (shihabNode.playable_duration_in_ms ? (Number(shihabNode.playable_duration_in_ms) / 1000) : 0)
       ) || (Number(shihabNode.length_in_second || shihabNode.duration || 0));
 
       const shihabNodeAltIds = Array.from(new Set(

@@ -73,7 +73,7 @@ namespace ShihabMehediIDM
                 }
             }
             catch { }
-            return "1.0.7";
+            return "1.0.8";
         }
 
         public static string NormalizeVersionString(string rawTagOrVer)
@@ -1226,7 +1226,6 @@ namespace ShihabMehediIDM
                 dirsToCheck.Add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "OneDrive\\Desktop"));
                 dirsToCheck.Add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), @"Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"));
 
-                Type shellType = Type.GetTypeFromProgID("WScript.Shell");
                 for (int d = 0; d < dirsToCheck.Count; d++)
                 {
                     string dir = dirsToCheck[d];
@@ -1236,25 +1235,11 @@ namespace ShihabMehediIDM
                     for (int i = 0; i < lnks.Length; i++)
                     {
                         string lnk = lnks[i];
-                        try
+                        if (ShihabProcessAndPathSafety.TryRefreshMatchingShortcutIcon(lnk, normExe, 0))
                         {
-                            if (shellType == null) continue;
-                            object shell = Activator.CreateInstance(shellType);
-                            object sc = shellType.InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, new object[] { lnk });
-                            Type scType = sc.GetType();
-                            object targetObj = scType.InvokeMember("TargetPath", BindingFlags.GetProperty, null, sc, null);
-                            string scTarget = targetObj != null ? targetObj.ToString().Trim() : "";
-                            if (!string.IsNullOrEmpty(scTarget) &&
-                                string.Equals(Path.GetFullPath(scTarget), normExe, StringComparison.OrdinalIgnoreCase))
-                            {
-                                scType.InvokeMember("IconLocation", BindingFlags.SetProperty, null, sc, new object[] { normExe + ",0" });
-                                scType.InvokeMember("Save", BindingFlags.InvokeMethod, null, sc, null);
-                                try { File.SetLastWriteTimeUtc(lnk, DateTime.UtcNow); } catch { }
-                                SHChangeNotify(SHCNE_UPDATEITEM, SHCNF_PATHW | SHCNF_FLUSH, lnk, null);
-                                updatedDir = true;
-                            }
+                            SHChangeNotify(SHCNE_UPDATEITEM, SHCNF_PATHW | SHCNF_FLUSH, lnk, null);
+                            updatedDir = true;
                         }
-                        catch { }
                     }
                     if (updatedDir)
                     {
@@ -1264,22 +1249,6 @@ namespace ShihabMehediIDM
 
                 SHChangeNotify(SHCNE_UPDATEITEM, SHCNF_PATHW | SHCNF_FLUSH, normExe, null);
                 SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST | SHCNF_FLUSH, null, null);
-            }
-            catch { }
-
-            try
-            {
-                string ie4uinit = ShihabProcessAndPathSafety.ResolveSystem32ToolPath("ie4uinit.exe");
-                if (!string.IsNullOrEmpty(ie4uinit) && File.Exists(ie4uinit))
-                {
-                    ProcessStartInfo psi = new ProcessStartInfo(ie4uinit, "-show");
-                    psi.UseShellExecute = false;
-                    psi.CreateNoWindow = true;
-                    using (Process p = Process.Start(psi))
-                    {
-                        if (p != null) p.WaitForExit(2500);
-                    }
-                }
             }
             catch { }
         }

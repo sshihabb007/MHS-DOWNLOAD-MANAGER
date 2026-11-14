@@ -18,13 +18,14 @@ using System.Windows.Forms;
 using Microsoft.Win32;
 using ShihabMehediShared;
 
-[assembly: AssemblyTitle("MHS Download Manager 1.0.7 Setup (Mehedi Hasan Shihab)")]
-[assembly: AssemblyDescription("Official Windows x64 Installer & Uninstaller for MHS Download Manager 1.0.7 (Mehedi Hasan Shihab)")]
+[assembly: AssemblyTitle("MHS Download Manager 1.0.8 Setup (Mehedi Hasan Shihab)")]
+[assembly: AssemblyDescription("Official Windows x64 Installer & Uninstaller for MHS Download Manager 1.0.8 (Mehedi Hasan Shihab)")]
 [assembly: AssemblyCompany("Mehedi Hasan Shihab")]
 [assembly: AssemblyProduct("MHS Download Manager Setup")]
 [assembly: AssemblyCopyright("Copyright (c) 2026 Mehedi Hasan Shihab")]
-[assembly: AssemblyVersion("1.0.7.0")]
-[assembly: AssemblyFileVersion("1.0.7.0")]
+[assembly: AssemblyVersion("1.0.8.0")]
+[assembly: AssemblyFileVersion("1.0.8.0")]
+[assembly: AssemblyInformationalVersion("1.0.8")]
 
 namespace ShihabMehediInstaller
 {
@@ -59,8 +60,8 @@ namespace ShihabMehediInstaller
 
     public static class ShihabSetupTheme
     {
-        public const string ShihabProductTitle = "MHS Download Manager 1.0.7 (Mehedi Hasan Shihab)";
-        public const string MehediVersionText = "1.0.7";
+        public const string ShihabProductTitle = "MHS Download Manager 1.0.8 (Mehedi Hasan Shihab)";
+        public const string MehediVersionText = "1.0.8";
         public const string ShihabUninstallRegKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\MHSDownloadManager";
         public const string MehediRunRegKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
         public const string ShihabRunValueName = "MHSDownloadManager";
@@ -111,22 +112,6 @@ namespace ShihabMehediInstaller
                     }
                 }
                 SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST | SHCNF_FLUSH, null, null);
-            }
-            catch { }
-
-            try
-            {
-                string ie4uinit = ShihabProcessAndPathSafety.ResolveSystem32ToolPath("ie4uinit.exe");
-                if (!string.IsNullOrEmpty(ie4uinit) && File.Exists(ie4uinit))
-                {
-                    ProcessStartInfo psi = new ProcessStartInfo(ie4uinit, "-show");
-                    psi.UseShellExecute = false;
-                    psi.CreateNoWindow = true;
-                    using (Process p = Process.Start(psi))
-                    {
-                        if (p != null) p.WaitForExit(2500);
-                    }
-                }
             }
             catch { }
         }
@@ -825,19 +810,24 @@ namespace ShihabMehediInstaller
                 Directory.CreateDirectory(mehediAppDataDir);
 
                 string shihabLauncherCmd = Path.Combine(mehediAppDataDir, "shihab_native_host_launcher.cmd");
-                File.WriteAllText(
-                    shihabLauncherCmd,
-                    "@echo off\r\n" + ShihabProcessAndPathSafety.QuoteWindowsArgument(mehediExePath) + " --shihab-native-messaging-host\r\n",
-                    Encoding.ASCII);
+                try
+                {
+                    if (File.Exists(shihabLauncherCmd))
+                    {
+                        File.Delete(shihabLauncherCmd);
+                    }
+                }
+                catch { }
 
+                string mehediNormalizedExe = Path.GetFullPath(mehediExePath);
                 string mehediComputedExtId = ComputeShihabChromiumUnpackedExtensionId(shihabExtensionDir);
                 string shihabManifestPath = Path.Combine(mehediAppDataDir, "com.shihab.mehedi.idm.json");
-                string mehediEscapedCmd = EscapeJsonLiteral(shihabLauncherCmd);
+                string mehediEscapedExe = EscapeJsonLiteral(mehediNormalizedExe);
                 string shihabManifestJson =
                     "{\r\n" +
                     "  \"name\": \"com.shihab.mehedi.idm\",\r\n" +
                     "  \"description\": \"MHS Download Manager Native Messaging Host (mdm.exe)\",\r\n" +
-                    "  \"path\": \"" + mehediEscapedCmd + "\",\r\n" +
+                    "  \"path\": \"" + mehediEscapedExe + "\",\r\n" +
                     "  \"type\": \"stdio\",\r\n" +
                     "  \"allowed_origins\": [\r\n" +
                     "    \"chrome-extension://" + EscapeJsonLiteral(mehediComputedExtId) + "/\"\r\n" +
@@ -851,7 +841,7 @@ namespace ShihabMehediInstaller
                     "{\r\n" +
                     "  \"name\": \"com.shihab.mehedi.idm\",\r\n" +
                     "  \"description\": \"MHS Download Manager Native Messaging Host (mdm.exe)\",\r\n" +
-                    "  \"path\": \"" + mehediEscapedCmd + "\",\r\n" +
+                    "  \"path\": \"" + mehediEscapedExe + "\",\r\n" +
                     "  \"type\": \"stdio\",\r\n" +
                     "  \"allowed_extensions\": [\r\n" +
                     "    \"idm@shihab.mehedi\"\r\n" +
@@ -893,21 +883,7 @@ namespace ShihabMehediInstaller
 
         public static string TryGetShortcutTargetPath(string lnkPath)
         {
-            try
-            {
-                if (string.IsNullOrWhiteSpace(lnkPath) || !File.Exists(lnkPath)) return "";
-                Type shellType = Type.GetTypeFromProgID("WScript.Shell");
-                if (shellType == null) return "";
-                object shell = Activator.CreateInstance(shellType);
-                object shortcut = shellType.InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, new object[] { lnkPath });
-                object targetObj = shortcut.GetType().InvokeMember("TargetPath", BindingFlags.GetProperty, null, shortcut, null);
-                string raw = targetObj != null ? targetObj.ToString().Trim() : "";
-                return string.IsNullOrEmpty(raw) ? "" : Path.GetFullPath(raw);
-            }
-            catch
-            {
-                return "";
-            }
+            return ShihabProcessAndPathSafety.TryGetWindowsShortcutTargetPath(lnkPath);
         }
 
         private static void RefreshPinnedTaskbarShortcuts(
@@ -959,39 +935,13 @@ namespace ShihabMehediInstaller
             string mehediDescription,
             string shihabIconLocation)
         {
-            try
-            {
-                Type mehediShellType = Type.GetTypeFromProgID("WScript.Shell");
-                if (mehediShellType == null) return;
-                object shihabShell = Activator.CreateInstance(mehediShellType);
-                object mehediShortcut = mehediShellType.InvokeMember(
-                    "CreateShortcut",
-                    BindingFlags.InvokeMethod,
-                    null,
-                    shihabShell,
-                    new object[] { mehediLnkPath });
-                Type shihabScType = mehediShortcut.GetType();
-                shihabScType.InvokeMember("TargetPath", BindingFlags.SetProperty, null, mehediShortcut, new object[] { shihabTargetPath });
-                if (!string.IsNullOrEmpty(mehediArguments))
-                {
-                    shihabScType.InvokeMember("Arguments", BindingFlags.SetProperty, null, mehediShortcut, new object[] { mehediArguments });
-                }
-                if (!string.IsNullOrEmpty(shihabWorkingDir))
-                {
-                    shihabScType.InvokeMember("WorkingDirectory", BindingFlags.SetProperty, null, mehediShortcut, new object[] { shihabWorkingDir });
-                }
-                if (!string.IsNullOrEmpty(mehediDescription))
-                {
-                    shihabScType.InvokeMember("Description", BindingFlags.SetProperty, null, mehediShortcut, new object[] { mehediDescription });
-                }
-                if (!string.IsNullOrEmpty(shihabIconLocation))
-                {
-                    shihabScType.InvokeMember("IconLocation", BindingFlags.SetProperty, null, mehediShortcut, new object[] { shihabIconLocation });
-                }
-                shihabScType.InvokeMember("Save", BindingFlags.InvokeMethod, null, mehediShortcut, null);
-                try { File.SetLastWriteTimeUtc(mehediLnkPath, DateTime.UtcNow); } catch { }
-            }
-            catch { }
+            ShihabProcessAndPathSafety.TryCreateWindowsShortcut(
+                mehediLnkPath,
+                shihabTargetPath,
+                mehediArguments,
+                shihabWorkingDir,
+                mehediDescription,
+                shihabIconLocation);
         }
 
         public static string ResolveMehediExistingInstallDirForUninstall(string shihabExplicitDir)
@@ -1279,14 +1229,14 @@ namespace ShihabMehediInstaller
             _mehediStepWelcome = new Panel { Bounds = shihabBodyBounds, BackColor = BackColor };
             Label shihabWelHead = new Label
             {
-                Text = "Welcome to MHS Download Manager 1.0.7 Setup",
+                Text = "Welcome to MHS Download Manager 1.0.8 Setup",
                 Location = new Point(22, 16),
                 AutoSize = true,
                 Font = new Font("Segoe UI Semibold", 11f)
             };
             Label mehediWelDesc = new Label
             {
-                Text = "This wizard will install MHS Download Manager 1.0.7 (Mehedi Hasan Shihab) on your computer,\n" +
+                Text = "This wizard will install MHS Download Manager 1.0.8 (Mehedi Hasan Shihab) on your computer,\n" +
                        "keeping the unpacked 'extension' folder inside your installation directory ready to load in Chrome, Brave, Edge, and Firefox.",
                 Location = new Point(22, 44),
                 Size = new Size(595, 42),
@@ -1308,7 +1258,9 @@ namespace ShihabMehediInstaller
                     "  • mdm.exe          — x64 Download Accelerator (1-128 Sparse Dynamic Segments)\r\n" +
                     "  • extension\\       — Ready-to-load Unpacked MV3 Extension (Chromium & Firefox)\r\n" +
                     "  • Uninstall.exe    — Clean Windows Uninstaller\r\n\r\n" +
-                    "Included v1.0.7 Capabilities:\r\n" +
+                    "Included v1.0.8 Capabilities:\r\n" +
+                    "  • Direct Native Messaging Host (mdm.exe), Win32 SxS Manifests & IShellLinkW COM Interop\r\n" +
+                    "  • Zero-Error MV3 Browser Extension (HTTP 206 Content-Range Fix + Promise & Context Guards)\r\n" +
                     "  • Rock-Solid DWM Custom Dark/Light Chrome + Auto Desktop & Taskbar Icon Cache Refresh\r\n" +
                     "  • Modular C# Core + Zero-Duplicate Brave/Chrome/Edge/Firefox Popup Suppression\r\n" +
                     "  • Background Minimize Button (Top-Right Tray Action) & Glowing 3D App Branding\r\n" +
@@ -1422,7 +1374,7 @@ namespace ShihabMehediInstaller
             _mehediStepProgress = new Panel { Bounds = shihabBodyBounds, BackColor = BackColor };
             Label shihabProgTitle = new Label
             {
-                Text = "Installing MHS Download Manager 1.0.7...",
+                Text = "Installing MHS Download Manager 1.0.8...",
                 Location = new Point(22, 16),
                 AutoSize = true,
                 Font = new Font("Segoe UI Semibold", 11f)
@@ -1515,7 +1467,7 @@ namespace ShihabMehediInstaller
 
             _shihabLaunchAppCheck = new CheckBox
             {
-                Text = "Launch MHS Download Manager 1.0.7 now",
+                Text = "Launch MHS Download Manager 1.0.8 now",
                 Location = new Point(24, 152),
                 AutoSize = true,
                 Checked = true,

@@ -1703,7 +1703,7 @@ namespace ShihabMehediIDM
                 {
                     ShihabBencodeParser.WriteBencodeKeyString(outFs, "comment", comment.Trim());
                 }
-                ShihabBencodeParser.WriteBencodeKeyString(outFs, "created by", "MHS Download Manager 1.0.7");
+                ShihabBencodeParser.WriteBencodeKeyString(outFs, "created by", "MHS Download Manager 1.0.8");
                 long unixNow = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds;
                 ShihabBencodeParser.WriteBencodeString(outFs, "creation date");
                 ShihabBencodeParser.WriteBencodeInt(outFs, unixNow);

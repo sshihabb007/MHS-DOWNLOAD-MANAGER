@@ -303,7 +303,7 @@ namespace ShihabMehediIDM
 
     public static class ShihabThemePalette
     {
-        public const string ShihabMainHeaderTitle = "MHS Download Manager 1.0.7 (Mehedi Hasan Shihab)";
+        public const string ShihabMainHeaderTitle = "MHS Download Manager 1.0.8 (Mehedi Hasan Shihab)";
 
         internal static readonly Font UiRegular76Font = new Font("Segoe UI", 7.6f, FontStyle.Regular);
         internal static readonly Font UiBold78Font = new Font("Segoe UI", 7.8f, FontStyle.Bold);

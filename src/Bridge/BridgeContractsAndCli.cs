@@ -268,14 +268,14 @@ namespace ShihabMehediIDM
                 }
                 else if (shihabLower == "--shihab-native-messaging-host" ||
                          mehediTok.StartsWith("chrome-extension://", StringComparison.OrdinalIgnoreCase) ||
-                         shihabLower == "idm@shihab.mehedi")
+                         mehediTok.StartsWith("moz-extension://", StringComparison.OrdinalIgnoreCase) ||
+                         shihabLower == "idm@shihab.mehedi" ||
+                         shihabLower.EndsWith("\\com.shihab.mehedi.idm.json", StringComparison.Ordinal) ||
+                         shihabLower.EndsWith("/com.shihab.mehedi.idm.json", StringComparison.Ordinal) ||
+                         shihabLower.EndsWith("\\com.shihab.mehedi.idm.firefox.json", StringComparison.Ordinal) ||
+                         shihabLower.EndsWith("/com.shihab.mehedi.idm.firefox.json", StringComparison.Ordinal))
                 {
-                    if (shihabLower == "--shihab-native-messaging-host" ||
-                        shihabI == 0 ||
-                        shihabLower == "idm@shihab.mehedi")
-                    {
-                        mehediParsed.ShihabRunAsNativeHost = true;
-                    }
+                    mehediParsed.ShihabRunAsNativeHost = true;
                 }
                 else if (shihabLower == "--shihab-minimized")
                 {

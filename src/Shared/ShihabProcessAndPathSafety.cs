@@ -5,6 +5,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -920,6 +921,199 @@ namespace ShihabMehediShared
                     chars[i * 2 + 1] = (char)('a' + (b & 0x0F));
                 }
                 return new string(chars);
+            }
+        }
+
+        [ComImport]
+        [Guid("00021401-0000-0000-C000-000000000046")]
+        private class ShellLinkCoClass
+        {
+        }
+
+        [ComImport]
+        [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        [Guid("000214F9-0000-0000-C000-000000000046")]
+        private interface IShellLinkW
+        {
+            void GetPath([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszFile, int cch, IntPtr pfd, uint fFlags);
+            void GetIDList(out IntPtr ppidl);
+            void SetIDList(IntPtr pidl);
+            void GetDescription([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszName, int cch);
+            void SetDescription([MarshalAs(UnmanagedType.LPWStr)] string pszName);
+            void GetWorkingDirectory([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszDir, int cch);
+            void SetWorkingDirectory([MarshalAs(UnmanagedType.LPWStr)] string pszDir);
+            void GetArguments([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszArgs, int cch);
+            void SetArguments([MarshalAs(UnmanagedType.LPWStr)] string pszArgs);
+            void GetHotkey(out short pwHotkey);
+            void SetHotkey(short wHotkey);
+            void GetShowCmd(out int piShowCmd);
+            void SetShowCmd(int iShowCmd);
+            void GetIconLocation([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszIconPath, int cch, out int piIcon);
+            void SetIconLocation([MarshalAs(UnmanagedType.LPWStr)] string pszIconPath, int iIcon);
+            void SetRelativePath([MarshalAs(UnmanagedType.LPWStr)] string pszPathRel, uint dwReserved);
+            void Resolve(IntPtr hwnd, uint fFlags);
+            void SetPath([MarshalAs(UnmanagedType.LPWStr)] string pszFile);
+        }
+
+        private static void ParseIconLocationSpec(string iconLocationSpec, out string iconPath, out int iconIndex)
+        {
+            iconPath = "";
+            iconIndex = 0;
+            if (string.IsNullOrWhiteSpace(iconLocationSpec))
+            {
+                return;
+            }
+            string trimmed = iconLocationSpec.Trim();
+            int commaIdx = trimmed.LastIndexOf(',');
+            if (commaIdx > 0 && commaIdx < trimmed.Length - 1)
+            {
+                int parsedIdx;
+                if (int.TryParse(trimmed.Substring(commaIdx + 1).Trim(), out parsedIdx))
+                {
+                    iconPath = trimmed.Substring(0, commaIdx).Trim().Trim('"');
+                    iconIndex = parsedIdx;
+                    return;
+                }
+            }
+            iconPath = trimmed.Trim('"');
+        }
+
+        internal static bool TryCreateWindowsShortcut(
+            string lnkPath,
+            string targetPath,
+            string arguments,
+            string workingDirectory,
+            string description,
+            string iconLocationSpec)
+        {
+            if (string.IsNullOrWhiteSpace(lnkPath) || string.IsNullOrWhiteSpace(targetPath))
+            {
+                return false;
+            }
+            object comObj = null;
+            try
+            {
+                string parentDir = Path.GetDirectoryName(lnkPath);
+                if (!string.IsNullOrEmpty(parentDir) && !Directory.Exists(parentDir))
+                {
+                    Directory.CreateDirectory(parentDir);
+                }
+
+                comObj = new ShellLinkCoClass();
+                IShellLinkW shellLink = (IShellLinkW)comObj;
+                shellLink.SetPath(targetPath);
+                if (!string.IsNullOrEmpty(arguments))
+                {
+                    shellLink.SetArguments(arguments);
+                }
+                if (!string.IsNullOrEmpty(workingDirectory))
+                {
+                    shellLink.SetWorkingDirectory(workingDirectory);
+                }
+                if (!string.IsNullOrEmpty(description))
+                {
+                    shellLink.SetDescription(description);
+                }
+                string iconPath;
+                int iconIndex;
+                ParseIconLocationSpec(iconLocationSpec, out iconPath, out iconIndex);
+                if (!string.IsNullOrEmpty(iconPath))
+                {
+                    shellLink.SetIconLocation(iconPath, iconIndex);
+                }
+
+                System.Runtime.InteropServices.ComTypes.IPersistFile persistFile =
+                    (System.Runtime.InteropServices.ComTypes.IPersistFile)comObj;
+                persistFile.Save(lnkPath, true);
+                try { File.SetLastWriteTimeUtc(lnkPath, DateTime.UtcNow); } catch { }
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+            finally
+            {
+                if (comObj != null && Marshal.IsComObject(comObj))
+                {
+                    try { Marshal.FinalReleaseComObject(comObj); } catch { }
+                }
+            }
+        }
+
+        internal static string TryGetWindowsShortcutTargetPath(string lnkPath)
+        {
+            if (string.IsNullOrWhiteSpace(lnkPath) || !File.Exists(lnkPath))
+            {
+                return "";
+            }
+            object comObj = null;
+            try
+            {
+                comObj = new ShellLinkCoClass();
+                System.Runtime.InteropServices.ComTypes.IPersistFile persistFile =
+                    (System.Runtime.InteropServices.ComTypes.IPersistFile)comObj;
+                persistFile.Load(lnkPath, 0);
+
+                IShellLinkW shellLink = (IShellLinkW)comObj;
+                StringBuilder sb = new StringBuilder(1024);
+                shellLink.GetPath(sb, sb.Capacity, IntPtr.Zero, 0);
+                string raw = sb.ToString().Trim();
+                return string.IsNullOrEmpty(raw) ? "" : Path.GetFullPath(raw);
+            }
+            catch
+            {
+                return "";
+            }
+            finally
+            {
+                if (comObj != null && Marshal.IsComObject(comObj))
+                {
+                    try { Marshal.FinalReleaseComObject(comObj); } catch { }
+                }
+            }
+        }
+
+        internal static bool TryRefreshMatchingShortcutIcon(string lnkPath, string expectedTargetExePath, int iconIndex)
+        {
+            if (string.IsNullOrWhiteSpace(lnkPath) || !File.Exists(lnkPath) || string.IsNullOrWhiteSpace(expectedTargetExePath))
+            {
+                return false;
+            }
+            object comObj = null;
+            try
+            {
+                string normExe = Path.GetFullPath(expectedTargetExePath);
+                comObj = new ShellLinkCoClass();
+                System.Runtime.InteropServices.ComTypes.IPersistFile persistFile =
+                    (System.Runtime.InteropServices.ComTypes.IPersistFile)comObj;
+                persistFile.Load(lnkPath, 0);
+
+                IShellLinkW shellLink = (IShellLinkW)comObj;
+                StringBuilder sb = new StringBuilder(1024);
+                shellLink.GetPath(sb, sb.Capacity, IntPtr.Zero, 0);
+                string raw = sb.ToString().Trim();
+                if (string.IsNullOrEmpty(raw) ||
+                    !string.Equals(Path.GetFullPath(raw), normExe, StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+
+                shellLink.SetIconLocation(normExe, iconIndex);
+                persistFile.Save(lnkPath, true);
+                try { File.SetLastWriteTimeUtc(lnkPath, DateTime.UtcNow); } catch { }
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+            finally
+            {
+                if (comObj != null && Marshal.IsComObject(comObj))
+                {
+                    try { Marshal.FinalReleaseComObject(comObj); } catch { }
+                }
             }
         }
     }

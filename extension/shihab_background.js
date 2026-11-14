@@ -1841,29 +1841,56 @@ function shihabKickRelayPollerSoon() {
 
 shihabScheduleNextRelayPoll(1200);
 
+let shihabContextMenusSyncInFlight = false;
+let mehediContextMenusSyncQueued = false;
+
+function shihabSwallowContextMenuLastError() {
+  try {
+    void chrome.runtime.lastError;
+  } catch (_) {}
+}
+
 function mehediInstallContextMenus() {
-  chrome.contextMenus.removeAll(() => {
-    chrome.contextMenus.create({
-      id: "shihab_download_single_link",
-      title: "Download with MHS Download Manager",
-      contexts: ["link", "video", "audio", "image"]
+  if (shihabContextMenusSyncInFlight) {
+    mehediContextMenusSyncQueued = true;
+    return;
+  }
+  shihabContextMenusSyncInFlight = true;
+  try {
+    chrome.contextMenus.removeAll(() => {
+      shihabSwallowContextMenuLastError();
+      try {
+        chrome.contextMenus.create({
+          id: "shihab_download_single_link",
+          title: "Download with MHS Download Manager",
+          contexts: ["link", "video", "audio", "image"]
+        }, shihabSwallowContextMenuLastError);
+        chrome.contextMenus.create({
+          id: "mehedi_download_all_links",
+          title: "Download all links with MHS Download Manager",
+          contexts: ["page", "frame"]
+        }, shihabSwallowContextMenuLastError);
+        chrome.contextMenus.create({
+          id: "shihab_download_selected_links",
+          title: "Download selected links with MHS Download Manager",
+          contexts: ["selection"]
+        }, shihabSwallowContextMenuLastError);
+        chrome.contextMenus.create({
+          id: "shihab_exclude_current_site",
+          title: "Never capture downloads from this site",
+          contexts: ["page", "frame"]
+        }, shihabSwallowContextMenuLastError);
+      } finally {
+        shihabContextMenusSyncInFlight = false;
+        if (mehediContextMenusSyncQueued) {
+          mehediContextMenusSyncQueued = false;
+          mehediInstallContextMenus();
+        }
+      }
     });
-    chrome.contextMenus.create({
-      id: "mehedi_download_all_links",
-      title: "Download all links with MHS Download Manager",
-      contexts: ["page", "frame"]
-    });
-    chrome.contextMenus.create({
-      id: "shihab_download_selected_links",
-      title: "Download selected links with MHS Download Manager",
-      contexts: ["selection"]
-    });
-    chrome.contextMenus.create({
-      id: "shihab_exclude_current_site",
-      title: "Never capture downloads from this site",
-      contexts: ["page", "frame"]
-    });
-  });
+  } catch (_) {
+    shihabContextMenusSyncInFlight = false;
+  }
 }
 
 let shihabInitialDownloadsSeedPromise = null;
@@ -1992,7 +2019,10 @@ async function mehediInitializeDownloadSessionGuard(shihabForceFreshBrowserBoot)
   try {
     const mehediExistingDownloads = await new Promise((shihabResolve) => {
       try {
-        chrome.downloads.search({}, (mehediList) => shihabResolve(Array.isArray(mehediList) ? mehediList : []));
+        chrome.downloads.search({}, (mehediList) => {
+          try { void chrome.runtime.lastError; } catch (_) {}
+          shihabResolve(Array.isArray(mehediList) ? mehediList : []);
+        });
       } catch (_) {
         shihabResolve([]);
       }
@@ -2037,22 +2067,22 @@ chrome.storage.local.get(["mehediShowVideoPanelPref", "shihabLocalExcludedSites"
   }
 }).catch(() => {});
 
-shihabSyncDesktopConfiguration();
+shihabSyncDesktopConfiguration().catch(() => {});
 shihabCheckLatestReleaseFromGitHubWeb(false).catch(() => {});
 
 chrome.runtime.onInstalled.addListener(() => {
   shihabInitialDownloadsSeedPromise = mehediInitializeDownloadSessionGuard(false);
   mehediInstallContextMenus();
-  shihabSyncDesktopConfiguration();
-shihabCheckLatestReleaseFromGitHubWeb(false).catch(() => {});
+  shihabSyncDesktopConfiguration().catch(() => {});
+  shihabCheckLatestReleaseFromGitHubWeb(false).catch(() => {});
   shihabInjectContentScriptIntoExistingTabs();
 });
 
 chrome.runtime.onStartup.addListener(() => {
   shihabInitialDownloadsSeedPromise = mehediInitializeDownloadSessionGuard(true);
   mehediInstallContextMenus();
-  shihabSyncDesktopConfiguration();
-shihabCheckLatestReleaseFromGitHubWeb(false).catch(() => {});
+  shihabSyncDesktopConfiguration().catch(() => {});
+  shihabCheckLatestReleaseFromGitHubWeb(false).catch(() => {});
 });
 
 chrome.tabs.onCreated.addListener((shihabNewTab) => {
@@ -2343,7 +2373,7 @@ function shihabParseResponseHeadersMeta(shihabResponseHeaders) {
       } else if (shihabHName === "content-range") {
         const shihabRangeSlash = mehediHVal.lastIndexOf("/");
         if (shihabRangeSlash > 0) {
-          const mehediTotalParsed = parseInt(shihabHVal.slice(shihabRangeSlash + 1).trim(), 10);
+          const mehediTotalParsed = parseInt(mehediHVal.slice(shihabRangeSlash + 1).trim(), 10);
           if (!Number.isNaN(mehediTotalParsed) && mehediTotalParsed > 0) {
             mehediTotalRangeBytes = mehediTotalParsed;
           }
@@ -2719,6 +2749,7 @@ chrome.downloads.onChanged.addListener((shihabDelta) => {
   if (!shihabDelta.filename && !shihabDelta.mime && !shihabDelta.finalUrl) return;
   if (shihabRuntimeState.shihabHandledDownloadIds.has(shihabDelta.id)) return;
   chrome.downloads.search({ id: shihabDelta.id }, (mehediItems) => {
+    try { void chrome.runtime.lastError; } catch (_) {}
     if (Array.isArray(mehediItems) && mehediItems[0]) {
       shihabTryInterceptBrowserDownload(mehediItems[0]).catch(() => {});
     }
@@ -3113,7 +3144,7 @@ function shihabPersistStoredUpdateState() {
 }
 
 function shihabComputeEffectiveUpdateNotice(desktopPing) {
-  const manifestVer = (chrome.runtime && typeof chrome.runtime.getManifest === "function" && chrome.runtime.getManifest().version) || "1.0.7";
+  const manifestVer = (chrome.runtime && typeof chrome.runtime.getManifest === "function" && chrome.runtime.getManifest().version) || "1.0.8";
   const st = shihabRuntimeState.shihabUpdateState || {};
   let bestVer = shihabNormalizeVersion(st.latestVersion || "");
   let bestUrl = (st.latestHtmlUrl && /^https:\/\/github\.com\//i.test(st.latestHtmlUrl))
@@ -3248,25 +3279,43 @@ async function shihabCheckLatestReleaseFromGitHubWeb(forceCheck) {
   return shihabWebUpdateCheckInFlight;
 }
 
+function shihabSafeSetBadgeText(mehediDetails) {
+  try {
+    const shihabRet = chrome.action.setBadgeText(mehediDetails);
+    if (shihabRet && typeof shihabRet.catch === "function") {
+      shihabRet.catch(() => {});
+    }
+  } catch (_) {}
+}
+
+function shihabSafeSetBadgeBackgroundColor(mehediDetails) {
+  try {
+    const shihabRet = chrome.action.setBadgeBackgroundColor(mehediDetails);
+    if (shihabRet && typeof shihabRet.catch === "function") {
+      shihabRet.catch(() => {});
+    }
+  } catch (_) {}
+}
+
 function mehediUpdateToolbarBadgeForTab(shihabSpecificTabId) {
   const effectiveUpd = shihabComputeEffectiveUpdateNotice(null);
   if (!shihabRuntimeState.mehediDesktopOnline) {
-    chrome.action.setBadgeText({ text: "OFF" });
-    chrome.action.setBadgeBackgroundColor({ color: "#ef4444" });
+    shihabSafeSetBadgeText({ text: "OFF" });
+    shihabSafeSetBadgeBackgroundColor({ color: "#ef4444" });
   } else if (!shihabRuntimeState.shihabIntegrationEnabled) {
-    chrome.action.setBadgeText({ text: "PAUS" });
-    chrome.action.setBadgeBackgroundColor({ color: "#f59e0b" });
+    shihabSafeSetBadgeText({ text: "PAUS" });
+    shihabSafeSetBadgeBackgroundColor({ color: "#f59e0b" });
   } else if (effectiveUpd.updateAvailable && !effectiveUpd.dismissed) {
-    chrome.action.setBadgeText({ text: "NEW" });
-    chrome.action.setBadgeBackgroundColor({ color: "#7c3aed" });
+    shihabSafeSetBadgeText({ text: "NEW" });
+    shihabSafeSetBadgeBackgroundColor({ color: "#7c3aed" });
   } else {
-    chrome.action.setBadgeText({ text: "" });
+    shihabSafeSetBadgeText({ text: "" });
   }
   if (typeof shihabSpecificTabId === "number" && shihabSpecificTabId >= 0) {
     const mehediStreams = shihabRuntimeState.mehediDetectedStreamsByTab.get(shihabSpecificTabId) || [];
     if (mehediStreams.length > 0) {
-      chrome.action.setBadgeText({ tabId: shihabSpecificTabId, text: String(Math.min(99, mehediStreams.length)) });
-      chrome.action.setBadgeBackgroundColor({ tabId: shihabSpecificTabId, color: "#2563eb" });
+      shihabSafeSetBadgeText({ tabId: shihabSpecificTabId, text: String(Math.min(99, mehediStreams.length)) });
+      shihabSafeSetBadgeBackgroundColor({ tabId: shihabSpecificTabId, color: "#2563eb" });
     }
   }
 }

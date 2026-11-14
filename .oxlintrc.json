@@ -1,0 +1,23 @@
+{
+  "env": {
+    "browser": true,
+    "webextensions": true,
+    "es2022": true
+  },
+  "rules": {
+    "no-undef": "error",
+    "no-redeclare": "error",
+    "no-const-assign": "error",
+    "no-dupe-keys": "error",
+    "no-unreachable": "error",
+    "no-self-assign": "error",
+    "no-unused-vars": [
+      "warn",
+      {
+        "caughtErrors": "none",
+        "argsIgnorePattern": "^_"
+      }
+    ],
+    "no-control-regex": "off"
+  }
+}

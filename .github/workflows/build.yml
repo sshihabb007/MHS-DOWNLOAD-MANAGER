@@ -66,9 +66,18 @@ jobs:
               throw "JavaScript syntax check failed for $($_.FullName)"
             }
           }
+          Write-Host "Running AST undeclared-identifier & scope lint (oxlint)..."
+          npx --yes oxlint@1.56.0 -c .oxlintrc.json extension
+          if ($LASTEXITCODE -ne 0) {
+            throw "oxlint scope/reference check failed on extension/"
+          }
 
-      - name: Compile mdm.exe & Setup Installer via build.ps1
+      - name: Compile (& Optional Authenticode Sign) mdm.exe & Setup Installer via build.ps1
         shell: pwsh
+        env:
+          MHS_SIGN_PFX_BASE64: ${{ secrets.MHS_SIGN_PFX_BASE64 }}
+          MHS_SIGN_PFX_PASSWORD: ${{ secrets.MHS_SIGN_PFX_PASSWORD }}
+          MHS_SIGN_TIMESTAMP_URL: ${{ vars.MHS_SIGN_TIMESTAMP_URL }}
         run: |
           powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
 
