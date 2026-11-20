@@ -80,6 +80,22 @@ namespace ShihabMehediIDM
 
         public static void MarkCleanShutdown()
         {
+            // Delete our own session marker FIRST so cross-thread timer disposal can never skip it.
+            try
+            {
+                if (!string.IsNullOrEmpty(_activeSessionMarkerPath) && File.Exists(_activeSessionMarkerPath))
+                {
+                    string myPidStr = Process.GetCurrentProcess().Id.ToString(CultureInfo.InvariantCulture);
+                    string markerVal = "";
+                    try { markerVal = (File.ReadAllText(_activeSessionMarkerPath, Encoding.UTF8) ?? "").Trim(); } catch { }
+                    if (string.IsNullOrEmpty(markerVal) || string.Equals(markerVal, myPidStr, StringComparison.Ordinal))
+                    {
+                        File.Delete(_activeSessionMarkerPath);
+                    }
+                }
+            }
+            catch { }
+
             try
             {
                 System.Windows.Forms.Timer timer = Interlocked.Exchange(ref _heartbeatTimer, null);
@@ -87,10 +103,6 @@ namespace ShihabMehediIDM
                 {
                     timer.Stop();
                     timer.Dispose();
-                }
-                if (!string.IsNullOrEmpty(_activeSessionMarkerPath) && File.Exists(_activeSessionMarkerPath))
-                {
-                    File.Delete(_activeSessionMarkerPath);
                 }
             }
             catch { }
@@ -213,10 +225,26 @@ namespace ShihabMehediIDM
                     int exitCode = 0;
                     try { exitCode = parent.ExitCode; } catch { }
 
-                    bool sessionStillMarkedRunning = File.Exists(sessionRunning);
-                    if (exitCode != 0 || sessionStillMarkedRunning)
+                    bool sessionBelongsToExitedParent = false;
+                    if (File.Exists(sessionRunning))
                     {
-                        try { if (File.Exists(sessionRunning)) File.Delete(sessionRunning); } catch { }
+                        try
+                        {
+                            string markerPid = (File.ReadAllText(sessionRunning, Encoding.UTF8) ?? "").Trim();
+                            if (string.IsNullOrEmpty(markerPid) ||
+                                string.Equals(markerPid, parentPid.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal))
+                            {
+                                sessionBelongsToExitedParent = true;
+                            }
+                        }
+                        catch { }
+                    }
+                    if (exitCode != 0 || sessionBelongsToExitedParent)
+                    {
+                        if (sessionBelongsToExitedParent)
+                        {
+                            try { if (File.Exists(sessionRunning)) File.Delete(sessionRunning); } catch { }
+                        }
                         string logFile = Path.Combine(
                             crashDir,
                             string.Format(CultureInfo.InvariantCulture, "crash_{0:yyyyMMdd_HHmmss}_watchdog.log", DateTime.Now));

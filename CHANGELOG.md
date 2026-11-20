@@ -2,7 +2,28 @@
 
 All notable releases, new features, security enhancements, and bug fixes for **MHS Download Manager** (`mdm.exe` + Manifest V3 Browser Extension + Windows x64 Setup Wizard) are documented here in **reverse chronological order (newest first)**.
 
-> **Live GitHub Releases:** [All Releases (`v1.1.0` → `v1.0.0`)](https://github.com/sshihabb007/MHS-DOWNLOAD-MANAGER/releases)
+> **Live GitHub Releases:** [All Releases (`v1.1.1` → `v1.0.0`)](https://github.com/sshihabb007/MHS-DOWNLOAD-MANAGER/releases)
+
+---
+
+## [v1.1.1] — 2026-11-20
+
+### Critical Post-Update & Browser Extension Fixes
+- **Fixed Zombie Loopback Bridge (`127.0.0.1:45779`) After Silent Auto-Update (`ShihabAutoUpdater`, `ShihabSetupWizard`, `BridgeHttpServer`, `ShihabProcessAndPathSafety`)**:
+  - Eliminated 3-generation Win32 socket-handle inheritance (`bInheritHandles = TRUE` via `UseShellExecute = false`) where launching `Setup.exe` from the running `mdm.exe` and silently relaunching the new `mdm.exe` caused the newly updated app (and its crash watchdog) to inherit the old listening TCP handle permanently, causing `WSAEADDRINUSE (10048)` while hanging every extension request on port `45779`.
+  - Marked all local TCP/UDP listeners (`BridgeHttpServer`, `ShihabRemoteControlServer`, `ShihabClickNLoadServer`, `ShihabLocalNetworkRelay`, `ShihabTorrentSeedServer`) non-inheritable via `SetHandleInformation(..., HANDLE_FLAG_INHERIT, 0)`, switched updater/setup/native-host launches to `UseShellExecute = true`, added bounded bind retry (`25 × 200ms`) + UI self-heal recovery timer so upgrades from unpatched `v1.0.7`/`v1.1.0` cleanly reclaim `:45779`, and closed `ShihabAutoUpdateDialog` cleanly on launch.
+- **Fixed Native Messaging Freeze, Detached Process Launch & Update Mutex Coordination (`NativeMessagingHost`, `ShihabSetupWizard`)**:
+  - Stopped passive `/shihab/ping` checks from falling back to Native Messaging or auto-spawning `mdm.exe` (preventing 37–75 second extension hangs and mid-update app respawns).
+  - Bounded explicit Native Messaging auto-launch waits to `<= 3.2s`, switched `mdm.exe /fromhost` launch to `UseShellExecute = true` (preventing Chrome stdio pipe / Job Object inheritance), respected `Local\ShihabMehediIDM_InstallerActive` during in-place upgrades, and passed `--shihab-config-dir` consistently into the Native Messaging loop.
+- **Fixed Frozen `"Download Video"` Pill, Stuck Popup & Missed Browser Interceptions (`mehedi_content.js`, `mehedi_popup.js`, `shihab_background.js`)**:
+  - Opened the floating **`Download Video`** dropdown immediately on click using cached/DOM streams while refreshing sniffed streams asynchronously with a bounded `2.5s` timeout, and added immediate toast feedback + `5.5s` dispatch timeout so the button never freezes even if `mdm.exe` is offline or busy.
+  - Added bounded timeouts (`3.5s`) and `try/catch` guards in `mehedi_popup.js` so the toolbar popup never stalls forever on `"Checking mdm.exe bridge..."`.
+  - Fixed `mehediAuthenticatedBridgeFetch` to avoid burning the `1.8s` HTTP timeout on cold Service Worker token lookups before trying the pinned-origin local bridge, serialized `mehediInstallContextMenus` to eliminate duplicate menu ID runtime errors, and scoped the 10-second browser-startup capture suppression strictly to `chrome.runtime.onStartup` (not extension reloads or SW wakeups).
+- **Fixed v1.1.0 Extension & Setup Regressions**:
+  - Fixed `shihabUpsertTabStreamRecord` missing `shihabScopedCacheKey` (`std:`/`inc:`) when looking up sniffed media `Origin`/`Referer`/`hadCookie` headers.
+  - Added a storage hydration gate (`shihabServersReadyPromise`) so cold Service Worker starts cannot wipe paired remote servers; fixed Incognito cookie-store isolation in batch context-menu downloads; fixed `magnet:?` `preventDefault()` under non-passive click listeners and cleaned up leaked `chrome.storage.onChanged` listeners; raised `/shihab/video-info` timeout to `20s`.
+  - Replaced destructive `Directory.Delete(extension, true)` during upgrades with atomic in-place file replacement (`ReplaceFileAtomicallyWithRenameFallback`), preserved custom `allowed_origins` in `com.shihab.mehedi.idm.json`, logged silent update errors to `crashes/update_error.log`, and added `ie4uinit.exe` to `AllowedSystem32Tools`.
+  - Fixed PID-blind `session.running` false crash reports (`ExitCode: 0x00000000`) in `ShihabCrashMonitor`, guarded hidden/minimized crash recovery dialogs from blocking startup, and cached `bridge.token` in memory in `ShihabStateStore` to eliminate per-request NTFS ACL thrashing.
 
 ---
 

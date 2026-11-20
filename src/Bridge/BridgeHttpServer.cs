@@ -228,25 +228,44 @@ namespace ShihabMehediIDM
 
         public bool StartShihabBridge()
         {
-            try
+            if (_shihabIsRunning && _shihabTcpListener != null)
             {
-                int mehediPort = _shihabConfig.MehediLocalBridgePort > 0 ? _shihabConfig.MehediLocalBridgePort : 45779;
-                _shihabTcpListener = new TcpListener(IPAddress.Loopback, mehediPort);
-                _shihabTcpListener.Start();
-                _shihabIsRunning = true;
-                _mehediStopCts = new CancellationTokenSource();
-                CancellationToken shihabTok = _mehediStopCts.Token;
-
-                Task.Run(delegate
-                {
-                    AcceptMehediRequestsLoop(shihabTok);
-                });
                 return true;
             }
-            catch
+            int mehediPort = _shihabConfig.MehediLocalBridgePort > 0 ? _shihabConfig.MehediLocalBridgePort : 45779;
+            // Retry briefly in case a previous process or legacy updater is still exiting and releasing the port.
+            for (int attempt = 0; attempt < 25; attempt++)
             {
-                return false;
+                TcpListener candidate = null;
+                try
+                {
+                    candidate = new TcpListener(IPAddress.Loopback, mehediPort);
+                    ShihabProcessAndPathSafety.DisableListenerInheritance(candidate);
+                    candidate.Start();
+                    ShihabProcessAndPathSafety.DisableListenerInheritance(candidate);
+                    _shihabTcpListener = candidate;
+                    _shihabIsRunning = true;
+                    _mehediStopCts = new CancellationTokenSource();
+                    CancellationToken shihabTok = _mehediStopCts.Token;
+
+                    Task.Run(delegate
+                    {
+                        AcceptMehediRequestsLoop(shihabTok);
+                    });
+                    return true;
+                }
+                catch
+                {
+                    try { if (candidate != null) candidate.Stop(); } catch { }
+                    _shihabTcpListener = null;
+                    _shihabIsRunning = false;
+                    if (attempt < 24)
+                    {
+                        Thread.Sleep(200);
+                    }
+                }
             }
+            return false;
         }
 
         public bool RestartShihabBridge()
@@ -1316,10 +1335,16 @@ namespace ShihabMehediIDM
 
         public static string GetLocalMehediPing(int shihabPort)
         {
+            return GetLocalMehediPing(shihabPort, 2000);
+        }
+
+        public static string GetLocalMehediPing(int shihabPort, int timeoutMs)
+        {
+            int effectiveTimeout = Math.Max(250, timeoutMs);
             HttpWebRequest mehediReq = (HttpWebRequest)WebRequest.Create(string.Format("http://127.0.0.1:{0}/shihab/ping", shihabPort));
             mehediReq.Method = "GET";
-            mehediReq.Timeout = 2000;
-            mehediReq.ReadWriteTimeout = 2000;
+            mehediReq.Timeout = effectiveTimeout;
+            mehediReq.ReadWriteTimeout = effectiveTimeout;
             mehediReq.Proxy = null;
             mehediReq.KeepAlive = false;
             using (HttpWebResponse shihabResp = (HttpWebResponse)mehediReq.GetResponse())

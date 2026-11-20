@@ -5,6 +5,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -34,10 +35,91 @@ namespace ShihabMehediShared
         {
             "cmd.exe",
             "explorer.exe",
+            "ie4uinit.exe",
             "rundll32.exe",
             "powershell.exe",
             "conhost.exe"
         };
+
+        private const uint HANDLE_FLAG_INHERIT = 0x00000001u;
+        private const int MOVEFILE_REPLACE_EXISTING = 0x1;
+        private const int MOVEFILE_WRITE_THROUGH = 0x8;
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool SetHandleInformation(IntPtr hObject, uint dwMask, uint dwFlags);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool MoveFileExW(string lpExistingFileName, string lpNewFileName, int dwFlags);
+
+        internal static void DisableHandleInheritance(IntPtr handle)
+        {
+            if (handle == IntPtr.Zero || handle == new IntPtr(-1)) return;
+            try { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0u); } catch { }
+        }
+
+        internal static void DisableListenerInheritance(TcpListener listener)
+        {
+            if (listener == null) return;
+            try
+            {
+                Socket srv = listener.Server;
+                if (srv != null)
+                {
+                    DisableHandleInheritance(srv.Handle);
+                }
+            }
+            catch { }
+        }
+
+        internal static void ReplaceFileAtomicallyWithRenameFallback(string stagedTempFile, string destPath)
+        {
+            for (int attempt = 0; attempt < 3; attempt++)
+            {
+                if (MoveFileExW(stagedTempFile, destPath, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+                {
+                    return;
+                }
+                // If destination is a running PE or file allowing rename, move it aside first before placing the staged file.
+                string backupOld = destPath + ".old";
+                try { if (File.Exists(backupOld)) File.Delete(backupOld); } catch { }
+                if (File.Exists(destPath))
+                {
+                    try { File.Move(destPath, backupOld); } catch { }
+                }
+                if (MoveFileExW(stagedTempFile, destPath, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+                {
+                    try { if (File.Exists(backupOld)) File.Delete(backupOld); } catch { }
+                    return;
+                }
+                if (attempt < 2)
+                {
+                    System.Threading.Thread.Sleep(60);
+                }
+            }
+
+            // Final fallback: when a browser holds a non-delete-shared read handle (FILE_SHARE_READ | FILE_SHARE_WRITE),
+            // overwrite in place using shared write access so the upgrade succeeds cleanly without deleting the parent folder.
+            try
+            {
+                using (FileStream src = new FileStream(stagedTempFile, FileMode.Open, FileAccess.Read, FileShare.Read))
+                using (FileStream dst = new FileStream(destPath, FileMode.Create, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete))
+                {
+                    src.CopyTo(dst);
+                    dst.Flush(true);
+                }
+                try { File.Delete(stagedTempFile); } catch { }
+                return;
+            }
+            catch
+            {
+            }
+
+            if (File.Exists(destPath))
+            {
+                File.Delete(destPath);
+            }
+            File.Move(stagedTempFile, destPath);
+        }
 
         internal static bool IsWindowsReservedDeviceName(string leafName)
         {
@@ -473,32 +555,42 @@ namespace ShihabMehediShared
                     }
 
                     long entryWritten = 0;
-                    using (Stream entryStream = entry.Open())
-                    using (FileStream outStream = new FileStream(destPath, FileMode.Create, FileAccess.Write, FileShare.None, 65536))
+                    string stagedTempPath = destPath + ".shihab_stage_" + Guid.NewGuid().ToString("N") + ".tmp";
+                    try
                     {
-                        int read;
-                        while ((read = entryStream.Read(buffer, 0, buffer.Length)) > 0)
+                        using (Stream entryStream = entry.Open())
+                        using (FileStream outStream = new FileStream(stagedTempPath, FileMode.Create, FileAccess.Write, FileShare.None, 65536))
                         {
-                            entryWritten += read;
-                            totalWritten += read;
-                            if (totalWritten > maxTotalBytes)
+                            int read;
+                            while ((read = entryStream.Read(buffer, 0, buffer.Length)) > 0)
                             {
-                                throw new InvalidDataException("Archive total extracted payload exceeded size budget.");
-                            }
-                            if (entryWritten > 1048576L && compLen > 0)
-                            {
-                                double actualRatio = (double)entryWritten / (double)compLen;
-                                if (actualRatio > maxCompressionRatio)
+                                entryWritten += read;
+                                totalWritten += read;
+                                if (totalWritten > maxTotalBytes)
                                 {
-                                    throw new InvalidDataException("Archive stream decompression bomb detected: " + rawName);
+                                    throw new InvalidDataException("Archive total extracted payload exceeded size budget.");
                                 }
+                                if (entryWritten > 1048576L && compLen > 0)
+                                {
+                                    double actualRatio = (double)entryWritten / (double)compLen;
+                                    if (actualRatio > maxCompressionRatio)
+                                    {
+                                        throw new InvalidDataException("Archive stream decompression bomb detected: " + rawName);
+                                    }
+                                }
+                                else if (compLen == 0 && entryWritten > 1048576L)
+                                {
+                                    throw new InvalidDataException("Zero-compressed oversized archive stream rejected: " + rawName);
+                                }
+                                outStream.Write(buffer, 0, read);
                             }
-                            else if (compLen == 0 && entryWritten > 1048576L)
-                            {
-                                throw new InvalidDataException("Zero-compressed oversized archive stream rejected: " + rawName);
-                            }
-                            outStream.Write(buffer, 0, read);
+                            outStream.Flush(true);
                         }
+                        ReplaceFileAtomicallyWithRenameFallback(stagedTempPath, destPath);
+                    }
+                    finally
+                    {
+                        try { if (File.Exists(stagedTempPath)) File.Delete(stagedTempPath); } catch { }
                     }
                 }
             }

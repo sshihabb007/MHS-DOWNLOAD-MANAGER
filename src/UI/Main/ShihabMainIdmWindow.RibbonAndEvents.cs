@@ -264,14 +264,17 @@ namespace ShihabMehediIDM
                         unfinished.Add(snap[i]);
                     }
                 }
-                if (unfinished.Count > 0)
+                if (unfinished.Count > 0 && Visible && WindowState != FormWindowState.Minimized)
                 {
-                    DialogResult recoverAns = MessageBox.Show(
-                        this,
-                        string.Format("MHS Download Manager detected an unexpected exit in the previous session.\r\n\r\nWould you like to automatically resume your {0} unfinished download(s) from their exact verified byte checkpoints?", unfinished.Count),
-                        "Crash Recovery — MHS Download Manager",
-                        MessageBoxButtons.YesNo,
-                        MessageBoxIcon.Question);
+                    IWin32Window crashOwner = GetShihabDialogOwnerOrNull();
+                    DialogResult recoverAns = crashOwner != null
+                        ? MessageBox.Show(
+                            crashOwner,
+                            string.Format("MHS Download Manager detected an unexpected exit in the previous session.\r\n\r\nWould you like to automatically resume your {0} unfinished download(s) from their exact verified byte checkpoints?", unfinished.Count),
+                            "Crash Recovery — MHS Download Manager",
+                            MessageBoxButtons.YesNo,
+                            MessageBoxIcon.Question)
+                        : DialogResult.No;
                     if (recoverAns == DialogResult.Yes)
                     {
                         for (int i = 0; i < unfinished.Count; i++)

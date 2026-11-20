@@ -722,7 +722,9 @@ namespace ShihabMehediIDM
             try
             {
                 _listener = new TcpListener(listenAddr, desiredPort);
+                ShihabMehediShared.ShihabProcessAndPathSafety.DisableListenerInheritance(_listener);
                 _listener.Start(32);
+                ShihabMehediShared.ShihabProcessAndPathSafety.DisableListenerInheritance(_listener);
             }
             catch
             {
@@ -731,7 +733,9 @@ namespace ShihabMehediIDM
                     try
                     {
                         _listener = new TcpListener(listenAddr, 0);
+                        ShihabMehediShared.ShihabProcessAndPathSafety.DisableListenerInheritance(_listener);
                         _listener.Start(32);
+                        ShihabMehediShared.ShihabProcessAndPathSafety.DisableListenerInheritance(_listener);
                     }
                     catch { _listener = null; return false; }
                 }

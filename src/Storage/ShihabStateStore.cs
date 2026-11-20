@@ -18,6 +18,8 @@ namespace ShihabMehediIDM
             TimeSpan.FromMilliseconds(250));
 
         private readonly object _shihabSyncLock = new object();
+        private string _cachedBridgeToken = "";
+        private DateTime _cachedBridgeTokenWriteUtc = DateTime.MinValue;
         public string MehediBaseDirectory { get; private set; }
         public string ShihabConfigFilePath { get; private set; }
         public string MehediDownloadsFilePath { get; private set; }
@@ -261,17 +263,27 @@ namespace ShihabMehediIDM
             {
                 try
                 {
-                    Directory.CreateDirectory(MehediBaseDirectory);
                     string tokPath = Path.Combine(MehediBaseDirectory, "bridge.token");
                     if (File.Exists(tokPath))
                     {
+                        DateTime writeUtc = File.GetLastWriteTimeUtc(tokPath);
+                        if (!string.IsNullOrEmpty(_cachedBridgeToken) && writeUtc == _cachedBridgeTokenWriteUtc)
+                        {
+                            return _cachedBridgeToken;
+                        }
                         string existing = File.ReadAllText(tokPath, Encoding.UTF8).Trim();
                         if (!string.IsNullOrWhiteSpace(existing))
                         {
-                            ShihabSecretsVault.ApplyRestrictedUserFileAcl(tokPath);
+                            if (string.IsNullOrEmpty(_cachedBridgeToken))
+                            {
+                                ShihabSecretsVault.ApplyRestrictedUserFileAcl(tokPath);
+                            }
+                            _cachedBridgeToken = existing;
+                            _cachedBridgeTokenWriteUtc = File.GetLastWriteTimeUtc(tokPath);
                             return existing;
                         }
                     }
+                    Directory.CreateDirectory(MehediBaseDirectory);
                     MehediAppConfiguration cfg = LoadShihabConfig();
                     if (string.IsNullOrWhiteSpace(cfg.ShihabLocalBridgeToken))
                     {
@@ -282,10 +294,16 @@ namespace ShihabMehediIDM
                     {
                         WriteProtectedTokenFile(tokPath, cfg.ShihabLocalBridgeToken);
                     }
+                    _cachedBridgeToken = cfg.ShihabLocalBridgeToken;
+                    try { if (File.Exists(tokPath)) _cachedBridgeTokenWriteUtc = File.GetLastWriteTimeUtc(tokPath); } catch { }
                     return cfg.ShihabLocalBridgeToken;
                 }
                 catch
                 {
+                    if (!string.IsNullOrEmpty(_cachedBridgeToken))
+                    {
+                        return _cachedBridgeToken;
+                    }
                     return Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
                 }
             }

@@ -289,6 +289,11 @@ namespace ShihabMehediIDM
                         _statusLabel.Text = applyErr;
                         MessageBox.Show(this, applyErr, "MHS Auto-Updater", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     }
+                    else
+                    {
+                        DialogResult = DialogResult.OK;
+                        Close();
+                    }
                 });
             });
         }

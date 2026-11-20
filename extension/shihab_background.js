@@ -58,6 +58,7 @@ const SHIHAB_YOUTUBE_ITAG_MAP = {
 
 const shihabRuntimeState = {
   mehediDesktopOnline: false,
+  shihabLastBridgeVersion: "",
   shihabLastConfigSyncMs: 0,
   shihabIntegrationEnabled: true,
   mehediShowVideoPanel: true,
@@ -891,7 +892,10 @@ function shihabUpsertTabStreamRecord(mehediTabId, shihabIncoming) {
   }
 
   const shihabUrlMeta = mehediInspectUrlQueryMetadata(shihabIncoming.shihabStreamUrl);
-  const mehediHdrInfo = shihabRuntimeState.shihabRequestHeadersByUrl.get(shihabIncoming.shihabStreamUrl) || null;
+  const shihabNormHdrUrl = shihabNormalizeMediaStreamUrl(shihabIncoming.shihabStreamUrl).shihabCleanUrl;
+  const mehediHdrInfo = shihabRuntimeState.shihabRequestHeadersByUrl.get(
+    shihabScopedCacheKey(shihabNormHdrUrl, shihabIsTabIncognito(mehediTabId))
+  ) || null;
 
   const shihabEffectiveRole =
     shihabIncoming.mehediTrackRole ||
@@ -1097,7 +1101,10 @@ async function mehediFetchLiveTabCaptionAndTitle(shihabTabId) {
     } catch (_) {}
 
     try {
-      const shihabDomReply = await chrome.tabs.sendMessage(shihabTabId, { shihabCmd: "mehedi_get_video_caption" });
+      const shihabDomReply = await Promise.race([
+        chrome.tabs.sendMessage(shihabTabId, { shihabCmd: "mehedi_get_video_caption" }, { frameId: 0 }).catch(() => null),
+        new Promise((resolve) => setTimeout(() => resolve(null), 650))
+      ]);
       if (shihabDomReply && shihabDomReply.shihabVideoTitle) {
         mehediCaption = shihabDomReply.shihabVideoTitle;
       }
@@ -1196,7 +1203,10 @@ async function mehediEnrichStreamDisplayNamesForTab(shihabTabId) {
       : (shihabEntry.shihabResolution || (shihabEntry.shihabExt === "m3u8" ? "HLS" : "HD"));
     const shihabBadgeText = `${mehediFmtUpper} ${mehediQualText}`;
 
-    const mehediRawUrlLeaf = decodeURIComponent((shihabEntry.shihabStreamUrl.split("?")[0].split("/").pop() || ""));
+    let mehediRawUrlLeaf = shihabEntry.shihabStreamUrl.split("?")[0].split("/").pop() || "";
+    try {
+      mehediRawUrlLeaf = decodeURIComponent(mehediRawUrlLeaf);
+    } catch (_) {}
     let shihabCleanStem = "";
     if (!shihabIsGibberishOrCdnFileName(mehediRawUrlLeaf) && mehediRawUrlLeaf.includes(".")) {
       shihabCleanStem = mehediRawUrlLeaf.replace(/\.[a-z0-9]{2,5}$/i, "");
@@ -1335,6 +1345,49 @@ function shihabPushUpdatedStreamsToTab(mehediTabId) {
   }).catch(() => {});
 }
 
+function shihabSendNativeMessageWithTimeout(shihabPayload, mehediTimeoutMs) {
+  const shihabLimit = Math.max(500, Number(mehediTimeoutMs || 2500));
+  return new Promise((shihabResolve) => {
+    let shihabSettled = false;
+    const shihabTimer = setTimeout(() => {
+      if (!shihabSettled) {
+        shihabSettled = true;
+        shihabResolve(null);
+      }
+    }, shihabLimit);
+    try {
+      const mehediCall = chrome.runtime.sendNativeMessage(MEHEDI_NATIVE_HOST_NAME, shihabPayload);
+      if (mehediCall && typeof mehediCall.then === "function") {
+        mehediCall.then((shihabReply) => {
+          if (!shihabSettled) {
+            shihabSettled = true;
+            clearTimeout(shihabTimer);
+            shihabResolve(shihabReply || null);
+          }
+        }).catch(() => {
+          if (!shihabSettled) {
+            shihabSettled = true;
+            clearTimeout(shihabTimer);
+            shihabResolve(null);
+          }
+        });
+      } else {
+        if (!shihabSettled) {
+          shihabSettled = true;
+          clearTimeout(shihabTimer);
+          shihabResolve(null);
+        }
+      }
+    } catch (_) {
+      if (!shihabSettled) {
+        shihabSettled = true;
+        clearTimeout(shihabTimer);
+        shihabResolve(null);
+      }
+    }
+  });
+}
+
 async function mehediEnsureBridgeToken(shihabForceRefresh) {
   if (!shihabForceRefresh && shihabRuntimeState.shihabBridgeAuthToken) {
     return shihabRuntimeState.shihabBridgeAuthToken;
@@ -1344,9 +1397,7 @@ async function mehediEnsureBridgeToken(shihabForceRefresh) {
   }
   const mehediPromise = (async () => {
     try {
-      const shihabReply = await chrome.runtime.sendNativeMessage(MEHEDI_NATIVE_HOST_NAME, {
-        action: "get-bridge-token"
-      });
+      const shihabReply = await shihabSendNativeMessageWithTimeout({ action: "get-bridge-token" }, 2200);
       if (shihabReply && shihabReply.ok && typeof shihabReply.token === "string" && shihabReply.token) {
         shihabRuntimeState.shihabBridgeAuthToken = shihabReply.token;
         return shihabReply.token;
@@ -1372,68 +1423,69 @@ function shihabBuildBridgeRequestHeaders(mehediBaseHeaders, mehediToken) {
   return shihabHdrs;
 }
 
-async function mehediAuthenticatedBridgeFetch(shihabPathAndQuery, mehediFetchOptions) {
-  const shihabCleanPath = String(shihabPathAndQuery || "").split("?")[0].toLowerCase();
-  const mehediNeedsAuth = shihabCleanPath !== "/shihab/ping" && shihabCleanPath !== "/";
+async function mehediAuthenticatedBridgeFetch(shihabPathAndQuery, mehediFetchOptions, mehediTimeoutMs) {
+  const shihabHttpTimeout = Math.max(800, Number(mehediTimeoutMs || 1800));
+  const mehediRunFetchOnce = async (shihabToken) => {
+    const mehediController = new AbortController();
+    const shihabTimer = setTimeout(() => mehediController.abort(), shihabHttpTimeout);
+    try {
+      const shihabOpts = Object.assign({}, mehediFetchOptions || {});
+      shihabOpts.headers = shihabBuildBridgeRequestHeaders(mehediFetchOptions ? mehediFetchOptions.headers : null, shihabToken);
+      shihabOpts.signal = mehediController.signal;
+      return await fetch(SHIHAB_BRIDGE_BASE_URL + shihabPathAndQuery, shihabOpts);
+    } finally {
+      clearTimeout(shihabTimer);
+    }
+  };
+
+  // Send immediately with cached token (pinned Chromium extension Origin is accepted without waiting on Native Host).
   let shihabToken = shihabRuntimeState.shihabBridgeAuthToken || "";
-  if (mehediNeedsAuth && !shihabToken) {
-    shihabToken = await mehediEnsureBridgeToken(false);
-  }
-  const shihabOpts = Object.assign({}, mehediFetchOptions || {});
-  shihabOpts.headers = shihabBuildBridgeRequestHeaders(shihabOpts.headers, shihabToken);
-  let mehediResp = await fetch(SHIHAB_BRIDGE_BASE_URL + shihabPathAndQuery, shihabOpts);
+  let mehediResp = await mehediRunFetchOnce(shihabToken);
   if (mehediResp.status === 401) {
     const shihabFreshToken = await mehediEnsureBridgeToken(true);
     if (shihabFreshToken) {
-      const shihabRetryOpts = Object.assign({}, mehediFetchOptions || {});
-      shihabRetryOpts.headers = shihabBuildBridgeRequestHeaders(
-        mehediFetchOptions ? mehediFetchOptions.headers : null,
-        shihabFreshToken
-      );
-      mehediResp = await fetch(SHIHAB_BRIDGE_BASE_URL + shihabPathAndQuery, shihabRetryOpts);
+      mehediResp = await mehediRunFetchOnce(shihabFreshToken);
     }
   }
   return mehediResp;
 }
 
-async function mehediCallDesktopBridge(shihabEndpoint, mehediMethod, shihabPayloadObj) {
+async function mehediCallDesktopBridge(shihabEndpoint, mehediMethod, shihabPayloadObj, mehediTimeoutMs) {
   try {
-    const mehediController = new AbortController();
-    const shihabTimer = setTimeout(() => mehediController.abort(), 1800);
     const mehediFetchOpts = {
       method: mehediMethod || "GET",
-      headers: { "Content-Type": "application/json" },
-      signal: mehediController.signal
+      headers: { "Content-Type": "application/json" }
     };
     if (shihabPayloadObj && mehediMethod === "POST") {
       mehediFetchOpts.body = JSON.stringify(shihabPayloadObj);
     }
-    try {
-      const shihabResp = await mehediAuthenticatedBridgeFetch(shihabEndpoint, mehediFetchOpts);
-      if (shihabResp.ok) {
-        return await shihabResp.json();
-      }
-      if (shihabResp.status !== 401) {
-        return null;
-      }
-    } finally {
-      clearTimeout(shihabTimer);
+    const shihabResp = await mehediAuthenticatedBridgeFetch(shihabEndpoint, mehediFetchOpts, mehediTimeoutMs || 1800);
+    if (shihabResp.ok) {
+      return await shihabResp.json();
+    }
+    if (shihabResp.status !== 401) {
+      return null;
     }
   } catch (shihabHttpErr) {
-    // Fall through to Native Messaging host when local HTTP loopback is offline
+    // Fall through to Native Messaging host only for explicit user actions (never passive pings/relay polls)
   }
 
-  if (shihabEndpoint === "/shihab/relay-jobs" || String(shihabEndpoint).startsWith("/shihab/relay-")) {
+  if (shihabEndpoint === "/shihab/relay-jobs" || String(shihabEndpoint).startsWith("/shihab/relay-") || shihabEndpoint === "/shihab/ping") {
     return null;
   }
-  if (shihabEndpoint === "/shihab/capture" || shihabEndpoint === "/shihab/capture-batch" || shihabEndpoint === "/shihab/ping") {
+  if (
+    shihabEndpoint === "/shihab/capture" ||
+    shihabEndpoint === "/shihab/capture-batch" ||
+    shihabEndpoint === "/shihab/show" ||
+    shihabEndpoint === "/shihab/open-updater"
+  ) {
     try {
       const mehediNativeReq = shihabEndpoint === "/shihab/capture"
         ? { action: "capture", capture: shihabPayloadObj }
         : (shihabEndpoint === "/shihab/capture-batch"
           ? { action: "capture-batch", batch: shihabPayloadObj }
-          : { action: "ping" });
-      const shihabNativeReply = await chrome.runtime.sendNativeMessage(MEHEDI_NATIVE_HOST_NAME, mehediNativeReq);
+          : (shihabEndpoint === "/shihab/open-updater" ? { action: "open-updater" } : { action: "show" }));
+      const shihabNativeReply = await shihabSendNativeMessageWithTimeout(mehediNativeReq, 4800);
       if (shihabNativeReply && shihabNativeReply.ok) {
         return shihabNativeReply;
       }
@@ -1441,6 +1493,8 @@ async function mehediCallDesktopBridge(shihabEndpoint, mehediMethod, shihabPaylo
   }
   return null;
 }
+
+let shihabConfigSyncInFlight = null;
 
 const SHIHAB_CAPTURE_OPENED_DNR_RULE_ID = 45779;
 
@@ -1479,56 +1533,77 @@ async function shihabSyncDeclarativeCaptureOpenedFilesRule() {
 
 async function shihabSyncDesktopConfiguration(mehediAllowRecentCache) {
   if (mehediAllowRecentCache && shihabRuntimeState.mehediDesktopOnline && (Date.now() - shihabRuntimeState.shihabLastConfigSyncMs) < 2500) {
-    return { ok: true, integrationEnabled: shihabRuntimeState.shihabIntegrationEnabled };
+    return {
+      ok: true,
+      integrationEnabled: shihabRuntimeState.shihabIntegrationEnabled,
+      version: shihabRuntimeState.shihabLastBridgeVersion || "",
+      panelMiniMode: Boolean(shihabRuntimeState.shihabPanelMiniMode),
+      preventKey: shihabRuntimeState.shihabPreventKey || "Alt",
+      forceKey: shihabRuntimeState.mehediForceKey || "Ins"
+    };
   }
-  const mehediReply = await mehediCallDesktopBridge("/shihab/ping", "GET", null);
-  if (mehediReply && mehediReply.ok) {
-    shihabRuntimeState.mehediDesktopOnline = true;
-    shihabRuntimeState.shihabLastConfigSyncMs = Date.now();
-    shihabRuntimeState.shihabIntegrationEnabled = mehediReply.integrationEnabled !== false;
-    shihabRuntimeState.mehediShowVideoPanel = mehediReply.showVideoPanel !== false;
-    shihabRuntimeState.shihabPanelMiniMode = Boolean(mehediReply.panelMiniMode);
-    shihabRuntimeState.mehediPanelSkipAutoStart = Boolean(mehediReply.panelSkipAutoStart);
-    shihabRuntimeState.shihabPreventKey = mehediReply.preventKey || "Alt";
-    shihabRuntimeState.mehediForceKey = mehediReply.forceKey || "Ins";
-    shihabRuntimeState.shihabMinVideoSizeKb = Number(mehediReply.minVideoSizeKb || 250);
-    shihabRuntimeState.shihabCaptureOpenedFiles = Boolean(mehediReply.captureOpenedFiles);
-    shihabRuntimeState.mehediCaptureMinSizeKb = Number(mehediReply.captureMinSizeKb || 0);
-    if (typeof mehediReply.contextMenuItems === "string" && mehediReply.contextMenuItems !== shihabRuntimeState.shihabContextMenuItemsCsv) {
-      shihabRuntimeState.shihabContextMenuItemsCsv = mehediReply.contextMenuItems;
-      mehediInstallContextMenus(mehediReply.contextMenuItems);
-    }
-    shihabApplyExtensionSpec(mehediReply.autoCaptureExtensions);
-    const shihabMergedExcluded = new Set(String(mehediReply.excludedSites || "").split(/\s+/).filter(Boolean));
-    for (const mehediLocalSite of shihabRuntimeState.shihabLocalExcludedSites) {
-      if (mehediLocalSite) shihabMergedExcluded.add(mehediLocalSite);
-    }
-    shihabRuntimeState.shihabExcludedPatterns = Array.from(shihabMergedExcluded);
-    shihabRuntimeState.mehediExcludedAddressPatterns = String(mehediReply.excludedAddresses || "").split(/\s+/).filter(Boolean);
-    chrome.storage.local.set({ mehediShowVideoPanelPref: shihabRuntimeState.mehediShowVideoPanel }).catch(() => {});
-    if (!shihabRuntimeState.shihabBridgeAuthToken) {
-      mehediEnsureBridgeToken(false).catch(() => {});
-    }
-    if (mehediReply.updateAvailable && mehediReply.latestVersion) {
-      const bridgeLatestNorm = shihabNormalizeVersion(mehediReply.latestVersion);
-      if (shihabCompareVersions(bridgeLatestNorm, shihabRuntimeState.shihabUpdateState.latestVersion) > 0) {
-        shihabRuntimeState.shihabUpdateState.latestVersion = bridgeLatestNorm;
-        if (mehediReply.latestHtmlUrl && /^https:\/\/github\.com\//i.test(mehediReply.latestHtmlUrl)) {
-          shihabRuntimeState.shihabUpdateState.latestHtmlUrl = mehediReply.latestHtmlUrl;
-        }
-        shihabPersistStoredUpdateState();
-        shihabNotifyActiveTabAboutUpdate(shihabComputeEffectiveUpdateNotice(mehediReply)).catch(() => {});
+  if (shihabConfigSyncInFlight) {
+    return shihabConfigSyncInFlight;
+  }
+  const shihabSyncPromise = (async () => {
+    const mehediReply = await mehediCallDesktopBridge("/shihab/ping", "GET", null, 1500);
+    if (mehediReply && mehediReply.ok) {
+      shihabRuntimeState.mehediDesktopOnline = true;
+      shihabRuntimeState.shihabLastConfigSyncMs = Date.now();
+      shihabRuntimeState.shihabLastBridgeVersion = mehediReply.version || shihabRuntimeState.shihabLastBridgeVersion || "";
+      shihabRuntimeState.shihabIntegrationEnabled = mehediReply.integrationEnabled !== false;
+      shihabRuntimeState.mehediShowVideoPanel = mehediReply.showVideoPanel !== false;
+      shihabRuntimeState.shihabPanelMiniMode = Boolean(mehediReply.panelMiniMode);
+      shihabRuntimeState.mehediPanelSkipAutoStart = Boolean(mehediReply.panelSkipAutoStart);
+      shihabRuntimeState.shihabPreventKey = mehediReply.preventKey || "Alt";
+      shihabRuntimeState.mehediForceKey = mehediReply.forceKey || "Ins";
+      shihabRuntimeState.shihabMinVideoSizeKb = Number(mehediReply.minVideoSizeKb || 250);
+      shihabRuntimeState.shihabCaptureOpenedFiles = Boolean(mehediReply.captureOpenedFiles);
+      shihabRuntimeState.mehediCaptureMinSizeKb = Number(mehediReply.captureMinSizeKb || 0);
+      if (typeof mehediReply.contextMenuItems === "string" && mehediReply.contextMenuItems !== shihabRuntimeState.shihabContextMenuItemsCsv) {
+        shihabRuntimeState.shihabContextMenuItemsCsv = mehediReply.contextMenuItems;
+        mehediInstallContextMenus(mehediReply.contextMenuItems);
       }
+      shihabApplyExtensionSpec(mehediReply.autoCaptureExtensions);
+      const shihabMergedExcluded = new Set(String(mehediReply.excludedSites || "").split(/\s+/).filter(Boolean));
+      for (const mehediLocalSite of shihabRuntimeState.shihabLocalExcludedSites) {
+        if (mehediLocalSite) shihabMergedExcluded.add(mehediLocalSite);
+      }
+      shihabRuntimeState.shihabExcludedPatterns = Array.from(shihabMergedExcluded);
+      shihabRuntimeState.mehediExcludedAddressPatterns = String(mehediReply.excludedAddresses || "").split(/\s+/).filter(Boolean);
+      chrome.storage.local.set({ mehediShowVideoPanelPref: shihabRuntimeState.mehediShowVideoPanel }).catch(() => {});
+      if (!shihabRuntimeState.shihabBridgeAuthToken) {
+        mehediEnsureBridgeToken(false).catch(() => {});
+      }
+      if (mehediReply.updateAvailable && mehediReply.latestVersion) {
+        const bridgeLatestNorm = shihabNormalizeVersion(mehediReply.latestVersion);
+        if (shihabCompareVersions(bridgeLatestNorm, shihabRuntimeState.shihabUpdateState.latestVersion) > 0) {
+          shihabRuntimeState.shihabUpdateState.latestVersion = bridgeLatestNorm;
+          if (mehediReply.latestHtmlUrl && /^https:\/\/github\.com\//i.test(mehediReply.latestHtmlUrl)) {
+            shihabRuntimeState.shihabUpdateState.latestHtmlUrl = mehediReply.latestHtmlUrl;
+          }
+          shihabPersistStoredUpdateState();
+          shihabNotifyActiveTabAboutUpdate(shihabComputeEffectiveUpdateNotice(mehediReply)).catch(() => {});
+        }
+      }
+      if (!shihabRelayPollTimer) {
+        shihabScheduleNextRelayPoll(3500);
+      }
+    } else {
+      shihabRuntimeState.mehediDesktopOnline = false;
     }
-    if (!shihabRelayPollTimer) {
-      shihabScheduleNextRelayPoll(3500);
+    await shihabSyncDeclarativeCaptureOpenedFilesRule();
+    mehediUpdateToolbarBadgeForTab(null);
+    return mehediReply;
+  })();
+  shihabConfigSyncInFlight = shihabSyncPromise;
+  try {
+    return await shihabSyncPromise;
+  } finally {
+    if (shihabConfigSyncInFlight === shihabSyncPromise) {
+      shihabConfigSyncInFlight = null;
     }
-  } else {
-    shihabRuntimeState.mehediDesktopOnline = false;
   }
-  await shihabSyncDeclarativeCaptureOpenedFilesRule();
-  mehediUpdateToolbarBadgeForTab(null);
-  return mehediReply;
 }
 
 async function shihabInjectContentScriptIntoExistingTabs() {
@@ -1588,16 +1663,17 @@ try {
   });
 } catch (_) {}
 
-try {
-  chrome.storage.local.get(["shihabPairedServers", "shihabActiveServerId"], (stored) => {
+const shihabServersReadyPromise = (async () => {
+  try {
+    const stored = await chrome.storage.local.get(["shihabPairedServers", "shihabActiveServerId"]);
     if (stored && Array.isArray(stored.shihabPairedServers)) {
       shihabRuntimeState.shihabPairedServers = stored.shihabPairedServers.filter((s) => s && s.id && s.baseUrl && s.token);
     }
     if (stored && typeof stored.shihabActiveServerId === "string" && stored.shihabActiveServerId) {
       shihabRuntimeState.shihabActiveServerId = stored.shihabActiveServerId;
     }
-  });
-} catch (_) {}
+  } catch (_) {}
+})();
 
 function shihabGetActiveRemoteServer() {
   if (!shihabRuntimeState.shihabActiveServerId || shihabRuntimeState.shihabActiveServerId === "local") {
@@ -1657,8 +1733,13 @@ async function shihabDispatchSingleUrlToDesktop(mehediCaptureParams) {
   }
 
   const shihabIncog = shihabIsTabIncognito(mehediCaptureParams.shihabTabId, mehediCaptureParams.shihabIncognito);
-  const shihabCacheKey = shihabScopedCacheKey(shihabUrl, shihabIncog);
-  const mehediHdrInfo = shihabIsHttp ? (shihabRuntimeState.shihabRequestHeadersByUrl.get(shihabCacheKey) || null) : null;
+  const shihabNormUrlForKey = shihabIsHttp ? shihabNormalizeMediaStreamUrl(shihabUrl).shihabCleanUrl : shihabUrl;
+  const shihabCacheKey = shihabScopedCacheKey(shihabNormUrlForKey, shihabIncog);
+  const shihabRawCacheKey = shihabScopedCacheKey(shihabUrl, shihabIncog);
+  const mehediHdrInfo = shihabIsHttp
+    ? (shihabRuntimeState.shihabRequestHeadersByUrl.get(shihabCacheKey) ||
+       shihabRuntimeState.shihabRequestHeadersByUrl.get(shihabRawCacheKey) || null)
+    : null;
   const shihabUrlMeta = shihabIsHttp
     ? mehediInspectUrlQueryMetadata(shihabUrl)
     : { mehediIsGoogleVideo: false, shihabExtOverride: "", shihabClenBytes: -1, shihabResolution: "" };
@@ -1673,8 +1754,11 @@ async function shihabDispatchSingleUrlToDesktop(mehediCaptureParams) {
   }
 
   // If a paired remote MDM server is selected in the popup, dispatch directly to it!
+  await shihabServersReadyPromise;
   const shihabRemoteSrv = shihabGetActiveRemoteServer();
   if (shihabRemoteSrv) {
+    const shihabRemCtl = new AbortController();
+    const shihabRemTimer = setTimeout(() => shihabRemCtl.abort(), 6000);
     try {
       const mehediBase = String(shihabRemoteSrv.baseUrl || "").replace(/\/+$/, "");
       const shihabRemResp = await fetch(`${mehediBase}/api/add`, {
@@ -1683,6 +1767,7 @@ async function shihabDispatchSingleUrlToDesktop(mehediCaptureParams) {
           "Content-Type": "application/json",
           "Authorization": `Bearer ${shihabRemoteSrv.token}`
         },
+        signal: shihabRemCtl.signal,
         body: JSON.stringify({
           url: shihabUrl,
           fileName: mehediResolvedFileName,
@@ -1692,6 +1777,8 @@ async function shihabDispatchSingleUrlToDesktop(mehediCaptureParams) {
       return Boolean(shihabRemResp && shihabRemResp.ok);
     } catch (_) {
       return false;
+    } finally {
+      clearTimeout(shihabRemTimer);
     }
   }
 
@@ -1947,6 +2034,9 @@ function shihabKickRelayPollerSoon() {
 
 shihabScheduleNextRelayPoll(1200);
 
+let shihabContextMenuQueue = Promise.resolve();
+let shihabContextMenuGen = 0;
+
 function mehediInstallContextMenus(customCsv) {
   const rawCsv = typeof customCsv === "string" ? customCsv : shihabRuntimeState.shihabContextMenuItemsCsv;
   const csvLower = String(rawCsv || "").toLowerCase();
@@ -1954,35 +2044,59 @@ function mehediInstallContextMenus(customCsv) {
   const showSingle = !hasFilter || csvLower.includes("download with mhs") || csvLower.includes("download video");
   const showAll = !hasFilter || csvLower.includes("all links");
   const showSelected = !hasFilter || csvLower.includes("selected") || csvLower.includes("all links");
+  const myGen = ++shihabContextMenuGen;
 
-  chrome.contextMenus.removeAll(() => {
-    if (showSingle) {
-      chrome.contextMenus.create({
-        id: "shihab_download_single_link",
-        title: "Download with MHS Download Manager",
-        contexts: ["link", "video", "audio", "image"]
-      });
+  shihabContextMenuQueue = shihabContextMenuQueue.then(() => new Promise((resolve) => {
+    if (myGen !== shihabContextMenuGen) {
+      resolve();
+      return;
     }
-    if (showAll) {
-      chrome.contextMenus.create({
-        id: "mehedi_download_all_links",
-        title: "Download all links with MHS Download Manager",
-        contexts: ["page", "frame"]
+    const safeCreate = (opts) => {
+      try {
+        chrome.contextMenus.create(opts, () => {
+          void chrome.runtime.lastError;
+        });
+      } catch (_) {}
+    };
+    try {
+      chrome.contextMenus.removeAll(() => {
+        void chrome.runtime.lastError;
+        if (myGen !== shihabContextMenuGen) {
+          resolve();
+          return;
+        }
+        if (showSingle) {
+          safeCreate({
+            id: "shihab_download_single_link",
+            title: "Download with MHS Download Manager",
+            contexts: ["link", "video", "audio", "image"]
+          });
+        }
+        if (showAll) {
+          safeCreate({
+            id: "mehedi_download_all_links",
+            title: "Download all links with MHS Download Manager",
+            contexts: ["page", "frame"]
+          });
+        }
+        if (showSelected) {
+          safeCreate({
+            id: "shihab_download_selected_links",
+            title: "Download selected links with MHS Download Manager",
+            contexts: ["selection"]
+          });
+        }
+        safeCreate({
+          id: "shihab_exclude_current_site",
+          title: "Never capture downloads from this site",
+          contexts: ["page", "frame"]
+        });
+        resolve();
       });
+    } catch (_) {
+      resolve();
     }
-    if (showSelected) {
-      chrome.contextMenus.create({
-        id: "shihab_download_selected_links",
-        title: "Download selected links with MHS Download Manager",
-        contexts: ["selection"]
-      });
-    }
-    chrome.contextMenus.create({
-      id: "shihab_exclude_current_site",
-      title: "Never capture downloads from this site",
-      contexts: ["page", "frame"]
-    });
-  });
+  }));
 }
 
 let shihabInitialDownloadsSeedPromise = null;
@@ -2034,19 +2148,19 @@ function mehediRecordTrustedUserGesture(shihabTabId, mehediPageUrl, shihabClicke
   shihabRuntimeState.mehediBrowserStartupUntilMs = 0;
 
   if (typeof shihabTabId === "number" && shihabTabId >= 0) {
-    shihabRuntimeState.mehediTrustedGestureUntilByTab.set(shihabTabId, mehediNow + 15000);
+    shihabRuntimeState.mehediTrustedGestureUntilByTab.set(shihabTabId, mehediNow + 30000);
   }
   for (const shihabCandidateUrl of [mehediPageUrl, shihabClickedHref]) {
     if (!shihabCandidateUrl || typeof shihabCandidateUrl !== "string") continue;
     try {
       const mehediHost = new URL(shihabCandidateUrl).hostname.toLowerCase();
       if (mehediHost) {
-        shihabRuntimeState.mehediTrustedGestureByHost.set(mehediHost, mehediNow + 15000);
+        shihabRuntimeState.mehediTrustedGestureByHost.set(mehediHost, mehediNow + 30000);
       }
     } catch (_) {}
   }
   if (shihabClickedHref && (shihabClickedHref.startsWith("http://") || shihabClickedHref.startsWith("https://"))) {
-    shihabRuntimeState.mehediTrustedClickedUrls.set(shihabClickedHref, mehediNow + 30000);
+    shihabRuntimeState.mehediTrustedClickedUrls.set(shihabClickedHref, mehediNow + 45000);
   }
   shihabPersistSessionDownloadState();
 }
@@ -2100,7 +2214,9 @@ async function mehediInitializeDownloadSessionGuard(shihabForceFreshBrowserBoot)
   }
 
   if (shihabIsFreshBrowserLaunch) {
-    shihabRuntimeState.mehediBrowserStartupUntilMs = Date.now() + 10000;
+    // Only apply the 10s browser-boot suppression on actual browser startup (onStartup),
+    // NOT on extension reload / update / SW wake where user clicks happen immediately!
+    shihabRuntimeState.mehediBrowserStartupUntilMs = shihabForceFreshBrowserBoot ? (Date.now() + 10000) : 0;
     shihabRuntimeState.mehediHasTrustedClickInSession = false;
     shihabRuntimeState.mehediTrustedGestureUntilByTab.clear();
     shihabRuntimeState.mehediTrustedGestureByHost.clear();
@@ -2244,12 +2360,17 @@ chrome.contextMenus.onClicked.addListener(async (shihabInfo, mehediTab) => {
       (shihabInfo.menuItemId === "mehedi_download_all_links" || shihabInfo.menuItemId === "shihab_download_selected_links")) {
     const mehediSelectionOnly = shihabInfo.menuItemId === "shihab_download_selected_links";
     try {
-      const shihabResponse = await chrome.tabs.sendMessage(mehediTab.id, {
-        shihabCmd: "mehedi_collect_page_links",
-        mehediSelectionOnly: mehediSelectionOnly
-      });
+      const shihabResponse = await chrome.tabs.sendMessage(
+        mehediTab.id,
+        {
+          shihabCmd: "mehedi_collect_page_links",
+          mehediSelectionOnly: mehediSelectionOnly
+        },
+        { frameId: 0 }
+      );
       if (shihabResponse && Array.isArray(shihabResponse.shihabLinks) && shihabResponse.shihabLinks.length > 0) {
-        const mehediCookies = await mehediBuildCookieHeaderForUrl(shihabTabUrl);
+        const shihabCtxIncog = shihabIsTabIncognito(mehediTab.id, mehediTab.incognito);
+        const mehediCookies = await mehediBuildCookieHeaderForUrl(shihabTabUrl, shihabCtxIncog, mehediTab.id);
         await mehediCallDesktopBridge("/shihab/capture-batch", "POST", {
           pageUrl: shihabTabUrl,
           pageTitle: mehediTabTitle,
@@ -2336,7 +2457,7 @@ async function mehediCheckExplicitUserIntentOnce(mehediDownloadItem, shihabFinal
     // Allow cross-domain redirect downloads only if the currently active tab has a fresh explicit click
     if (
       !shihabRuntimeState.mehediHasTrustedClickInSession ||
-      (shihabNow - shihabRuntimeState.mehediLastTrustedGestureGlobalMs) >= 6000
+      (shihabNow - shihabRuntimeState.mehediLastTrustedGestureGlobalMs) >= 12000
     ) {
       return false;
     }
@@ -3235,7 +3356,7 @@ function shihabPersistStoredUpdateState() {
 }
 
 function shihabComputeEffectiveUpdateNotice(desktopPing) {
-  const manifestVer = (chrome.runtime && typeof chrome.runtime.getManifest === "function" && chrome.runtime.getManifest().version) || "1.1.0";
+  const manifestVer = (chrome.runtime && typeof chrome.runtime.getManifest === "function" && chrome.runtime.getManifest().version) || "1.1.1";
   const st = shihabRuntimeState.shihabUpdateState || {};
   let bestVer = shihabNormalizeVersion(st.latestVersion || "");
   let bestUrl = (st.latestHtmlUrl && /^https:\/\/github\.com\//i.test(st.latestHtmlUrl))
@@ -3425,15 +3546,15 @@ async function shihabResolveYouTubeStreamsViaDesktopForTab(
         (shihabVisitorData ? `&visitorData=${encodeURIComponent(shihabVisitorData)}` : "") +
         (mehediForce ? "&force=1" : "");
 
-      let mehediBridgeRes = await mehediCallDesktopBridge(shihabYtQuery, "GET", null);
+      let mehediBridgeRes = await mehediCallDesktopBridge(shihabYtQuery, "GET", null, 3500);
       if (!mehediBridgeRes) {
-        // Fallback to Native Messaging stdio if mdm.exe wasn't open yet
+        // Bounded fallback to Native Messaging stdio if local HTTP is not reachable
         try {
-          mehediBridgeRes = await chrome.runtime.sendNativeMessage(MEHEDI_NATIVE_HOST_NAME, {
+          mehediBridgeRes = await shihabSendNativeMessageWithTimeout({
             action: "yt-streams",
             videoId: shihabVideoId,
             visitorData: shihabVisitorData || ""
-          });
+          }, 4500);
         } catch (_) {}
       }
 
@@ -3641,8 +3762,9 @@ chrome.runtime.onMessage.addListener((shihabMsg, mehediSender, shihabSendRespons
 
   if (shihabMsg && shihabMsg.shihabCmd === "shihab_query_tab_streams") {
     const shihabTargetTabId = typeof shihabMsg.mehediTabId === "number" ? shihabMsg.mehediTabId : mehediTabId;
+    const shihabAllowCachedSync = shihabMsg.shihabForceBridgeSync ? false : true;
     (async () => {
-      const mehediPing = await shihabSyncDesktopConfiguration();
+      const mehediPing = await shihabSyncDesktopConfiguration(shihabAllowCachedSync);
       shihabCheckLatestReleaseFromGitHubWeb(false).catch(() => {});
       await mehediEnsureYouTubeTabResolvedIfApplicable(shihabTargetTabId, false);
       const shihabEnrichedStreams = await mehediEnrichStreamDisplayNamesForTab(shihabTargetTabId);
@@ -3691,6 +3813,11 @@ chrome.runtime.onMessage.addListener((shihabMsg, mehediSender, shihabSendRespons
       shihabSendResponse({
         ok: shihabSentOk,
         mehediError: shihabSentOk ? "" : "Launch mdm.exe (MHS Download Manager) first to receive downloads."
+      });
+    }).catch(() => {
+      shihabSendResponse({
+        ok: false,
+        mehediError: "Launch mdm.exe (MHS Download Manager) first to receive downloads."
       });
     });
     return true;
@@ -3769,19 +3896,23 @@ chrome.runtime.onMessage.addListener((shihabMsg, mehediSender, shihabSendRespons
 
   if (shihabMsg && shihabMsg.shihabCmd === "shihab_open_updater") {
     (async () => {
-      const ack = await mehediCallDesktopBridge("/shihab/open-updater", "POST", {}).catch(() => null);
-      if (ack && ack.ok) {
-        shihabSendResponse({ ok: true, openedDesktop: true });
-        return;
+      try {
+        const ack = await mehediCallDesktopBridge("/shihab/open-updater", "POST", {}).catch(() => null);
+        if (ack && ack.ok) {
+          shihabSendResponse({ ok: true, openedDesktop: true });
+          return;
+        }
+        const notice = shihabComputeEffectiveUpdateNotice(null);
+        const targetUrl = (shihabMsg.latestHtmlUrl && /^https:\/\/github\.com\//i.test(shihabMsg.latestHtmlUrl))
+          ? shihabMsg.latestHtmlUrl
+          : notice.latestHtmlUrl;
+        if (targetUrl && /^https:\/\/github\.com\//i.test(targetUrl)) {
+          chrome.tabs.create({ url: targetUrl }).catch(() => {});
+        }
+        shihabSendResponse({ ok: true, openedDesktop: false });
+      } catch (_) {
+        shihabSendResponse({ ok: false, openedDesktop: false });
       }
-      const notice = shihabComputeEffectiveUpdateNotice(null);
-      const targetUrl = (shihabMsg.latestHtmlUrl && /^https:\/\/github\.com\//i.test(shihabMsg.latestHtmlUrl))
-        ? shihabMsg.latestHtmlUrl
-        : notice.latestHtmlUrl;
-      if (targetUrl && /^https:\/\/github\.com\//i.test(targetUrl)) {
-        chrome.tabs.create({ url: targetUrl }).catch(() => {});
-      }
-      shihabSendResponse({ ok: true, openedDesktop: false });
     })();
     return true;
   }
@@ -3800,38 +3931,51 @@ chrome.runtime.onMessage.addListener((shihabMsg, mehediSender, shihabSendRespons
 
   if (shihabMsg && shihabMsg.shihabCmd === "shihab_toggle_integration") {
     mehediCallDesktopBridge("/shihab/toggle", "POST", {}).then(() => {
-      return shihabSyncDesktopConfiguration();
+      return shihabSyncDesktopConfiguration(false);
     }).then((mehediStatus) => {
       shihabSendResponse({ ok: Boolean(mehediStatus), status: mehediStatus });
+    }).catch(() => {
+      shihabSendResponse({ ok: false, status: null });
     });
     return true;
   }
 
   if (shihabMsg && shihabMsg.shihabCmd === "shihab_get_servers_state") {
-    shihabSendResponse({
-      ok: true,
-      activeServerId: shihabRuntimeState.shihabActiveServerId || "local",
-      servers: shihabRuntimeState.shihabPairedServers.map((s) => ({
-        id: s.id,
-        name: s.name,
-        baseUrl: s.baseUrl
-      }))
+    shihabServersReadyPromise.then(() => {
+      shihabSendResponse({
+        ok: true,
+        activeServerId: shihabRuntimeState.shihabActiveServerId || "local",
+        servers: shihabRuntimeState.shihabPairedServers.map((s) => ({
+          id: s.id,
+          name: s.name,
+          baseUrl: s.baseUrl
+        }))
+      });
+    }).catch(() => {
+      shihabSendResponse({ ok: true, activeServerId: "local", servers: [] });
     });
-    return false;
+    return true;
   }
 
   if (shihabMsg && shihabMsg.shihabCmd === "shihab_set_active_server") {
-    const nextId = String(shihabMsg.serverId || "local");
-    const valid = nextId === "local" || shihabRuntimeState.shihabPairedServers.some((s) => s.id === nextId);
-    shihabRuntimeState.shihabActiveServerId = valid ? nextId : "local";
-    chrome.storage.local.set({ shihabActiveServerId: shihabRuntimeState.shihabActiveServerId }).catch(() => {});
-    shihabSendResponse({ ok: true, activeServerId: shihabRuntimeState.shihabActiveServerId });
-    return false;
+    shihabServersReadyPromise.then(() => {
+      const nextId = String(shihabMsg.serverId || "local");
+      const valid = nextId === "local" || shihabRuntimeState.shihabPairedServers.some((s) => s.id === nextId);
+      shihabRuntimeState.shihabActiveServerId = valid ? nextId : "local";
+      chrome.storage.local.set({ shihabActiveServerId: shihabRuntimeState.shihabActiveServerId }).catch(() => {});
+      shihabSendResponse({ ok: true, activeServerId: shihabRuntimeState.shihabActiveServerId });
+    }).catch(() => {
+      shihabSendResponse({ ok: false, activeServerId: "local" });
+    });
+    return true;
   }
 
   if (shihabMsg && shihabMsg.shihabCmd === "shihab_pair_remote_server") {
     (async () => {
+      const shihabPairCtl = new AbortController();
+      const shihabPairTimer = setTimeout(() => shihabPairCtl.abort(), 6000);
       try {
+        await shihabServersReadyPromise;
         const rawUrl = String(shihabMsg.baseUrl || "").trim().replace(/\/+$/, "");
         const code = String(shihabMsg.code || "").trim();
         const label = String(shihabMsg.name || "").trim();
@@ -3842,6 +3986,7 @@ chrome.runtime.onMessage.addListener((shihabMsg, mehediSender, shihabSendRespons
         const pairResp = await fetch(`${rawUrl}/api/pair`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          signal: shihabPairCtl.signal,
           body: JSON.stringify({ code: code, name: label || "MHS Browser Extension" })
         });
         const pairJson = await pairResp.json().catch(() => null);
@@ -3864,30 +4009,36 @@ chrome.runtime.onMessage.addListener((shihabMsg, mehediSender, shihabSendRespons
         shihabSendResponse({ ok: true, server: { id: entry.id, name: entry.name, baseUrl: entry.baseUrl } });
       } catch (err) {
         shihabSendResponse({ ok: false, error: (err && err.message) || "Cannot reach remote MDM server." });
+      } finally {
+        clearTimeout(shihabPairTimer);
       }
     })();
     return true;
   }
 
   if (shihabMsg && shihabMsg.shihabCmd === "shihab_unpair_remote_server") {
-    const delId = String(shihabMsg.serverId || "");
-    shihabRuntimeState.shihabPairedServers = shihabRuntimeState.shihabPairedServers.filter((s) => s.id !== delId);
-    if (shihabRuntimeState.shihabActiveServerId === delId) {
-      shihabRuntimeState.shihabActiveServerId = "local";
-    }
-    chrome.storage.local.set({
-      shihabPairedServers: shihabRuntimeState.shihabPairedServers,
-      shihabActiveServerId: shihabRuntimeState.shihabActiveServerId
-    }).catch(() => {});
-    shihabSendResponse({ ok: true, activeServerId: shihabRuntimeState.shihabActiveServerId });
-    return false;
+    shihabServersReadyPromise.then(() => {
+      const delId = String(shihabMsg.serverId || "");
+      shihabRuntimeState.shihabPairedServers = shihabRuntimeState.shihabPairedServers.filter((s) => s.id !== delId);
+      if (shihabRuntimeState.shihabActiveServerId === delId) {
+        shihabRuntimeState.shihabActiveServerId = "local";
+      }
+      chrome.storage.local.set({
+        shihabPairedServers: shihabRuntimeState.shihabPairedServers,
+        shihabActiveServerId: shihabRuntimeState.shihabActiveServerId
+      }).catch(() => {});
+      shihabSendResponse({ ok: true, activeServerId: shihabRuntimeState.shihabActiveServerId });
+    }).catch(() => {
+      shihabSendResponse({ ok: false, activeServerId: "local" });
+    });
+    return true;
   }
 
   if (shihabMsg && shihabMsg.shihabCmd === "shihab_query_video_info") {
     mehediCallDesktopBridge("/shihab/video-info", "POST", {
       url: String(shihabMsg.url || ""),
       isPlaylist: Boolean(shihabMsg.isPlaylist)
-    }).then((info) => {
+    }, 20000).then((info) => {
       shihabSendResponse(info || { ok: false, error: "Desktop bridge offline" });
     }).catch(() => shihabSendResponse({ ok: false, error: "Query failed" }));
     return true;

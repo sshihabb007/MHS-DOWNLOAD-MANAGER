@@ -73,7 +73,7 @@ namespace ShihabMehediIDM
                 }
             }
             catch { }
-            return "1.1.0";
+            return "1.1.1";
         }
 
         public static string NormalizeVersionString(string rawTagOrVer)
@@ -1145,7 +1145,8 @@ namespace ShihabMehediIDM
 
                     ProcessStartInfo psi = new ProcessStartInfo(verifiedPrimaryPath, args);
                     psi.WorkingDirectory = Path.GetDirectoryName(verifiedPrimaryPath);
-                    psi.UseShellExecute = false;
+                    // UseShellExecute = true prevents child Setup.exe from inheriting any open listening socket handles (e.g. :45779).
+                    psi.UseShellExecute = true;
                     Process.Start(psi);
 
                     if (cleanExitCallback != null) cleanExitCallback();
@@ -1194,7 +1195,7 @@ namespace ShihabMehediIDM
                         currentExe,
                         ShihabProcessAndPathSafety.BuildWindowsArgumentString("--shihab-updated-from", currentVer));
                     relaunchPsi.WorkingDirectory = currentDir;
-                    relaunchPsi.UseShellExecute = false;
+                    relaunchPsi.UseShellExecute = true;
                     Process.Start(relaunchPsi);
                     return true;
                 }

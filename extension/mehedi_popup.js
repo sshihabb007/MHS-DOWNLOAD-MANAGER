@@ -33,6 +33,40 @@ document.addEventListener("DOMContentLoaded", async () => {
   const shihabHideFullscreenChk = document.getElementById("shihabHideFullscreenChk");
   let mehediLatestReleaseUrl = "";
 
+  function shihabSendRuntimeMessageBounded(shihabPayload, mehediTimeoutMs) {
+    const shihabLimit = Math.max(800, Number(mehediTimeoutMs || 3500));
+    return new Promise((shihabResolve) => {
+      let shihabDone = false;
+      const shihabTimer = setTimeout(() => {
+        if (!shihabDone) {
+          shihabDone = true;
+          shihabResolve({ __shihabTimedOut: true });
+        }
+      }, shihabLimit);
+      try {
+        chrome.runtime.sendMessage(shihabPayload).then((shihabResp) => {
+          if (!shihabDone) {
+            shihabDone = true;
+            clearTimeout(shihabTimer);
+            shihabResolve(shihabResp || null);
+          }
+        }).catch(() => {
+          if (!shihabDone) {
+            shihabDone = true;
+            clearTimeout(shihabTimer);
+            shihabResolve({ __shihabDisconnected: true });
+          }
+        });
+      } catch (_) {
+        if (!shihabDone) {
+          shihabDone = true;
+          clearTimeout(shihabTimer);
+          shihabResolve({ __shihabDisconnected: true });
+        }
+      }
+    });
+  }
+
   if (shihabHideFullscreenChk) {
     chrome.storage.local.get(["shihabHideVideoInFullscreen"], (st) => {
       shihabHideFullscreenChk.checked = Boolean(st && st.shihabHideVideoInFullscreen);
@@ -45,7 +79,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   async function mehediRefreshServersDropdown() {
     if (!shihabServerSelect) return;
     try {
-      const srvState = await chrome.runtime.sendMessage({ shihabCmd: "shihab_get_servers_state" });
+      const srvState = await shihabSendRuntimeMessageBounded({ shihabCmd: "shihab_get_servers_state" }, 2000);
       if (!srvState || !srvState.ok) return;
       shihabServerSelect.textContent = "";
       const localOpt = document.createElement("option");
@@ -68,7 +102,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (shihabServerSelect) {
     shihabServerSelect.addEventListener("change", async () => {
       const chosen = shihabServerSelect.value || "local";
-      await chrome.runtime.sendMessage({ shihabCmd: "shihab_set_active_server", serverId: chosen });
+      await shihabSendRuntimeMessageBounded({ shihabCmd: "shihab_set_active_server", serverId: chosen }, 2000);
       if (shihabUnpairBtn) shihabUnpairBtn.style.display = chosen !== "local" ? "inline-block" : "none";
     });
   }
@@ -76,7 +110,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     shihabUnpairBtn.addEventListener("click", async () => {
       const chosen = shihabServerSelect ? shihabServerSelect.value : "local";
       if (chosen && chosen !== "local") {
-        await chrome.runtime.sendMessage({ shihabCmd: "shihab_unpair_remote_server", serverId: chosen });
+        await shihabSendRuntimeMessageBounded({ shihabCmd: "shihab_unpair_remote_server", serverId: chosen }, 2000);
         await mehediRefreshServersDropdown();
       }
     });
@@ -89,11 +123,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (shihabPairSubmitBtn) {
     shihabPairSubmitBtn.addEventListener("click", async () => {
       if (shihabPairStatusMsg) shihabPairStatusMsg.textContent = "Pairing...";
-      const res = await chrome.runtime.sendMessage({
+      const res = await shihabSendRuntimeMessageBounded({
         shihabCmd: "shihab_pair_remote_server",
         baseUrl: shihabRemoteUrlInp ? shihabRemoteUrlInp.value : "",
         code: shihabRemoteCodeInp ? shihabRemoteCodeInp.value : ""
-      });
+      }, 7000);
       if (res && res.ok) {
         if (shihabPairStatusMsg) shihabPairStatusMsg.textContent = "Paired & selected!";
         if (shihabRemoteCodeInp) shihabRemoteCodeInp.value = "";
@@ -106,18 +140,27 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
   mehediRefreshServersDropdown();
 
-  const shihabTabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  let shihabTabs = [];
+  try {
+    shihabTabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  } catch (_) {}
   const mehediActiveTab = shihabTabs && shihabTabs[0] ? shihabTabs[0] : null;
   const shihabActiveTabId = mehediActiveTab ? mehediActiveTab.id : -1;
 
   async function mehediResolveIsolatedSelectedStreams(shihabFallbackStreams) {
     if (shihabActiveTabId >= 0) {
       try {
-        const mehediDomSel = await chrome.tabs.sendMessage(
-          shihabActiveTabId,
-          { shihabCmd: "mehedi_get_selected_video_streams" },
-          { frameId: 0 }
-        );
+        const mehediDomSel = await Promise.race([
+          chrome.tabs.sendMessage(
+            shihabActiveTabId,
+            {
+              shihabCmd: "mehedi_get_selected_video_streams",
+              shihabPreloadedStreams: Array.isArray(shihabFallbackStreams) ? shihabFallbackStreams : []
+            },
+            { frameId: 0 }
+          ),
+          new Promise((resolve) => setTimeout(() => resolve(null), 1200))
+        ]);
         if (mehediDomSel && mehediDomSel.ok && Array.isArray(mehediDomSel.mehediStreams) && mehediDomSel.mehediStreams.length > 0) {
           return mehediDomSel.mehediStreams;
         }
@@ -167,20 +210,23 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   async function mehediRefreshPopupState() {
-    const shihabRes = await chrome.runtime.sendMessage({
+    const shihabRes = await shihabSendRuntimeMessageBounded({
       shihabCmd: "shihab_query_tab_streams",
-      mehediTabId: shihabActiveTabId
-    });
+      mehediTabId: shihabActiveTabId,
+      shihabForceBridgeSync: true
+    }, 3500);
     mehediRenderUpdateBanner(shihabRes);
 
-    if (!shihabRes || !shihabRes.mehediOnline) {
+    if (!shihabRes || shihabRes.__shihabDisconnected || shihabRes.__shihabTimedOut || !shihabRes.mehediOnline) {
       shihabDot.classList.remove("online");
-      mehediSub.textContent = "Offline — Launch mdm.exe v1.1.0";
+      mehediSub.textContent = (shihabRes && (shihabRes.__shihabDisconnected || shihabRes.__shihabTimedOut))
+        ? "Worker busy — Reload extension or launch mdm.exe"
+        : "Offline — Launch mdm.exe v1.1.1";
       shihabToggleBtn.textContent = "Offline";
       return;
     }
 
-    const mehediBridgeVer = (shihabRes.shihabBridgeInfo && shihabRes.shihabBridgeInfo.version) || "1.1.0";
+    const mehediBridgeVer = (shihabRes.shihabBridgeInfo && shihabRes.shihabBridgeInfo.version) || "1.1.1";
     shihabDot.classList.add("online");
     mehediSub.textContent = shihabRes.shihabEnabled
       ? `Connected · mdm.exe v${mehediBridgeVer}`
@@ -273,7 +319,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   shihabToggleBtn.addEventListener("click", async () => {
-    await chrome.runtime.sendMessage({ shihabCmd: "shihab_toggle_integration" });
+    await shihabSendRuntimeMessageBounded({ shihabCmd: "shihab_toggle_integration" }, 3000);
     await mehediRefreshPopupState();
   });
 
@@ -288,20 +334,20 @@ document.addEventListener("DOMContentLoaded", async () => {
     ) {
       return;
     }
-    await chrome.runtime.sendMessage({
+    await shihabSendRuntimeMessageBounded({
       shihabCmd: "mehedi_send_download_now",
       shihabUrl: mehediVal,
       mehediReferrer: mehediActiveTab ? mehediActiveTab.url : "",
       mehediTabTitle: mehediActiveTab ? mehediActiveTab.title : "",
       shihabIncognito: Boolean(mehediActiveTab && mehediActiveTab.incognito),
       shihabTabId: shihabActiveTabId
-    });
+    }, 5500);
     window.close();
   });
 
   if (shihabOpenAppBtn) {
     shihabOpenAppBtn.addEventListener("click", async () => {
-      await chrome.runtime.sendMessage({ shihabCmd: "shihab_show_desktop_app" });
+      await shihabSendRuntimeMessageBounded({ shihabCmd: "shihab_show_desktop_app" }, 5500);
       window.close();
     });
   }
@@ -309,10 +355,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (shihabUpdateBannerBtn) {
     shihabUpdateBannerBtn.addEventListener("click", async () => {
       try {
-        await chrome.runtime.sendMessage({
+        await shihabSendRuntimeMessageBounded({
           shihabCmd: "shihab_open_updater",
           latestHtmlUrl: mehediLatestReleaseUrl || ""
-        });
+        }, 5500);
       } catch (_) {
         if (mehediLatestReleaseUrl && /^https?:\/\//i.test(mehediLatestReleaseUrl)) {
           chrome.tabs.create({ url: mehediLatestReleaseUrl }).catch(() => {});
@@ -327,10 +373,10 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (shihabActiveTabId < 0) return;
       shihabRetrackBtn.classList.add("mehedi-spin");
       try {
-        await chrome.runtime.sendMessage({
+        await shihabSendRuntimeMessageBounded({
           shihabCmd: "shihab_retrack_active_video",
           mehediTabId: shihabActiveTabId
-        });
+        }, 3500);
         await new Promise((shihabResolve) => setTimeout(shihabResolve, 320));
         await mehediRefreshPopupState();
       } finally {
@@ -341,10 +387,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   mehediGrabAllBtn.addEventListener("click", async () => {
     if (shihabActiveTabId >= 0) {
-      await chrome.runtime.sendMessage({
+      await shihabSendRuntimeMessageBounded({
         shihabCmd: "mehedi_grab_tab_links",
         mehediTabId: shihabActiveTabId
-      });
+      }, 5500);
       window.close();
     }
   });

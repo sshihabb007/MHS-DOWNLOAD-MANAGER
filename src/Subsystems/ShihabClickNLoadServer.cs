@@ -73,7 +73,9 @@ namespace ShihabMehediIDM
             {
                 int port = BoundPort;
                 _listener = new TcpListener(IPAddress.Loopback, port);
+                ShihabMehediShared.ShihabProcessAndPathSafety.DisableListenerInheritance(_listener);
                 _listener.Start();
+                ShihabMehediShared.ShihabProcessAndPathSafety.DisableListenerInheritance(_listener);
                 _running = true;
                 _stopCts = new CancellationTokenSource();
                 CancellationToken tok = _stopCts.Token;

@@ -175,7 +175,9 @@ namespace ShihabMehediIDM
                 try
                 {
                     _listener = new TcpListener(IPAddress.Loopback, 0);
+                    ShihabMehediShared.ShihabProcessAndPathSafety.DisableListenerInheritance(_listener);
                     _listener.Start();
+                    ShihabMehediShared.ShihabProcessAndPathSafety.DisableListenerInheritance(_listener);
                     _boundPort = ((IPEndPoint)_listener.LocalEndpoint).Port;
                     TcpListener activeListener = _listener;
                     Thread acceptThread = new Thread(delegate() { AcceptLoop(activeListener); });

@@ -1572,14 +1572,22 @@
     return shihabChosen;
   }
 
+  let shihabBgSyncInFlight = null;
+
   function shihabRefreshBackgroundStreamsThrottled(mehediForceNow) {
     const shihabNow = Date.now();
     if (!mehediForceNow && shihabNow - mehediLastBgSyncMs < 1600) {
       return Promise.resolve(shihabTabStreamsCache);
     }
+    if (shihabBgSyncInFlight) {
+      return shihabBgSyncInFlight;
+    }
     mehediLastBgSyncMs = shihabNow;
     try {
-      return chrome.runtime.sendMessage({ shihabCmd: "shihab_query_tab_streams" }).then((mehediState) => {
+      const shihabWork = Promise.race([
+        chrome.runtime.sendMessage({ shihabCmd: "shihab_query_tab_streams" }),
+        new Promise((resolve) => setTimeout(() => resolve(null), 2500))
+      ]).then((mehediState) => {
         if (mehediState) {
           if (Array.isArray(mehediState.mehediStreams)) {
             shihabTabStreamsCache = mehediState.mehediStreams;
@@ -1598,7 +1606,13 @@
           }
         }
         return shihabTabStreamsCache;
-      }).catch(() => shihabTabStreamsCache);
+      }).catch(() => shihabTabStreamsCache).finally(() => {
+        if (shihabBgSyncInFlight === shihabWork) {
+          shihabBgSyncInFlight = null;
+        }
+      });
+      shihabBgSyncInFlight = shihabWork;
+      return shihabWork;
     } catch (shihabSendErr) {
       return Promise.resolve(shihabTabStreamsCache);
     }
@@ -2031,7 +2045,7 @@
         }
       });
 
-      shihabPrimaryBtn.addEventListener("click", async (mehediEv) => {
+      shihabPrimaryBtn.addEventListener("click", (mehediEv) => {
         mehediEv.preventDefault();
         mehediEv.stopPropagation();
         if (shihabDropdownOpen) {
@@ -2045,9 +2059,14 @@
         if (shihabActiveVid) {
           mehediEnsureVideoUidAndInspect(shihabActiveVid, true);
         }
-        await shihabRefreshBackgroundStreamsThrottled(true);
+        // Open immediately using cached/DOM streams so the button NEVER freezes even if mdm.exe is offline/busy.
         shihabDropdownOpen = true;
         shihabRenderFloatingIdmVideoPanel();
+        shihabRefreshBackgroundStreamsThrottled(true).then(() => {
+          if (shihabDropdownOpen && !mehediInstanceDisposed) {
+            shihabRenderFloatingIdmVideoPanel();
+          }
+        }).catch(() => {});
       });
 
       mehediRetrackBtn.addEventListener("click", async (shihabRetrackEv) => {
@@ -2508,20 +2527,24 @@
       : `${mehediCleanStem}${shihabExt}`;
 
     try {
-      chrome.runtime.sendMessage({
-        shihabCmd: "mehedi_send_download_now",
-        shihabUrl: shihabStreamEntry.shihabStreamUrl,
-        mehediReferrer: shihabStreamEntry.mehediCapturedReferer || location.href,
-        shihabFileName: mehediFinalFileName,
-        shihabFileSize: shihabStreamEntry.shihabSizeBytes || -1,
-        mehediTabTitle: shihabRealTitle || document.title || "",
-        shihabOrigin: shihabStreamEntry.shihabOrigin || location.origin || "",
-        mehediOmitCookies: shihabStreamEntry.mehediOmitCookies,
-        mehediUserAgent: shihabStreamEntry.mehediCustomUserAgent || "",
-        mehediAudioCompanionUrl: shihabStreamEntry.mehediAudioCompanionUrl || "",
-        shihabAudioCompanionBytes: shihabStreamEntry.shihabAudioCompanionBytes || -1,
-        shihabQualityLabel: mehediQualTag
-      }).then((shihabAck) => {
+      mehediShowPanelStatusToast(`Sending ${mehediQualTag || "stream"} to MHS Download Manager...`, false);
+      Promise.race([
+        chrome.runtime.sendMessage({
+          shihabCmd: "mehedi_send_download_now",
+          shihabUrl: shihabStreamEntry.shihabStreamUrl,
+          mehediReferrer: shihabStreamEntry.mehediCapturedReferer || location.href,
+          shihabFileName: mehediFinalFileName,
+          shihabFileSize: shihabStreamEntry.shihabSizeBytes || -1,
+          mehediTabTitle: shihabRealTitle || document.title || "",
+          shihabOrigin: shihabStreamEntry.shihabOrigin || location.origin || "",
+          mehediOmitCookies: shihabStreamEntry.mehediOmitCookies,
+          mehediUserAgent: shihabStreamEntry.mehediCustomUserAgent || "",
+          mehediAudioCompanionUrl: shihabStreamEntry.mehediAudioCompanionUrl || "",
+          shihabAudioCompanionBytes: shihabStreamEntry.shihabAudioCompanionBytes || -1,
+          shihabQualityLabel: mehediQualTag
+        }),
+        new Promise((resolve) => setTimeout(() => resolve({ ok: false, mehediError: "⚠ mdm.exe bridge timed out — launch MHS Download Manager" }), 5500))
+      ]).then((shihabAck) => {
         if (shihabAck && shihabAck.ok) {
           mehediShowPanelStatusToast(`✓ Sent ${mehediQualTag || "stream"} to MHS Download Manager!`, false);
         } else {
@@ -2871,7 +2894,13 @@
       if (mehediSelVid) {
         mehediEnsureVideoUidAndInspect(mehediSelVid, true);
       }
-      shihabRefreshBackgroundStreamsThrottled(true).then(() => {
+      if (Array.isArray(shihabMsg.shihabPreloadedStreams)) {
+        shihabTabStreamsCache = shihabMsg.shihabPreloadedStreams;
+      }
+      const shihabPrepPromise = Array.isArray(shihabMsg.shihabPreloadedStreams)
+        ? Promise.resolve(shihabTabStreamsCache)
+        : shihabRefreshBackgroundStreamsThrottled(true);
+      shihabPrepPromise.then(() => {
         const shihabOnlySelectedStreams = mehediSelVid ? shihabCollectMediaFromDomAndSniffer(mehediSelVid) : [];
         const mehediExactTitle = shihabExtractBestVideoTitle(mehediSelVid, shihabOnlySelectedStreams[0]);
         const shihabCleanStem = (mehediExactTitle || "Video")
@@ -3109,6 +3138,11 @@
     } catch (shihabRemErr) {
       // Context invalidated
     }
+    try {
+      if (mehediStorageChangeHandler && chrome.storage && chrome.storage.onChanged) {
+        chrome.storage.onChanged.removeListener(mehediStorageChangeHandler);
+      }
+    } catch (_) {}
     if (mehediShadowHost) {
       try { mehediShadowHost.remove(); } catch (_) {}
       mehediShadowHost = null;
@@ -3117,13 +3151,17 @@
     shihabRefs = null;
   }
 
+  let mehediStorageChangeHandler = null;
+
   document.addEventListener(MEHEDI_SUPERSEDE_EVENT, mehediOnSupersedeEvent);
 
   // Register IPC, trusted user-gesture & MAIN-world postMessage listeners IMMEDIATELY at document_start so zero early clicks or manifests are missed!
   window.addEventListener("message", mehediOnPageHookWindowMessage, false);
-  for (const shihabGestureEvt of ["pointerdown", "mousedown", "click", "auxclick", "contextmenu", "keydown"]) {
+  for (const shihabGestureEvt of ["pointerdown", "mousedown", "auxclick", "contextmenu", "keydown"]) {
     window.addEventListener(shihabGestureEvt, mehediReportTrustedUserGesture, { capture: true, passive: true });
   }
+  // Keep click non-passive so magnet:? anchor interception can call preventDefault() cleanly.
+  window.addEventListener("click", mehediReportTrustedUserGesture, { capture: true, passive: false });
   try {
     chrome.runtime.onMessage.addListener(mehediOnRuntimeMessage);
   } catch (shihabInitErr) {
@@ -3187,12 +3225,13 @@
           shihabHideVideoInFullscreen = res.shihabHideVideoInFullscreen;
         }
       });
-      chrome.storage.onChanged.addListener((changes, area) => {
+      mehediStorageChangeHandler = (changes, area) => {
         if (area === "local" && changes && changes.shihabHideVideoInFullscreen) {
           shihabHideVideoInFullscreen = Boolean(changes.shihabHideVideoInFullscreen.newValue);
           shihabScheduleFloatingPanelRender();
         }
-      });
+      };
+      chrome.storage.onChanged.addListener(mehediStorageChangeHandler);
     } catch (_) {}
 
     try {

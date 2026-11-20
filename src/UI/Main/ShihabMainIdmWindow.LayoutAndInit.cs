@@ -218,6 +218,28 @@ namespace ShihabMehediIDM
             };
 
             _mehediBridgeListening = _mehediBridge.StartShihabBridge();
+            if (!_mehediBridgeListening)
+            {
+                int retryCount = 0;
+                Timer bridgeHealTimer = new Timer { Interval = 2000 };
+                bridgeHealTimer.Tick += delegate
+                {
+                    retryCount++;
+                    if (IsDisposed || _mehediBridgeListening || retryCount > 15)
+                    {
+                        bridgeHealTimer.Stop();
+                        bridgeHealTimer.Dispose();
+                        return;
+                    }
+                    if (_mehediBridge.StartShihabBridge())
+                    {
+                        _mehediBridgeListening = true;
+                        bridgeHealTimer.Stop();
+                        bridgeHealTimer.Dispose();
+                    }
+                };
+                bridgeHealTimer.Start();
+            }
             _mehediBridge.OnShihabSingleCaptureReceived += _bridgeSingleCaptureHandler;
             _mehediBridge.OnMehediBatchCaptureReceived += _bridgeBatchCaptureHandler;
             _mehediBridge.OnShihabStartMainQueueRequested += _bridgeStartMainQueueHandler;

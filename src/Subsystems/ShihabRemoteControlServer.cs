@@ -179,7 +179,9 @@ namespace ShihabMehediIDM
             try
             {
                 TcpListener listener = new TcpListener(IPAddress.Any, Port);
+                ShihabMehediShared.ShihabProcessAndPathSafety.DisableListenerInheritance(listener);
                 listener.Start();
+                ShihabMehediShared.ShihabProcessAndPathSafety.DisableListenerInheritance(listener);
                 _listener = listener;
                 _running = true;
                 Thread t = new Thread(AcceptLoop);

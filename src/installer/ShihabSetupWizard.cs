@@ -18,13 +18,13 @@ using System.Windows.Forms;
 using Microsoft.Win32;
 using ShihabMehediShared;
 
-[assembly: AssemblyTitle("MHS Download Manager 1.1.0 Setup (Mehedi Hasan Shihab)")]
-[assembly: AssemblyDescription("Official Windows x64 Installer & Uninstaller for MHS Download Manager 1.1.0 (Mehedi Hasan Shihab)")]
+[assembly: AssemblyTitle("MHS Download Manager 1.1.1 Setup (Mehedi Hasan Shihab)")]
+[assembly: AssemblyDescription("Official Windows x64 Installer & Uninstaller for MHS Download Manager 1.1.1 (Mehedi Hasan Shihab)")]
 [assembly: AssemblyCompany("Mehedi Hasan Shihab")]
 [assembly: AssemblyProduct("MHS Download Manager Setup")]
 [assembly: AssemblyCopyright("Copyright (c) 2026 Mehedi Hasan Shihab")]
-[assembly: AssemblyVersion("1.1.0.0")]
-[assembly: AssemblyFileVersion("1.1.0.0")]
+[assembly: AssemblyVersion("1.1.1.0")]
+[assembly: AssemblyFileVersion("1.1.1.0")]
 
 namespace ShihabMehediInstaller
 {
@@ -59,8 +59,8 @@ namespace ShihabMehediInstaller
 
     public static class ShihabSetupTheme
     {
-        public const string ShihabProductTitle = "MHS Download Manager 1.1.0 (Mehedi Hasan Shihab)";
-        public const string MehediVersionText = "1.1.0";
+        public const string ShihabProductTitle = "MHS Download Manager 1.1.1 (Mehedi Hasan Shihab)";
+        public const string MehediVersionText = "1.1.1";
         public const string ShihabUninstallRegKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\MHSDownloadManager";
         public const string MehediRunRegKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
         public const string ShihabRunValueName = "MHSDownloadManager";
@@ -495,7 +495,16 @@ namespace ShihabMehediInstaller
         {
             string shihabInstallRoot = Path.GetFullPath(mehediOpts.MehediInstallDirectory.Trim());
             string shihabInstalledExe = Path.Combine(shihabInstallRoot, "mdm.exe");
+            bool createdInstallerMutex = false;
+            Mutex installerActiveMutex = null;
+            try
+            {
+                installerActiveMutex = new Mutex(true, "Local\\ShihabMehediIDM_InstallerActive", out createdInstallerMutex);
+            }
+            catch { }
 
+            try
+            {
             Action<int, string> mehediReport = delegate(int shihabPct, string mehediMsg)
             {
                 if (shihabProgressCallback != null)
@@ -532,15 +541,8 @@ namespace ShihabMehediInstaller
             StopOwnedShihabAppInDirectory(shihabInstallRoot, delegate(string shihabMsg) { mehediReport(10, shihabMsg); });
 
             string mehediExtensionDir = Path.Combine(shihabInstallRoot, "extension");
-            if (Directory.Exists(mehediExtensionDir))
-            {
-                try
-                {
-                    mehediReport(12, "Refreshing unpacked Browser Extension folder: " + mehediExtensionDir);
-                    Directory.Delete(mehediExtensionDir, true);
-                }
-                catch { }
-            }
+            Directory.CreateDirectory(mehediExtensionDir);
+            mehediReport(12, "Updating files atomically in place (keeping Browser Extension intact)...");
 
             Stream shihabPayloadStream = typeof(MehediInstallerEngine).Assembly.GetManifestResourceStream("ShihabMehediInstaller.payload.zip");
             if (shihabPayloadStream == null)
@@ -736,6 +738,15 @@ namespace ShihabMehediInstaller
             }
 
             mehediReport(100, "Installation complete! Browser extension ready at: " + mehediExtensionDir);
+            }
+            finally
+            {
+                if (installerActiveMutex != null)
+                {
+                    try { if (createdInstallerMutex) installerActiveMutex.ReleaseMutex(); } catch { }
+                    try { installerActiveMutex.Dispose(); } catch { }
+                }
+            }
         }
 
         private static void BackupExistingShihabRegistryState()
@@ -840,6 +851,31 @@ namespace ShihabMehediInstaller
 
                 string mehediComputedExtId = ComputeShihabChromiumUnpackedExtensionId(shihabExtensionDir);
                 string shihabManifestPath = Path.Combine(mehediAppDataDir, "com.shihab.mehedi.idm.json");
+                HashSet<string> mergedOrigins = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                mergedOrigins.Add("chrome-extension://" + EscapeJsonLiteral(mehediComputedExtId) + "/");
+                try
+                {
+                    if (File.Exists(shihabManifestPath))
+                    {
+                        string prevRaw = File.ReadAllText(shihabManifestPath, Encoding.UTF8);
+                        MatchCollection prevMatches = Regex.Matches(prevRaw, @"chrome-extension://([a-p]{32})/?", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+                        for (int mi = 0; mi < prevMatches.Count; mi++)
+                        {
+                            string prevId = prevMatches[mi].Groups[1].Value.ToLowerInvariant();
+                            mergedOrigins.Add("chrome-extension://" + prevId + "/");
+                        }
+                    }
+                }
+                catch { }
+                StringBuilder originLines = new StringBuilder();
+                int oi = 0;
+                foreach (string orig in mergedOrigins)
+                {
+                    if (oi > 0) originLines.Append(",\r\n");
+                    originLines.Append("    \"").Append(orig).Append("\"");
+                    oi++;
+                }
+
                 string mehediEscapedCmd = EscapeJsonLiteral(shihabLauncherCmd);
                 string shihabManifestJson =
                     "{\r\n" +
@@ -848,7 +884,7 @@ namespace ShihabMehediInstaller
                     "  \"path\": \"" + mehediEscapedCmd + "\",\r\n" +
                     "  \"type\": \"stdio\",\r\n" +
                     "  \"allowed_origins\": [\r\n" +
-                    "    \"chrome-extension://" + EscapeJsonLiteral(mehediComputedExtId) + "/\"\r\n" +
+                    originLines.ToString() + "\r\n" +
                     "  ]\r\n" +
                     "}\r\n";
                 File.WriteAllText(shihabManifestPath, shihabManifestJson, new UTF8Encoding(false));
@@ -1395,14 +1431,14 @@ namespace ShihabMehediInstaller
             _mehediStepWelcome = new Panel { Bounds = shihabBodyBounds, BackColor = BackColor };
             Label shihabWelHead = new Label
             {
-                Text = "Welcome to MHS Download Manager 1.1.0 Setup",
+                Text = "Welcome to MHS Download Manager 1.1.1 Setup",
                 Location = new Point(22, 16),
                 AutoSize = true,
                 Font = new Font("Segoe UI Semibold", 11f)
             };
             Label mehediWelDesc = new Label
             {
-                Text = "This wizard will install MHS Download Manager 1.1.0 (Mehedi Hasan Shihab) on your computer,\n" +
+                Text = "This wizard will install MHS Download Manager 1.1.1 (Mehedi Hasan Shihab) on your computer,\n" +
                        "keeping the unpacked 'extension' folder inside your installation directory ready to load in Chrome, Brave, Edge, and Firefox.",
                 Location = new Point(22, 44),
                 Size = new Size(595, 42),
@@ -1424,7 +1460,7 @@ namespace ShihabMehediInstaller
                     "  • mdm.exe          — x64 Download Accelerator (1-128 Sparse Dynamic Segments)\r\n" +
                     "  • extension\\       — Ready-to-load Unpacked MV3 Extension (Chromium & Firefox)\r\n" +
                     "  • Uninstall.exe    — Clean Windows Uninstaller\r\n\r\n" +
-                    "Included v1.1.0 Capabilities:\r\n" +
+                    "Included v1.1.1 Capabilities:\r\n" +
                     "  • Full BitTorrent P2P & Magnet Engine (BEP-3/5 DHT/6/7/9/11 PEX/14 LSD/15/19/27/53 + Real Seeding)\r\n" +
                     "  • 3-Tab Torrent Inspector (Files/Peers/Trackers) + OS magnet:/.torrent Associations\r\n" +
                     "  • Parallel 8-Worker HLS + Managed Deno JS Runtime + Codec/FPS/HDR + H.264/AAC + Chapters + Live MP4\r\n" +
@@ -1537,7 +1573,7 @@ namespace ShihabMehediInstaller
             _mehediStepProgress = new Panel { Bounds = shihabBodyBounds, BackColor = BackColor };
             Label shihabProgTitle = new Label
             {
-                Text = "Installing MHS Download Manager 1.1.0...",
+                Text = "Installing MHS Download Manager 1.1.1...",
                 Location = new Point(22, 16),
                 AutoSize = true,
                 Font = new Font("Segoe UI Semibold", 11f)
@@ -1630,7 +1666,7 @@ namespace ShihabMehediInstaller
 
             _shihabLaunchAppCheck = new CheckBox
             {
-                Text = "Launch MHS Download Manager 1.1.0 now",
+                Text = "Launch MHS Download Manager 1.1.1 now",
                 Location = new Point(24, 152),
                 AutoSize = true,
                 Checked = true,
@@ -2026,7 +2062,9 @@ namespace ShihabMehediInstaller
                                         mehediOpts.ShihabUpdatedFromVersion);
                                 }
                                 shihabRelaunchPsi.WorkingDirectory = Path.GetDirectoryName(shihabInstalledExe);
-                                shihabRelaunchPsi.UseShellExecute = false;
+                                // CRITICAL: UseShellExecute = true prevents child mdm.exe from inheriting any open socket handle
+                                // passed down if Setup.exe itself was launched by an older pre-v1.1.1 auto-updater!
+                                shihabRelaunchPsi.UseShellExecute = true;
                                 Process.Start(shihabRelaunchPsi);
                             }
                         }
@@ -2034,8 +2072,20 @@ namespace ShihabMehediInstaller
                     }
                     return 0;
                 }
-                catch
+                catch (Exception silentEx)
                 {
+                    try
+                    {
+                        string crashDir = Path.Combine(
+                            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ShihabMehediIDM"),
+                            "crashes");
+                        Directory.CreateDirectory(crashDir);
+                        File.WriteAllText(
+                            Path.Combine(crashDir, "update_error.log"),
+                            DateTime.Now.ToString("o") + "\r\n" + silentEx.ToString() + "\r\n",
+                            Encoding.UTF8);
+                    }
+                    catch { }
                     return 1;
                 }
             }

@@ -7,14 +7,14 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
-[assembly: AssemblyTitle("MHS Download Manager 1.1.0 (Mehedi Hasan Shihab)")]
-[assembly: AssemblyDescription("MHS Download Manager 1.1.0 (Mehedi Hasan Shihab) — Multi-Segment Download Accelerator, BitTorrent P2P & Browser Video Suite")]
+[assembly: AssemblyTitle("MHS Download Manager 1.1.1 (Mehedi Hasan Shihab)")]
+[assembly: AssemblyDescription("MHS Download Manager 1.1.1 (Mehedi Hasan Shihab) — Multi-Segment Download Accelerator, BitTorrent P2P & Browser Video Suite")]
 [assembly: AssemblyCompany("Mehedi Hasan Shihab (sshihabb007)")]
-[assembly: AssemblyProduct("MHS Download Manager 1.1.0 (Mehedi Hasan Shihab)")]
+[assembly: AssemblyProduct("MHS Download Manager 1.1.1 (Mehedi Hasan Shihab)")]
 [assembly: AssemblyCopyright("Copyright © Mehedi Hasan Shihab — https://sshihabb007.github.io/")]
-[assembly: AssemblyVersion("1.1.0.0")]
-[assembly: AssemblyFileVersion("1.1.0.0")]
-[assembly: AssemblyInformationalVersion("1.1.0")]
+[assembly: AssemblyVersion("1.1.1.0")]
+[assembly: AssemblyFileVersion("1.1.1.0")]
+[assembly: AssemblyInformationalVersion("1.1.1")]
 
 namespace ShihabMehediIDM
 {
@@ -67,7 +67,9 @@ namespace ShihabMehediIDM
             // 2. Stdio Native Messaging Host (Chrome/Edge/Firefox) — never touch parent console
             if (mehediCli.ShihabRunAsNativeHost)
             {
-                return MehediBrowserBridgeServer.RunShihabNativeMessagingStdioLoop(mehediConfig.MehediLocalBridgePort);
+                return MehediBrowserBridgeServer.RunShihabNativeMessagingStdioLoop(
+                    mehediConfig.MehediLocalBridgePort,
+                    mehediCli.MehediCustomConfigDir);
             }
 
             // 3. Stdio Model Context Protocol (MCP) JSON-RPC Server — never call AttachConsole so stdio pipes stay clean

@@ -102,7 +102,11 @@ namespace ShihabMehediIDM
                         ShihabJsonCodec.EscapeString(token));
                 }
 
-                EnsureShihabDesktopAppRunning(mehediPort);
+                // Passive ping NEVER auto-launches mdm.exe (prevents update races and 35s hangs).
+                if (shihabAct == "ping")
+                {
+                    return GetLocalMehediPing(mehediPort, 600);
+                }
 
                 if (shihabAct == "yt-streams" && mehediEnv != null && !string.IsNullOrWhiteSpace(mehediEnv.MehediVideoId))
                 {
@@ -111,6 +115,14 @@ namespace ShihabMehediIDM
                         mehediEnv.ShihabVisitorData,
                         false));
                 }
+
+                if (IsNamedMutexActive("Local\\ShihabMehediIDM_InstallerActive"))
+                {
+                    return SerializeShihabJson(BuildShihabErrorReply("MHS Download Manager is updating; please retry in a moment."));
+                }
+
+                EnsureShihabDesktopAppRunning(mehediPort);
+
                 if (shihabAct == "capture" && mehediEnv != null && mehediEnv.MehediCapture != null)
                 {
                     return PostLocalShihabJson(mehediPort, "/shihab/capture", SerializeShihabJson(mehediEnv.MehediCapture), customConfigDir);
@@ -119,7 +131,15 @@ namespace ShihabMehediIDM
                 {
                     return PostLocalShihabJson(mehediPort, "/shihab/capture-batch", SerializeShihabJson(mehediEnv.ShihabBatch), customConfigDir);
                 }
-                return GetLocalMehediPing(mehediPort);
+                if (shihabAct == "show")
+                {
+                    return PostLocalShihabJson(mehediPort, "/shihab/show", "{}", customConfigDir);
+                }
+                if (shihabAct == "open-updater")
+                {
+                    return PostLocalShihabJson(mehediPort, "/shihab/open-updater", "{}", customConfigDir);
+                }
+                return GetLocalMehediPing(mehediPort, 800);
             }
             catch (Exception shihabEx)
             {
@@ -127,28 +147,55 @@ namespace ShihabMehediIDM
             }
         }
 
+        private static bool IsNamedMutexActive(string mutexName)
+        {
+            try
+            {
+                Mutex existing;
+                if (Mutex.TryOpenExisting(mutexName, out existing))
+                {
+                    try { existing.Dispose(); } catch { }
+                    return true;
+                }
+            }
+            catch { }
+            return false;
+        }
+
         private static void EnsureShihabDesktopAppRunning(int mehediPort)
         {
             try
             {
-                GetLocalMehediPing(mehediPort);
+                GetLocalMehediPing(mehediPort, 500);
                 return;
             }
             catch
             {
             }
+            // Never launch mdm.exe while an in-place Setup update is running.
+            if (IsNamedMutexActive("Local\\ShihabMehediIDM_InstallerActive"))
+            {
+                return;
+            }
             try
             {
-                string shihabExePath = Process.GetCurrentProcess().MainModule.FileName;
-                ProcessStartInfo mehediPsi = new ProcessStartInfo(shihabExePath);
-                mehediPsi.UseShellExecute = false;
-                Process.Start(mehediPsi);
-                for (int shihabWait = 0; shihabWait < 15; shihabWait++)
+                string instanceMutexName = "Local\\ShihabMehediIDM_Instance_" + mehediPort;
+                if (!IsNamedMutexActive(instanceMutexName))
+                {
+                    string shihabExePath = Process.GetCurrentProcess().MainModule.FileName;
+                    ProcessStartInfo mehediPsi = new ProcessStartInfo(shihabExePath, "/fromhost");
+                    mehediPsi.WorkingDirectory = Path.GetDirectoryName(shihabExePath);
+                    // UseShellExecute = true ensures zero handle inheritance (detaches Chrome stdio pipes and Job Object).
+                    mehediPsi.UseShellExecute = true;
+                    Process.Start(mehediPsi);
+                }
+                Stopwatch sw = Stopwatch.StartNew();
+                while (sw.ElapsedMilliseconds < 3200)
                 {
                     Thread.Sleep(200);
                     try
                     {
-                        GetLocalMehediPing(mehediPort);
+                        GetLocalMehediPing(mehediPort, 400);
                         return;
                     }
                     catch { }
@@ -180,6 +227,51 @@ namespace ShihabMehediIDM
             ShihabSecretsVault.ApplyRestrictedUserFileAcl(mehediWrapperBat);
 
             string shihabManifestPath = Path.Combine(shihabDataDir, "com.shihab.mehedi.idm.json");
+            HashSet<string> allowedIdSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            allowedIdSet.Add(mehediCleanId);
+            try
+            {
+                string exeDir = Path.GetDirectoryName(shihabExePath);
+                string bundledExtDir = !string.IsNullOrEmpty(exeDir) ? Path.Combine(exeDir, "extension") : "";
+                if (!string.IsNullOrEmpty(bundledExtDir) && Directory.Exists(bundledExtDir))
+                {
+                    string bundledId = ShihabProcessAndPathSafety.ComputeChromiumUnpackedExtensionId(bundledExtDir);
+                    if (ChromiumExtIdRegex.IsMatch(bundledId)) allowedIdSet.Add(bundledId);
+                }
+            }
+            catch { }
+            try
+            {
+                if (File.Exists(shihabManifestPath))
+                {
+                    string prevRaw = File.ReadAllText(shihabManifestPath, Encoding.UTF8);
+                    Dictionary<string, object> prevObj = ShihabJsonCodec.ParseObjectOrNull(prevRaw);
+                    if (prevObj != null)
+                    {
+                        List<string> prevOrigins = ShihabJsonCodec.GetStringArray(prevObj, "allowed_origins");
+                        for (int oi = 0; oi < prevOrigins.Count; oi++)
+                        {
+                            string oe = (prevOrigins[oi] ?? "").Trim();
+                            if (oe.StartsWith("chrome-extension://", StringComparison.OrdinalIgnoreCase))
+                            {
+                                string oid = oe.Substring("chrome-extension://".Length).TrimEnd('/').ToLowerInvariant();
+                                if (ChromiumExtIdRegex.IsMatch(oid)) allowedIdSet.Add(oid);
+                            }
+                        }
+                    }
+                }
+            }
+            catch { }
+
+            StringBuilder originsJson = new StringBuilder();
+            int originIdx = 0;
+            foreach (string oid in allowedIdSet)
+            {
+                if (originIdx > 0) originsJson.Append(",\r\n");
+                originsJson.Append("    \"chrome-extension://").Append(oid).Append("/\"");
+                originIdx++;
+            }
+
             string mehediEscapedBat = ShihabJsonCodec.EscapeString(mehediWrapperBat);
             string shihabManifestJson =
                 "{\r\n" +
@@ -188,7 +280,7 @@ namespace ShihabMehediIDM
                 "  \"path\": \"" + mehediEscapedBat + "\",\r\n" +
                 "  \"type\": \"stdio\",\r\n" +
                 "  \"allowed_origins\": [\r\n" +
-                "    \"chrome-extension://" + mehediCleanId + "/\"\r\n" +
+                originsJson.ToString() + "\r\n" +
                 "  ]\r\n" +
                 "}\r\n";
             File.WriteAllText(shihabManifestPath, shihabManifestJson, new UTF8Encoding(false));
