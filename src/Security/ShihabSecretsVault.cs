@@ -431,6 +431,11 @@ namespace ShihabMehediIDM
                 purged += cfg.ShihabPairedRemoteDevices.Count;
                 cfg.ShihabPairedRemoteDevices.Clear();
             }
+            if (cfg.ShihabSavedArchivePasswords != null)
+            {
+                purged += cfg.ShihabSavedArchivePasswords.Count;
+                cfg.ShihabSavedArchivePasswords.Clear();
+            }
             store.SaveMehediConfig(cfg);
             try
             {

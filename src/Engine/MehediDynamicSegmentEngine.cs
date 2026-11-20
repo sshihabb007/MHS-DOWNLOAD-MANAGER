@@ -47,6 +47,7 @@ namespace ShihabMehediIDM
             _adaptiveHostConcurrencyCaps = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             _hostRetryCooldownUntilUtc = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
 
+            ShihabLocalNetworkRelay.RegisterActiveConfig(_mehediConfig);
             ShihabLocalNetworkRelay.OnVpnKillSwitchTripped += HandleVpnKillSwitchTripped;
 
             ServicePointManager.DefaultConnectionLimit = 256;
@@ -98,9 +99,46 @@ namespace ShihabMehediIDM
             {
                 if (IsMehediItemActive(snap[i].ShihabId))
                 {
-                    PauseShihabDownloadInternal(snap[i], true);
+                    PauseShihabDownloadInternal(snap[i], false);
                     snap[i].SetMehediStatusEnum(ShihabDownloadStatus.ShihabPaused, "Paused (VPN Kill-Switch)");
                     NotifyShihabItemChanged(snap[i]);
+                }
+            }
+        }
+
+        public void ResumeDownloadsAfterNetworkRestore()
+        {
+            if (_mehediConfig != null && !string.IsNullOrWhiteSpace(_mehediConfig.ShihabBoundNetworkAdapter) &&
+                !_mehediConfig.ShihabBoundNetworkAdapter.StartsWith("Any", StringComparison.OrdinalIgnoreCase))
+            {
+                IPAddress boundIp;
+                string failReason;
+                if (!ShihabDnsAndNetworkManager.TryGetBoundAdapterLocalIp(_mehediConfig, out boundIp, out failReason) || boundIp == null)
+                {
+                    return;
+                }
+            }
+            List<ShihabDownloadItem> snap = GetShihabDownloadsSnapshot();
+            for (int i = 0; i < snap.Count; i++)
+            {
+                ShihabDownloadItem it = snap[i];
+                if (it == null || IsMehediItemActive(it.ShihabId)) continue;
+                bool isExplicitlyPaused;
+                lock (_shihabEngineLock)
+                {
+                    isExplicitlyPaused = _explicitlyPausedIds.Contains(it.ShihabId);
+                }
+                if (isExplicitlyPaused) continue;
+
+                ShihabDownloadStatus st = it.GetShihabStatusEnum();
+                string stText = it.ShihabStatusText ?? "";
+                bool wasVpnOrNetInterrupted =
+                    (st == ShihabDownloadStatus.ShihabPaused && stText.IndexOf("VPN Kill-Switch", StringComparison.OrdinalIgnoreCase) >= 0) ||
+                    (st == ShihabDownloadStatus.ShihabError && it.ShihabRetryCount <= (_mehediConfig != null && _mehediConfig.MehediMaxRetryAttempts > 0 ? _mehediConfig.MehediMaxRetryAttempts : 99));
+                if (wasVpnOrNetInterrupted)
+                {
+                    EmitShihabLog("[Netwatch] Resuming interrupted download after network restore: " + it.ShihabFileName);
+                    StartOrResumeMehediDownload(it);
                 }
             }
         }
@@ -416,14 +454,67 @@ namespace ShihabMehediIDM
                 {
                     try { File.Delete(sparsePart); } catch { }
                 }
-                if (shihabDeleteCompletedDiskFile && File.Exists(shihabTarget))
+                if (shihabDeleteCompletedDiskFile)
                 {
-                    File.Delete(shihabTarget);
+                    if (File.Exists(shihabTarget))
+                    {
+                        File.Delete(shihabTarget);
+                    }
+                    else if (mehediItem.ShihabIsTorrent && Directory.Exists(shihabTarget))
+                    {
+                        FileAttributes attrs = File.GetAttributes(shihabTarget);
+                        if ((attrs & FileAttributes.ReparsePoint) == 0 &&
+                            !ShihabProcessAndPathSafety.HasReparsePointUnderRoot(mehediItem.MehediSaveDirectory, shihabTarget))
+                        {
+                            Directory.Delete(shihabTarget, true);
+                        }
+                    }
+                }
+                if (mehediItem.ShihabIsTorrent)
+                {
+                    TryCleanupTorrentStateFiles(mehediItem);
+                    ShihabTorrentLiveTelemetry.Clear(mehediItem.ShihabId);
                 }
             }
             catch
             {
             }
+        }
+
+        internal static void TryCleanupTorrentStateFiles(ShihabDownloadItem item)
+        {
+            if (item == null) return;
+            try
+            {
+                string[] dirs = new string[]
+                {
+                    item.MehediSaveDirectory,
+                    item.GetShihabFullTargetPath()
+                };
+                for (int d = 0; d < dirs.Length; d++)
+                {
+                    if (string.IsNullOrWhiteSpace(dirs[d]) || !Directory.Exists(dirs[d])) continue;
+                    string[] btStates = Directory.GetFiles(dirs[d], ".*.mhs.btstate*", SearchOption.TopDirectoryOnly);
+                    for (int i = 0; i < btStates.Length; i++)
+                    {
+                        try { File.Delete(btStates[i]); } catch { }
+                    }
+                }
+            }
+            catch { }
+        }
+
+        internal void ApplyExternalTransferRateAndQuota(
+            ShihabDownloadItem shihabItem,
+            int transferredBytes,
+            Stopwatch watch,
+            ref long windowStartMs,
+            ref long windowBytes,
+            CancellationToken cancelToken)
+        {
+            if (transferredBytes <= 0) return;
+            _mehediConfig.RecordQuotaBytes(transferredBytes);
+            ApplyMehediSpeedLimiter(shihabItem, transferredBytes, watch, ref windowStartMs, ref windowBytes, cancelToken);
         }
 
         private string GetShihabItemTempFolder(ShihabDownloadItem mehediItem)
@@ -521,6 +612,12 @@ namespace ShihabMehediIDM
                         shihabItem.MehediIsHlsStream = true;
                         ExecuteMehediHlsStreamDownload(shihabItem, mehediProbe.ShihabFinalUrl, mehediItemTempDir, mehediToken, handle);
                         return;
+                    }
+
+                    if (mehediProbe.ShihabIsHtmlPage &&
+                        IsUnexpectedHtmlErrorPayload(shihabItem.ShihabFileName, mehediProbe.ShihabContentType, mehediProbe.ShihabContentLength, null, 0))
+                    {
+                        throw new IOException("Server returned an HTML error or login page instead of the requested file (" + shihabItem.ShihabFileName + ").");
                     }
 
                     // RFC 9110 Validator Check on Resume (Strong ETag + Last-Modified + Content-Length)
@@ -959,7 +1056,20 @@ namespace ShihabMehediIDM
 
                     if (!mehediAllDone)
                     {
-                        if (IsRealShihabGoogleVideoDomain(effectiveUrl) &&
+                        bool overlapChanged = shihabFailedReason != null &&
+                            shihabFailedReason.IndexOf("overlap verification failed", StringComparison.OrdinalIgnoreCase) >= 0;
+                        if (overlapChanged)
+                        {
+                            EmitShihabLog("[Resume] Multi-segment overlap mismatch detected for " + shihabItem.ShihabFileName + " — wiping stale .mhs.part and restarting cleanly from byte 0.");
+                            lock (shihabSegmentLock)
+                            {
+                                lock (shihabItem.MehediSegments) { shihabItem.MehediSegments.Clear(); }
+                                shihabItem.MehediDownloadedBytes = 0;
+                            }
+                            try { if (File.Exists(sharedSparsePartPath)) File.Delete(sharedSparsePartPath); } catch { }
+                            DownloadDirectShihabStreamToFile(shihabItem, effectiveUrl, shihabPrimaryAssembledPath, shihabItem.ShihabTotalBytes, true, mehediToken);
+                        }
+                        else if (IsRealShihabGoogleVideoDomain(effectiveUrl) &&
                             TryHealOrResolveShihabYouTubeItem(shihabItem, mehediItemTempDir, true))
                         {
                             EmitShihabLog("[YouTubeAutoHeal] Refreshed expired/403 YouTube stream URL for " + shihabItem.ShihabFileName);
@@ -1104,7 +1214,7 @@ namespace ShihabMehediIDM
         {
             lock (_shihabEngineLock)
             {
-                _shihabStore.SaveShihabDownloads(_shihabDownloads);
+                _shihabStore.SaveShihabDownloads(_shihabDownloads, _mehediConfig != null && _mehediConfig.ShihabKeepPrivateDownloads);
             }
         }
 

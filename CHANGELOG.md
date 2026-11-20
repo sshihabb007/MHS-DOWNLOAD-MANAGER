@@ -2,7 +2,37 @@
 
 All notable releases, new features, security enhancements, and bug fixes for **MHS Download Manager** (`mdm.exe` + Manifest V3 Browser Extension + Windows x64 Setup Wizard) are documented here in **reverse chronological order (newest first)**.
 
-> **Live GitHub Releases:** [All Releases (`v1.0.7` → `v1.0.0`)](https://github.com/sshihabb007/MHS-DOWNLOAD-MANAGER/releases)
+> **Live GitHub Releases:** [All Releases (`v1.1.0` → `v1.0.0`)](https://github.com/sshihabb007/MHS-DOWNLOAD-MANAGER/releases)
+
+---
+
+## [v1.1.0] — 2026-11-20
+
+### Highlights & New Features
+- **Complete BitTorrent P2P & Magnet Engine Overhaul (`ShihabTorrentManager`, `ShihabTorrentDhtAndSeeding`, `ShihabBencodeParser`)**:
+  - Added full `BEP-5` Kademlia UDP DHT (trackerless magnets), `BEP-6` Fast extension (`Have All`/`Have None`/`Reject`), `BEP-7` IPv6 `peers6`, `BEP-9`/`BEP-10` parallel magnet metadata resolution, `BEP-11` `ut_pex`, `BEP-12` tracker tiers, `BEP-14` LSD multicast, `BEP-15` UDP trackers with cryptographic transaction IDs, single & multi-file `BEP-19` WebSeeds, strict `BEP-27` private-torrent isolation (zero DHT/PEX/LSD leaks), `BEP-53` `so=` selective file download, Base32+Hex BTIH, and `x.pe` direct peer hints.
+  - Replaced placeholder seeding with a real TCP BitTorrent seed listener (`ShihabTorrentSeedServer`) serving `BEP-3` pieces & `BEP-9` metadata with live upload speed, share ratio, and time limits.
+  - Added SHA-1 hash-verified resume & corrupt-piece auto-repair, atomic `.mhs.btstate` checkpoints, fail-closed path traversal / reserved device / case-collision / v2-only validation, merged overlapping IP blocklist ranges, no-outer-folder option, **3-Tab Torrent Inspector (`Files`/Recheck, `Peers`, `Trackers`, live pieces bitmap)**, and HKCU `magnet:` / `.torrent` OS file associations in `ShihabSetupWizard`.
+- **Parallel HLS, Managed Deno JS Runtime & Media Suite Upgrades**:
+  - Upgraded `MehediHlsDownloader` to a bounded **8-worker parallel segment fetcher** with shared speed limiting, retries, and exact sequential reassembly.
+  - Added managed **Deno JS runtime** support (`--js-runtimes` + `--cli install-deno`), `bgutil` PO-Token server detection, optional **"Use my `yt-dlp` config file"** toggle, rich codec/FPS/HDR format labels (`1080p MP4 · AV1 · 60 fps · HDR10`), **"Most compatible (H.264 + AAC)"** preset (`video-get -q compatible`), `--embed-chapters`, `--concurrent-fragments`, and **Live Stream "Stop & Save MP4"** remuxing.
+- **Click'n'Load 2 Local Server (`:9666`) & 5-Provider Debrid Cloud**:
+  - Added opt-in `ShihabClickNLoadServer` (`/jdcheck.js`, `/crossdomain.xml`, `/flash/add`, `/flash/addcrypted2` pure-C# AES-128-CBC decrypt, CORS + Private Network Access, DNS-rebinding `403` guard, SSRF filter, and 10 req/min rate limiting) across GUI, `--headless`, and Options.
+  - Expanded Debrid cloud to **5 providers** (added **TorBox** and **Mega-Debrid** alongside Real-Debrid, AllDebrid with magnet/torrent unlock, and Premiumize) and added **Google Drive shared-folder video** resolution.
+- **10 Built-In Themes, Desktop Power UX, Archive Manager & Extension Upgrades**:
+  - Expanded to **10 built-in themes** (`Obsidian Dark`, `Midnight Nord`, `Emerald Matrix`, `Solarized Dark`, `Classic Light`, `Luna XP`, `Aero Glass`, `Adwaita`, `Breeze`, `High Contrast`) with dynamic `View → Theme`, luminance-derived dark/light mode, custom `.toml` WCAG contrast guard, and `90%–200%` UI scaling.
+  - Added **Deferred Rename** while downloading (GUI, Bridge, CLI `--deferred-rename`, MCP), **Drag finished files OUT** of the main list, **Global Show/Hide Hotkey** (Win32 `RegisterHotKey`), **Batch "Downloads Complete" coalescing + Snooze (`30m`/`1h`/`8h`/Until restart)**, Download File Info duplicate overwrite prompt, Batch/Grabber `Save to` override, regex clipboard batch extraction, dynamic tray speed tooltip, and stealth `/fromhost` handoff.
+  - Added **DPAPI Saved Archive Passwords** (MRU auto-try + Options modal), split-volume archive re-trigger, AES ZIP `7z` fallback, and **HatchZip** in-place extraction.
+  - Upgraded the MV3 Browser Extension with **strict Incognito cookie-store isolation** (`inc:`/`std:` keys), **Multi-Server Remote Pairing & Switcher**, dynamic context-menu sync, **"Hide floating video button in fullscreen"** toggle, Google Drive shared-folder sniffing, and magnet/torrent link interception.
+- **Expanded CLI & 16-Tool MCP Server**:
+  - Added CLI `add` (with `-o`, `-f`, `-c`, `-q`, `-l`, `--no-start`, `--private`, `--checksum`, `--cookie`, `--referer`, `--user-agent`, `--deferred-rename`), `start-queue`, `stop-queue`, `install-deno`, filtered live non-JSON `status`, and expanded `--mcp` to **16 tools** (adding `stop_queue`, filtered `list_downloads` with `freeSpaceBytes`, and full `add_download` options).
+
+### Bug Fixes & Hardening
+- Fixed `bridge.token` rotation/desync between startup and local bridge authentication (`ShihabStateStore` & `MehediProgramEntry`).
+- Fixed `PlainDNS` vs `"Plain"` config mismatch, Manual HTTP proxy `Proxy-Authorization` & plain-HTTP forwarding inside `ShihabLocalNetworkRelay`, and VPN/proxy bypasses across FTP, YouTube InnerTube, DoH/PAC, Debrid, and media helpers.
+- Fixed RFC 5987 (`UTF-8'en'...`), RFC 2047, and `%XX` `Content-Disposition` filename decoding, `archive.org` cluster cookie redirects, own-UA `403`/`412` bot-check fallback, HTML-instead-of-file error guards, and resume overlap mismatch clean auto-restart.
+- Fixed LAN Remote QR `#pair=` auto-pairing, "New Code" expiry refresh, `/api/speedlimit`, `.torrent` upload, and strict private-item exclusion from Remote Web UI & `.txt` exports.
+- Fixed Options `Forget All Sign-Ins` leaving stale in-memory credentials, dead `View → Theme` menu entries, `ShihabAutomationApiEnabled` HTTP `403` enforcement, queue scheduler active-days/wake re-arm & per-queue quota, VPN kill-switch auto-resume, `--headless` queue power actions, out-of-process freeze watchdog heartbeat, and offline CLI queueing as `ShihabQueued`.
 
 ---
 

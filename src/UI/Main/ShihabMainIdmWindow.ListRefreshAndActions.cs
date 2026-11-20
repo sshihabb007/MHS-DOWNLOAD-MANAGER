@@ -364,6 +364,10 @@ namespace ShihabMehediIDM
             string shihabSpeedPill = mehediGlobalSpeedBps > 5.0
                 ? ("Speed: " + ShihabFormatHelpers.FormatShihabSpeed(mehediGlobalSpeedBps).Replace("/sec", "/s"))
                 : "Speed: 0 KB/s";
+            if (_mehediConfig.MehediGlobalSpeedLimiterEnabled && _mehediConfig.ShihabGlobalSpeedLimitKb > 0)
+            {
+                shihabSpeedPill = shihabSpeedPill + string.Format(" (Lim: {0} KB/s)", _mehediConfig.ShihabGlobalSpeedLimitKb);
+            }
             if (_mehediFooterBar != null)
             {
                 _mehediFooterBar.SetMehediFooterMetrics(
@@ -371,6 +375,30 @@ namespace ShihabMehediIDM
                     "Downloaded: " + ShihabFormatHelpers.FormatMehediBytes(shihabSumDownloadedBytes),
                     shihabSpeedPill,
                     string.Format("Active Sockets: {0}", shihabActiveSockets));
+            }
+            if (_mehediTrayIcon != null)
+            {
+                string trayTip;
+                if (shihabActiveSockets > 0 || mehediGlobalSpeedBps > 5.0)
+                {
+                    string spdShort = ShihabFormatHelpers.FormatShihabSpeed(mehediGlobalSpeedBps).Replace("/sec", "/s");
+                    trayTip = string.Format("MHS · {0} sock · {1}", shihabActiveSockets, spdShort);
+                    if (_mehediConfig.MehediGlobalSpeedLimiterEnabled && _mehediConfig.ShihabGlobalSpeedLimitKb > 0)
+                    {
+                        trayTip = trayTip + string.Format(" (Lim {0}K)", _mehediConfig.ShihabGlobalSpeedLimitKb);
+                    }
+                }
+                else
+                {
+                    trayTip = (_mehediConfig.MehediGlobalSpeedLimiterEnabled && _mehediConfig.ShihabGlobalSpeedLimitKb > 0)
+                        ? string.Format("MHS Download Manager · Idle (Lim {0} KB/s)", _mehediConfig.ShihabGlobalSpeedLimitKb)
+                        : "MHS Download Manager · Idle";
+                }
+                if (trayTip.Length > 63) trayTip = trayTip.Substring(0, 63);
+                if (!string.Equals(_mehediTrayIcon.Text, trayTip, StringComparison.Ordinal))
+                {
+                    try { _mehediTrayIcon.Text = trayTip; } catch { }
+                }
             }
 
             if (_shihabDropTargetForm != null && !_shihabDropTargetForm.IsDisposed && _shihabDropTargetForm.Visible)
@@ -504,7 +532,8 @@ namespace ShihabMehediIDM
             string mehediCookies,
             string shihabUserAgent,
             string mehediDesc,
-            bool shihabStartNow)
+            bool shihabStartNow,
+            string overrideSaveFolder = "")
         {
             if (!IsAllowedDownloadSourceUrl(mehediUrl)) return;
 
@@ -514,12 +543,33 @@ namespace ShihabMehediIDM
             mehediItem.ShihabCookies = mehediCookies;
             if (!string.IsNullOrWhiteSpace(shihabUserAgent)) mehediItem.MehediUserAgent = shihabUserAgent;
             mehediItem.ShihabDescription = mehediDesc;
-            mehediItem.ShihabFileName = ShihabFormatHelpers.ExtractMehediFileNameFromUrl(mehediItem.MehediUrl);
-            ShihabCategoryRule shihabCat = _mehediConfig.ResolveMehediCategoryForFile(mehediItem.ShihabFileName);
+            bool isTor = ShihabTorrentManager.IsMagnetOrTorrentInput(mehediItem.MehediUrl);
+            if (isTor)
+            {
+                mehediItem.ShihabIsTorrent = true;
+                mehediItem.ShihabTorrentMagnetOrPath = mehediItem.MehediUrl;
+                ShihabTorrentMetadata magPreview = mehediItem.MehediUrl.StartsWith("magnet:?", StringComparison.OrdinalIgnoreCase)
+                    ? ShihabTorrentManager.ParseMagnetUri(mehediItem.MehediUrl)
+                    : null;
+                mehediItem.ShihabFileName = (magPreview != null && !string.IsNullOrWhiteSpace(magPreview.Name))
+                    ? magPreview.Name
+                    : ShihabFormatHelpers.ExtractMehediFileNameFromUrl(mehediItem.MehediUrl);
+            }
+            else
+            {
+                mehediItem.ShihabFileName = ShihabFormatHelpers.ExtractMehediFileNameFromUrl(mehediItem.MehediUrl);
+            }
+            ShihabCategoryRule shihabCat = isTor
+                ? _mehediConfig.ResolveMehediCategoryForFile("download.torrent")
+                : _mehediConfig.ResolveMehediCategoryForFile(mehediItem.ShihabFileName);
             mehediItem.ShihabCategoryName = shihabCat.ShihabName;
-            try { Directory.CreateDirectory(shihabCat.ShihabDefaultFolder); } catch { }
-            mehediItem.MehediSaveDirectory = shihabCat.ShihabDefaultFolder;
-            mehediItem.ShihabFileName = ShihabFormatHelpers.EnsureShihabUniqueFilePath(shihabCat.ShihabDefaultFolder, mehediItem.ShihabFileName);
+            string targetSaveDir = ResolveSafeSaveDirectory(overrideSaveFolder, shihabCat.ShihabDefaultFolder);
+            try { Directory.CreateDirectory(targetSaveDir); } catch { }
+            mehediItem.MehediSaveDirectory = targetSaveDir;
+            if (!isTor)
+            {
+                mehediItem.ShihabFileName = ShihabFormatHelpers.EnsureShihabUniqueFilePath(targetSaveDir, mehediItem.ShihabFileName);
+            }
             mehediItem.MehediMaxConnections = _mehediConfig.ShihabDefaultMaxConnections;
             if (!shihabStartNow)
             {
@@ -531,9 +581,7 @@ namespace ShihabMehediIDM
 
         private void PromptAndAddNewShihabUrl(string mehediPrefillUrl)
         {
-            if (!string.IsNullOrWhiteSpace(mehediPrefillUrl) &&
-                (mehediPrefillUrl.StartsWith("magnet:?", StringComparison.OrdinalIgnoreCase) ||
-                 mehediPrefillUrl.EndsWith(".torrent", StringComparison.OrdinalIgnoreCase)))
+            if (!string.IsNullOrWhiteSpace(mehediPrefillUrl) && ShihabTorrentManager.IsMagnetOrTorrentInput(mehediPrefillUrl))
             {
                 OpenShihabTorrentDialog(mehediPrefillUrl);
                 return;
@@ -542,8 +590,7 @@ namespace ShihabMehediIDM
             {
                 if (shihabAddDlg.ShowDialog(this) == DialogResult.OK)
                 {
-                    if (shihabAddDlg.ShihabEnteredUrl.StartsWith("magnet:?", StringComparison.OrdinalIgnoreCase) ||
-                        shihabAddDlg.ShihabEnteredUrl.EndsWith(".torrent", StringComparison.OrdinalIgnoreCase))
+                    if (ShihabTorrentManager.IsMagnetOrTorrentInput(shihabAddDlg.ShihabEnteredUrl))
                     {
                         OpenShihabTorrentDialog(shihabAddDlg.ShihabEnteredUrl);
                         return;
@@ -667,8 +714,24 @@ namespace ShihabMehediIDM
             ShihabDownloadItem shihabItem = mehediSel[0];
             _shihabEngine.PauseShihabDownload(shihabItem);
             _shihabEngine.ClearItemSegmentsSafely(shihabItem);
+            if (shihabItem.ShihabIsTorrent)
+            {
+                MehediDynamicSegmentEngine.TryCleanupTorrentStateFiles(shihabItem);
+                shihabItem.ShihabTorrentForceRecheck = true;
+            }
             shihabItem.MehediDownloadedBytes = 0;
             shihabItem.MehediSha256Hex = "";
+            _shihabEngine.StartOrResumeMehediDownload(shihabItem);
+            if (_mehediConfig.MehediShowDownloadProgressDialog) ShowProgressWindowForShihabItem(shihabItem);
+        }
+
+        private void ForceRecheckSelectedTorrent()
+        {
+            List<ShihabDownloadItem> mehediSel = GetSelectedShihabItems();
+            if (mehediSel.Count == 0 || !mehediSel[0].ShihabIsTorrent) return;
+            ShihabDownloadItem shihabItem = mehediSel[0];
+            _shihabEngine.PauseShihabDownload(shihabItem);
+            shihabItem.ShihabTorrentForceRecheck = true;
             _shihabEngine.StartOrResumeMehediDownload(shihabItem);
             if (_mehediConfig.MehediShowDownloadProgressDialog) ShowProgressWindowForShihabItem(shihabItem);
         }
@@ -684,6 +747,11 @@ namespace ShihabMehediIDM
                 if (shihabRefreshDlg.ShowDialog(this) == DialogResult.OK)
                 {
                     mehediItem.MehediUrl = shihabRefreshDlg.ShihabEnteredUrl;
+                    if (mehediItem.ShihabIsTorrent || ShihabTorrentManager.IsMagnetOrTorrentInput(mehediItem.MehediUrl))
+                    {
+                        mehediItem.ShihabIsTorrent = true;
+                        mehediItem.ShihabTorrentMagnetOrPath = mehediItem.MehediUrl;
+                    }
                     if (!string.IsNullOrEmpty(shihabRefreshDlg.MehediEnteredReferer))
                     {
                         mehediItem.MehediReferer = shihabRefreshDlg.MehediEnteredReferer;
@@ -732,8 +800,16 @@ namespace ShihabMehediIDM
             if (shihabSel.Count == 0) return;
             string mehediPath = shihabSel[0].GetShihabFullTargetPath();
             if (string.IsNullOrWhiteSpace(mehediPath) ||
-                ShihabProcessAndPathSafety.ContainsControlOrNewline(mehediPath) ||
-                !File.Exists(mehediPath))
+                ShihabProcessAndPathSafety.ContainsControlOrNewline(mehediPath))
+            {
+                return;
+            }
+            if (Directory.Exists(mehediPath))
+            {
+                ShihabThemePalette.SafeOpenContainingFolderOrFile(mehediPath, shihabSel[0].MehediSaveDirectory);
+                return;
+            }
+            if (!File.Exists(mehediPath))
             {
                 return;
             }
@@ -832,6 +908,12 @@ namespace ShihabMehediIDM
                     {
                         _mehediBridgeListening = mehediOpts.MehediBridgeRestartSucceeded;
                     }
+                    if (_shihabClickNLoadServer != null)
+                    {
+                        if (_mehediConfig.ShihabEnableClickNLoad) _shihabClickNLoadServer.Start();
+                        else _shihabClickNLoadServer.Stop();
+                    }
+                    ApplyConfiguredGlobalHotkey();
                     ApplyMehediTheme();
                     PopulateShihabCategoryTree();
                     RefreshMehediDownloadsGrid();
@@ -858,7 +940,14 @@ namespace ShihabMehediIDM
                 {
                     for (int shihabI = 0; shihabI < mehediBatch.ShihabGeneratedUrls.Count; shihabI++)
                     {
-                        EnqueueSimpleShihabUrl(mehediBatch.ShihabGeneratedUrls[shihabI], "", "", "", "Batch wildcard", mehediBatch.MehediStartImmediately);
+                        EnqueueSimpleShihabUrl(
+                            mehediBatch.ShihabGeneratedUrls[shihabI],
+                            "",
+                            "",
+                            "",
+                            "Batch wildcard",
+                            mehediBatch.MehediStartImmediately,
+                            mehediBatch.ShihabOverrideSaveFolder);
                     }
                 }
             }
@@ -873,23 +962,27 @@ namespace ShihabMehediIDM
                     MessageBox.Show(this, "Cannot find any web address in the clipboard!", "MHS Download Manager", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     return;
                 }
-                string[] mehediTokens = Clipboard.GetText().Split(new char[] { '\r', '\n', ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+                string rawClip = Clipboard.GetText() ?? "";
+                System.Text.RegularExpressions.Regex urlRegex = new System.Text.RegularExpressions.Regex(
+                    "(?:https?|ftps?)://[^\\s<>\"'\\]\\)]+|magnet:\\?[^\\s<>\"'\\]\\)]+",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase,
+                    TimeSpan.FromMilliseconds(350));
+                System.Text.RegularExpressions.MatchCollection matches = urlRegex.Matches(rawClip);
+                HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 ShihabBatchCaptureDto shihabDto = new ShihabBatchCaptureDto { ShihabLinks = new List<MehediBatchLinkEntryDto>() };
-                for (int mehediI = 0; mehediI < mehediTokens.Length; mehediI++)
+                for (int mehediI = 0; mehediI < matches.Count; mehediI++)
                 {
-                    string tok = mehediTokens[mehediI];
-                    Uri u;
-                    if (!ShihabProcessAndPathSafety.ContainsControlOrNewline(tok) &&
-                        Uri.TryCreate(tok, UriKind.Absolute, out u) &&
-                        (string.Equals(u.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) ||
-                         string.Equals(u.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)))
+                    string tok = matches[mehediI].Value.Trim().TrimEnd('.', ',', ';', ':', '!', '?', ')', ']', '}');
+                    if (string.IsNullOrWhiteSpace(tok) || ShihabProcessAndPathSafety.ContainsControlOrNewline(tok)) continue;
+                    if (!IsAllowedDownloadSourceUrl(tok)) continue;
+                    if (seen.Add(tok))
                     {
                         shihabDto.ShihabLinks.Add(new MehediBatchLinkEntryDto { ShihabUrl = tok, MehediText = "Clipboard URL" });
                     }
                 }
                 if (shihabDto.ShihabLinks.Count == 0)
                 {
-                    MessageBox.Show(this, "Cannot find any http:// or https:// web address in clipboard!", "MHS Download Manager", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    MessageBox.Show(this, "Cannot find any http://, https://, ftp://, or magnet:? address in clipboard!", "MHS Download Manager", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     return;
                 }
                 HandleBrowserMehediBatchCapture(shihabDto);
@@ -915,7 +1008,10 @@ namespace ShihabMehediIDM
         {
             using (ShihabTorrentAddDialog dlg = new ShihabTorrentAddDialog(_mehediConfig, initialMagnetOrPath))
             {
-                if (dlg.ShowDialog(this) == DialogResult.OK && dlg.ConfiguredTorrentItem != null)
+                IWin32Window owner = GetShihabDialogOwnerOrNull();
+                if (owner == null) dlg.StartPosition = FormStartPosition.CenterScreen;
+                DialogResult res = owner != null ? dlg.ShowDialog(owner) : dlg.ShowDialog();
+                if (res == DialogResult.OK && dlg.ConfiguredTorrentItem != null)
                 {
                     _shihabEngine.AddShihabDownloadItem(dlg.ConfiguredTorrentItem, dlg.StartImmediately);
                     if (dlg.StartImmediately && _mehediConfig.MehediShowDownloadProgressDialog)
@@ -1043,7 +1139,13 @@ namespace ShihabMehediIDM
                     else
                     {
                         List<string> shihabLines = new List<string>();
-                        for (int mehediI = 0; mehediI < mehediItems.Count; mehediI++) shihabLines.Add(mehediItems[mehediI].MehediUrl);
+                        for (int mehediI = 0; mehediI < mehediItems.Count; mehediI++)
+                        {
+                            if (mehediItems[mehediI] != null && !mehediItems[mehediI].ShihabIsPrivateIncognito)
+                            {
+                                shihabLines.Add(mehediItems[mehediI].MehediUrl);
+                            }
+                        }
                         File.WriteAllLines(shihabSfd.FileName, shihabLines.ToArray());
                     }
                 }
@@ -1132,7 +1234,7 @@ namespace ShihabMehediIDM
                 "  mdm.exe --cli check-update [--json]     Check GitHub Releases for updates\n" +
                 "  mdm.exe --cli update [--verify-only]    Verify SHA256SUMS.txt & install update\n" +
                 "  mdm.exe --cli pair                      Print LAN Web UI URL, PIN & QR code\n" +
-                "  mdm.exe --mcp                           Start JSON-RPC 2.0 MCP server (15 tools)\n" +
+                "  mdm.exe --mcp                           Start JSON-RPC 2.0 MCP server (16 tools)\n" +
                 "  mdm.exe --headless                      Run daemon + browser bridge without GUI",
                 ShihabThemePalette.ShihabMainHeaderTitle + " — CLI & MCP Help",
                 MessageBoxButtons.OK,

@@ -46,6 +46,19 @@ namespace ShihabMehediIDM
 
         public static event Action<string> OnVpnKillSwitchTripped;
 
+        public static MehediAppConfiguration ActiveConfig
+        {
+            get { return _activeConfig; }
+        }
+
+        public static void RegisterActiveConfig(MehediAppConfiguration cfg)
+        {
+            if (cfg != null)
+            {
+                _activeConfig = cfg;
+            }
+        }
+
         static ShihabLocalNetworkRelay()
         {
             try
@@ -123,7 +136,14 @@ namespace ShihabMehediIDM
                     string cleanAddr = SanitizeHostToken(cfg.ShihabProxyAddress);
                     if (!string.IsNullOrEmpty(cleanAddr))
                     {
-                        return string.Format(CultureInfo.InvariantCulture, "http://{0}:{1}", cleanAddr, cfg.MehediProxyPort > 0 ? cfg.MehediProxyPort : 8080);
+                        int pPort = cfg.MehediProxyPort > 0 ? cfg.MehediProxyPort : 8080;
+                        if (!string.IsNullOrWhiteSpace(cfg.ShihabProxyUser))
+                        {
+                            string u = Uri.EscapeDataString(cfg.ShihabProxyUser.Trim());
+                            string p = Uri.EscapeDataString(ShihabSecretsVault.UnprotectSecret(cfg.MehediProxyPassword ?? ""));
+                            return string.Format(CultureInfo.InvariantCulture, "http://{0}:{1}@{2}:{3}", u, p, cleanAddr, pPort);
+                        }
+                        return string.Format(CultureInfo.InvariantCulture, "http://{0}:{1}", cleanAddr, pPort);
                     }
                 }
                 return "";
@@ -294,6 +314,80 @@ namespace ShihabMehediIDM
                         }
 
                         MehediAppConfiguration cfgSnapshot = _activeConfig;
+                        if (method != "CONNECT")
+                        {
+                            string plainRoute = ResolveEffectiveUpstreamProxySpec(fullUrl, targetHost, cfgSnapshot);
+                            if (plainRoute.StartsWith("PROXY ", StringComparison.OrdinalIgnoreCase))
+                            {
+                                string hp = plainRoute.Substring(6).Trim();
+                                int cIdx = hp.LastIndexOf(':');
+                                string pHost = cIdx > 0 ? SanitizeHostToken(hp.Substring(0, cIdx)) : "";
+                                int pPort = 8080;
+                                if (cIdx > 0) int.TryParse(hp.Substring(cIdx + 1), out pPort);
+                                if (!string.IsNullOrEmpty(pHost) && pPort > 0 && pPort <= 65535)
+                                {
+                                    IPAddress boundLocalIp = null;
+                                    if (cfgSnapshot != null && !string.IsNullOrWhiteSpace(cfgSnapshot.ShihabBoundNetworkAdapter))
+                                    {
+                                        boundLocalIp = ShihabDnsAndNetworkManager.GetBoundAdapterLocalIp(cfgSnapshot.ShihabBoundNetworkAdapter);
+                                        if (boundLocalIp == null)
+                                        {
+                                            throw new WebException("VPN / Network Adapter Kill-Switch blocked connection: '" + cfgSnapshot.ShihabBoundNetworkAdapter + "' is disconnected.");
+                                        }
+                                    }
+                                    using (Socket proxySock = DialDirectHappyEyeballs(pHost, pPort, cfgSnapshot, boundLocalIp))
+                                    using (NetworkStream upStream = new NetworkStream(proxySock, false))
+                                    {
+                                        StringBuilder reqSb = new StringBuilder();
+                                        reqSb.Append(method).Append(' ').Append(rawTarget).Append(" HTTP/1.1\r\n");
+                                        for (int i = 0; i < headerLines.Count; i++)
+                                        {
+                                            string hl = headerLines[i];
+                                            if (hl.StartsWith("Proxy-Authorization:", StringComparison.OrdinalIgnoreCase) ||
+                                                hl.StartsWith("Proxy-Connection:", StringComparison.OrdinalIgnoreCase))
+                                            {
+                                                continue;
+                                            }
+                                            reqSb.Append(hl).Append("\r\n");
+                                        }
+                                        if (cfgSnapshot != null && !string.IsNullOrWhiteSpace(cfgSnapshot.ShihabProxyUser))
+                                        {
+                                            string rawCred = cfgSnapshot.ShihabProxyUser.Trim() + ":" + ShihabSecretsVault.UnprotectSecret(cfgSnapshot.MehediProxyPassword ?? "");
+                                            reqSb.Append("Proxy-Authorization: Basic ").Append(Convert.ToBase64String(Encoding.UTF8.GetBytes(rawCred))).Append("\r\n");
+                                        }
+                                        reqSb.Append("Connection: close\r\n\r\n");
+                                        byte[] outHdr = Encoding.ASCII.GetBytes(reqSb.ToString());
+                                        upStream.Write(outHdr, 0, outHdr.Length);
+
+                                        long contentLen = 0;
+                                        for (int i = 0; i < headerLines.Count; i++)
+                                        {
+                                            if (headerLines[i].StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase))
+                                            {
+                                                long.TryParse(headerLines[i].Substring(15).Trim(), out contentLen);
+                                            }
+                                        }
+                                        if (contentLen > 0)
+                                        {
+                                            byte[] bBuf = new byte[16384];
+                                            long rem = contentLen;
+                                            while (rem > 0)
+                                            {
+                                                int r = clientStream.Read(bBuf, 0, (int)Math.Min(bBuf.Length, rem));
+                                                if (r <= 0) break;
+                                                upStream.Write(bBuf, 0, r);
+                                                rem -= r;
+                                            }
+                                        }
+                                        upStream.Flush();
+                                        upStream.CopyTo(clientStream);
+                                        clientStream.Flush();
+                                    }
+                                    return;
+                                }
+                            }
+                        }
+
                         using (Socket upstream = ConnectUpstreamSocket(targetHost, targetPort, fullUrl, cfgSnapshot))
                         using (NetworkStream upStream = new NetworkStream(upstream, false))
                         {
@@ -440,6 +534,7 @@ namespace ShihabMehediIDM
                     cfg != null ? ShihabSecretsVault.UnprotectSecret(cfg.MehediProxyPassword) : "",
                     targetHost,
                     targetPort,
+                    cfg,
                     boundLocalIp);
             }
 
@@ -459,8 +554,15 @@ namespace ShihabMehediIDM
                         {
                             using (NetworkStream ns = new NetworkStream(proxySock, false))
                             {
-                                string connectCmd = string.Format(CultureInfo.InvariantCulture, "CONNECT {0}:{1} HTTP/1.1\r\nHost: {0}:{1}\r\n\r\n", targetHost, targetPort);
-                                byte[] cmdBytes = Encoding.ASCII.GetBytes(connectCmd);
+                                StringBuilder connectSb = new StringBuilder();
+                                connectSb.AppendFormat(CultureInfo.InvariantCulture, "CONNECT {0}:{1} HTTP/1.1\r\nHost: {0}:{1}\r\n", targetHost, targetPort);
+                                if (cfg != null && !string.IsNullOrWhiteSpace(cfg.ShihabProxyUser))
+                                {
+                                    string rawCred = cfg.ShihabProxyUser.Trim() + ":" + ShihabSecretsVault.UnprotectSecret(cfg.MehediProxyPassword ?? "");
+                                    connectSb.Append("Proxy-Authorization: Basic ").Append(Convert.ToBase64String(Encoding.UTF8.GetBytes(rawCred))).Append("\r\n");
+                                }
+                                connectSb.Append("\r\n");
+                                byte[] cmdBytes = Encoding.ASCII.GetBytes(connectSb.ToString());
                                 ns.Write(cmdBytes, 0, cmdBytes.Length);
                                 string statusLine = ReadAsciiLine(ns);
                                 while (!string.IsNullOrEmpty(ReadAsciiLine(ns))) { }
@@ -493,9 +595,16 @@ namespace ShihabMehediIDM
                 int sPort = cfg.ShihabSocksPort > 0 ? cfg.ShihabSocksPort : 1080;
                 if (!string.IsNullOrEmpty(sHost)) return "SOCKS5 " + sHost + ":" + sPort;
             }
+            if ((string.Equals(mode, "Manual", StringComparison.OrdinalIgnoreCase) || cfg.MehediUseHttpProxy) &&
+                !string.IsNullOrWhiteSpace(cfg.ShihabProxyAddress))
+            {
+                string pHost = SanitizeHostToken(cfg.ShihabProxyAddress);
+                int pPort = cfg.MehediProxyPort > 0 ? cfg.MehediProxyPort : 8080;
+                if (!string.IsNullOrEmpty(pHost)) return "PROXY " + pHost + ":" + pPort;
+            }
             if (string.Equals(mode, "PAC", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(cfg.ShihabPacScriptUrl))
             {
-                string script = FetchPacScript(cfg.ShihabPacScriptUrl.Trim());
+                string script = FetchPacScript(cfg.ShihabPacScriptUrl.Trim(), cfg);
                 if (!string.IsNullOrEmpty(script))
                 {
                     return EvaluatePacFindProxyForUrl(script, fullUrl, host);
@@ -504,7 +613,7 @@ namespace ShihabMehediIDM
             return "DIRECT";
         }
 
-        private static string FetchPacScript(string pacUrl)
+        private static string FetchPacScript(string pacUrl, MehediAppConfiguration cfg)
         {
             lock (_relayLock)
             {
@@ -526,6 +635,21 @@ namespace ShihabMehediIDM
                     req.Timeout = 6000;
                     req.ReadWriteTimeout = 6000;
                     req.AllowAutoRedirect = false;
+                    if (cfg != null && !string.IsNullOrWhiteSpace(cfg.ShihabBoundNetworkAdapter) &&
+                        !cfg.ShihabBoundNetworkAdapter.StartsWith("Any", StringComparison.OrdinalIgnoreCase) &&
+                        !parsedPac.IsLoopback)
+                    {
+                        IPAddress boundIp;
+                        string failReason;
+                        if (!ShihabDnsAndNetworkManager.TryGetBoundAdapterLocalIp(cfg, out boundIp, out failReason) || boundIp == null)
+                        {
+                            return "";
+                        }
+                        req.ServicePoint.BindIPEndPointDelegate = delegate(ServicePoint sp, IPEndPoint remoteEndPoint, int retryCount)
+                        {
+                            return new IPEndPoint(boundIp, 0);
+                        };
+                    }
                     using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
                     using (Stream st = resp.GetResponseStream())
                     using (MemoryStream ms = new MemoryStream())
@@ -631,6 +755,7 @@ namespace ShihabMehediIDM
             string password,
             string targetHost,
             int targetPort,
+            MehediAppConfiguration cfg,
             IPAddress boundLocalIp)
         {
             if (string.IsNullOrEmpty(socksHost) || socksPort <= 0 || socksPort > 65535)
@@ -643,7 +768,7 @@ namespace ShihabMehediIDM
                 throw new ArgumentException("Target host exceeds SOCKS5 domain length bounds.");
             }
 
-            Socket sock = DialDirectHappyEyeballs(socksHost, socksPort, null, boundLocalIp);
+            Socket sock = DialDirectHappyEyeballs(socksHost, socksPort, cfg, boundLocalIp);
             try
             {
                 using (NetworkStream ns = new NetworkStream(sock, false))
@@ -784,10 +909,22 @@ namespace ShihabMehediIDM
                 return list;
             }
 
-            if (cfg != null && string.Equals(cfg.ShihabDnsMode, "Plain", StringComparison.OrdinalIgnoreCase) &&
+            if (cfg != null &&
+                (string.Equals(cfg.ShihabDnsMode, "Plain", StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(cfg.ShihabDnsMode, "PlainDNS", StringComparison.OrdinalIgnoreCase)) &&
                 !string.IsNullOrWhiteSpace(cfg.ShihabPlainDnsServer))
             {
-                IPAddress resolvedPlain = QueryPlainUdpDnsA(host, cfg.ShihabPlainDnsServer.Trim());
+                IPAddress boundDnsIp = null;
+                if (!string.IsNullOrWhiteSpace(cfg.ShihabBoundNetworkAdapter) &&
+                    !cfg.ShihabBoundNetworkAdapter.StartsWith("Any", StringComparison.OrdinalIgnoreCase))
+                {
+                    string reason;
+                    if (!ShihabDnsAndNetworkManager.TryGetBoundAdapterLocalIp(cfg, out boundDnsIp, out reason))
+                    {
+                        return list;
+                    }
+                }
+                IPAddress resolvedPlain = QueryPlainUdpDnsA(host, cfg.ShihabPlainDnsServer.Trim(), boundDnsIp);
                 if (resolvedPlain != null)
                 {
                     list.Add(resolvedPlain);
@@ -825,6 +962,11 @@ namespace ShihabMehediIDM
 
         public static IPAddress QueryPlainUdpDnsA(string domain, string dnsServerIp)
         {
+            return QueryPlainUdpDnsA(domain, dnsServerIp, null);
+        }
+
+        public static IPAddress QueryPlainUdpDnsA(string domain, string dnsServerIp, IPAddress boundLocalIp)
+        {
             try
             {
                 IPAddress serverAddr;
@@ -855,7 +997,10 @@ namespace ShihabMehediIDM
                     pkt = q.ToArray();
                 }
 
-                using (UdpClient udp = new UdpClient(serverAddr.AddressFamily))
+                UdpClient udp = (boundLocalIp != null && boundLocalIp.AddressFamily == serverAddr.AddressFamily && !IPAddress.IsLoopback(serverAddr))
+                    ? new UdpClient(new IPEndPoint(boundLocalIp, 0))
+                    : new UdpClient(serverAddr.AddressFamily);
+                using (udp)
                 {
                     udp.Client.ReceiveTimeout = 3500;
                     udp.Client.SendTimeout = 3500;

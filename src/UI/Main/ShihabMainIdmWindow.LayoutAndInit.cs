@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using System.Windows.Forms;
@@ -10,6 +11,13 @@ namespace ShihabMehediIDM
     public partial class ShihabMainIdmWindow : ShihabChromeForm
     {
         private const int WM_CLIPBOARDUPDATE = 0x031D;
+        private const int WM_HOTKEY = 0x0312;
+        private const int GLOBAL_HOTKEY_ID = 0x5348;
+        private const uint MOD_ALT = 0x0001;
+        private const uint MOD_CONTROL = 0x0002;
+        private const uint MOD_SHIFT = 0x0004;
+        private const uint MOD_WIN = 0x0008;
+        private const uint MOD_NOREPEAT = 0x4000;
 
         protected override bool ShihabResizableChrome
         {
@@ -29,6 +37,12 @@ namespace ShihabMehediIDM
 
         [DllImport("user32.dll", SetLastError = true)]
         private static extern bool RemoveClipboardFormatListener(IntPtr hwnd);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
 
         private readonly ShihabStateStore _shihabStore;
         private readonly MehediAppConfiguration _mehediConfig;
@@ -67,6 +81,7 @@ namespace ShihabMehediIDM
         private ShihabHeaderPillButton _shihabUpdatePillBtn;
         private ShihabHeaderPillButton _mehediMenuPillBtn;
         private ShihabRemoteControlServer _shihabRemoteServer;
+        private ShihabClickNLoadServer _shihabClickNLoadServer;
 
         private ShihabRoundedCardPanel _shihabSearchBarPanel;
         private TextBox _mehediSearchBox;
@@ -98,6 +113,9 @@ namespace ShihabMehediIDM
         private int _cleanedUpFlag;
         private bool _shihabClipboardPollInFlight = false;
         private bool _clipboardListenerRegistered = false;
+        private bool _globalHotkeyRegistered = false;
+        private readonly List<ShihabDownloadItem> _recentCompletedBatch = new List<ShihabDownloadItem>();
+        private Timer _completeCoalesceTimer;
         private DateTime _lastGridRefreshUtc = DateTime.MinValue;
 
         private string _shihabActiveTreeFilter = "ALL";
@@ -223,12 +241,19 @@ namespace ShihabMehediIDM
                 _shihabRemoteServer.Start();
             }
 
+            _shihabClickNLoadServer = new ShihabClickNLoadServer(_mehediConfig, _shihabEngine);
+            if (_mehediConfig.ShihabEnableClickNLoad)
+            {
+                _shihabClickNLoadServer.Start();
+            }
+
             _networkRestoredHandler = delegate
             {
                 if (_mehediConfig.ShihabAutoResumeOnNetworkRestore)
                 {
                     SafeShihabUiInvoke(delegate
                     {
+                        _shihabEngine.ResumeDownloadsAfterNetworkRestore();
                         _shihabEngine.StartShihabQueue("Main Download Queue");
                     });
                 }
@@ -361,10 +386,12 @@ namespace ShihabMehediIDM
             {
                 _clipboardListenerRegistered = false;
             }
+            ApplyConfiguredGlobalHotkey();
         }
 
         protected override void OnHandleDestroyed(EventArgs e)
         {
+            UnregisterConfiguredGlobalHotkey();
             if (_clipboardListenerRegistered)
             {
                 try { RemoveClipboardFormatListener(Handle); } catch { }
@@ -373,8 +400,105 @@ namespace ShihabMehediIDM
             base.OnHandleDestroyed(e);
         }
 
+        private void UnregisterConfiguredGlobalHotkey()
+        {
+            if (_globalHotkeyRegistered && IsHandleCreated)
+            {
+                try { UnregisterHotKey(Handle, GLOBAL_HOTKEY_ID); } catch { }
+            }
+            _globalHotkeyRegistered = false;
+        }
+
+        private void ApplyConfiguredGlobalHotkey()
+        {
+            UnregisterConfiguredGlobalHotkey();
+            if (!IsHandleCreated || _mehediConfig == null || string.IsNullOrWhiteSpace(_mehediConfig.ShihabGlobalHotkeySpec))
+            {
+                return;
+            }
+            uint mods;
+            uint vk;
+            if (!TryParseGlobalHotkeySpec(_mehediConfig.ShihabGlobalHotkeySpec, out mods, out vk))
+            {
+                return;
+            }
+            try
+            {
+                _globalHotkeyRegistered = RegisterHotKey(Handle, GLOBAL_HOTKEY_ID, mods | MOD_NOREPEAT, vk);
+            }
+            catch
+            {
+                _globalHotkeyRegistered = false;
+            }
+        }
+
+        private static bool TryParseGlobalHotkeySpec(string spec, out uint modifiers, out uint vk)
+        {
+            modifiers = 0;
+            vk = 0;
+            if (string.IsNullOrWhiteSpace(spec)) return false;
+            string[] parts = spec.Split(new char[] { '+', '-', ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            for (int i = 0; i < parts.Length; i++)
+            {
+                string tok = parts[i].Trim();
+                if (tok.Length == 0) continue;
+                if (string.Equals(tok, "Ctrl", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(tok, "Control", StringComparison.OrdinalIgnoreCase))
+                {
+                    modifiers |= MOD_CONTROL;
+                }
+                else if (string.Equals(tok, "Alt", StringComparison.OrdinalIgnoreCase))
+                {
+                    modifiers |= MOD_ALT;
+                }
+                else if (string.Equals(tok, "Shift", StringComparison.OrdinalIgnoreCase))
+                {
+                    modifiers |= MOD_SHIFT;
+                }
+                else if (string.Equals(tok, "Win", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(tok, "Windows", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(tok, "Meta", StringComparison.OrdinalIgnoreCase))
+                {
+                    modifiers |= MOD_WIN;
+                }
+                else
+                {
+                    if (tok.Length == 1 && tok[0] >= '0' && tok[0] <= '9')
+                    {
+                        tok = "D" + tok;
+                    }
+                    else if (string.Equals(tok, "Ins", StringComparison.OrdinalIgnoreCase))
+                    {
+                        tok = "Insert";
+                    }
+                    else if (string.Equals(tok, "Del", StringComparison.OrdinalIgnoreCase))
+                    {
+                        tok = "Delete";
+                    }
+                    Keys parsedKey;
+                    if (Enum.TryParse<Keys>(tok, true, out parsedKey))
+                    {
+                        vk = (uint)(parsedKey & Keys.KeyCode);
+                    }
+                }
+            }
+            return modifiers != 0 && vk != 0;
+        }
+
         protected override void WndProc(ref Message m)
         {
+            if (m.Msg == WM_HOTKEY && m.WParam.ToInt32() == GLOBAL_HOTKEY_ID)
+            {
+                if (Visible && WindowState != FormWindowState.Minimized)
+                {
+                    MinimizeShihabToBackgroundTray(true);
+                }
+                else
+                {
+                    RestoreAndActivateMainWindow();
+                }
+                return;
+            }
             if (m.Msg == WM_CLIPBOARDUPDATE && _mehediConfig != null && _mehediConfig.ShihabMonitorClipboard)
             {
                 PollShihabClipboardForDownloadUrl();
@@ -693,6 +817,29 @@ namespace ShihabMehediIDM
             _shihabDownloadsListView.DragDrop += delegate(object shihabS, DragEventArgs mehediE)
             {
                 HandleDragDropDataObject(mehediE.Data);
+            };
+            _shihabDownloadsListView.ItemDrag += delegate(object shihabS, ItemDragEventArgs mehediE)
+            {
+                try
+                {
+                    List<ShihabDownloadItem> sel = GetSelectedShihabItems();
+                    List<string> dragPaths = new List<string>();
+                    for (int di = 0; di < sel.Count; di++)
+                    {
+                        if (sel[di] == null || sel[di].GetShihabStatusEnum() != ShihabDownloadStatus.ShihabCompleted) continue;
+                        string fullPath = sel[di].GetShihabFullTargetPath();
+                        if (!string.IsNullOrWhiteSpace(fullPath) && (File.Exists(fullPath) || Directory.Exists(fullPath)))
+                        {
+                            dragPaths.Add(fullPath);
+                        }
+                    }
+                    if (dragPaths.Count > 0)
+                    {
+                        DataObject dropOut = new DataObject(DataFormats.FileDrop, dragPaths.ToArray());
+                        _shihabDownloadsListView.DoDragDrop(dropOut, DragDropEffects.Copy);
+                    }
+                }
+                catch { }
             };
             _shihabDownloadsListView.ContextMenuStrip = BuildMehediRowContextMenu();
 
@@ -1140,14 +1287,24 @@ namespace ShihabMehediIDM
             AddSortMenuOption(viewArrangeSub, "By Status", "STATUS", 6);
 
             ToolStripMenuItem viewThemeSub = new ToolStripMenuItem("Theme");
-            string[] builtInThemes = new string[] { "Obsidian Dark", "Midnight Violet", "Nordic Slate", "Cyber Emerald", "Classic Light" };
-            for (int t = 0; t < builtInThemes.Length; t++)
+            Action populateViewThemeMenu = delegate
             {
-                AddThemeMenuOption(viewThemeSub, builtInThemes[t]);
-            }
+                viewThemeSub.DropDownItems.Clear();
+                List<string> availThemes = ShihabThemeManager.GetAllAvailableThemeNames(_shihabStore.MehediBaseDirectory);
+                for (int t = 0; t < availThemes.Count; t++)
+                {
+                    AddThemeMenuOption(viewThemeSub, availThemes[t]);
+                }
+                for (int i = 0; i < viewThemeSub.DropDownItems.Count; i++)
+                {
+                    ToolStripMenuItem ti = viewThemeSub.DropDownItems[i] as ToolStripMenuItem;
+                    if (ti != null) ti.Checked = string.Equals(_mehediConfig.ShihabThemeName, ti.Tag as string, StringComparison.OrdinalIgnoreCase);
+                }
+            };
+            populateViewThemeMenu();
 
             ToolStripMenuItem viewScaleSub = new ToolStripMenuItem("UI Scale");
-            int[] scales = new int[] { 90, 100, 115, 125, 150 };
+            int[] scales = new int[] { 90, 100, 115, 125, 150, 175, 200 };
             for (int s = 0; s < scales.Length; s++)
             {
                 AddScaleMenuOption(viewScaleSub, scales[s]);
@@ -1160,11 +1317,7 @@ namespace ShihabMehediIDM
                 viewLargeIcons.Checked = _shihabTopRibbonBar.Visible && !_shihabTopRibbonBar.CompactMode;
                 viewCompactIcons.Checked = _shihabTopRibbonBar.Visible && _shihabTopRibbonBar.CompactMode;
                 viewDropTarget.Checked = _shihabDropTargetForm != null && !_shihabDropTargetForm.IsDisposed && _shihabDropTargetForm.Visible;
-                for (int i = 0; i < viewThemeSub.DropDownItems.Count; i++)
-                {
-                    ToolStripMenuItem ti = viewThemeSub.DropDownItems[i] as ToolStripMenuItem;
-                    if (ti != null) ti.Checked = string.Equals(_mehediConfig.ShihabThemeName, ti.Tag as string, StringComparison.OrdinalIgnoreCase);
-                }
+                populateViewThemeMenu();
                 for (int i = 0; i < viewScaleSub.DropDownItems.Count; i++)
                 {
                     ToolStripMenuItem si = viewScaleSub.DropDownItems[i] as ToolStripMenuItem;
@@ -1233,7 +1386,8 @@ namespace ShihabMehediIDM
             ToolStripMenuItem tItem = new ToolStripMenuItem(tName, null, delegate
             {
                 _mehediConfig.ShihabThemeName = tName;
-                _mehediConfig.ShihabDarkMode = !string.Equals(tName, "Classic Light", StringComparison.OrdinalIgnoreCase);
+                ShihabCustomThemePreset resolvedPreset = ShihabThemeManager.ResolveThemePalette(tName, _shihabStore.MehediBaseDirectory);
+                _mehediConfig.ShihabDarkMode = ShihabThemeManager.IsDarkThemePreset(resolvedPreset);
                 _shihabStore.SaveMehediConfig(_mehediConfig);
                 ApplyMehediTheme();
             });
@@ -1415,6 +1569,7 @@ namespace ShihabMehediIDM
             ToolStripMenuItem ctxOpenFolder = new ToolStripMenuItem("Open Folder", null, delegate { OpenSelectedMehediContainingFolder(); });
             ToolStripMenuItem ctxRefreshAddr = new ToolStripMenuItem("Refresh Download Address...", null, delegate { RefreshSelectedMehediAddress(); });
             ToolStripMenuItem ctxRedownload = new ToolStripMenuItem("Redownload from Beginning", null, delegate { RedownloadSelectedShihabItem(); });
+            ToolStripMenuItem ctxRecheckTor = new ToolStripMenuItem("Force Recheck Torrent (SHA-1)", null, delegate { ForceRecheckSelectedTorrent(); });
             ToolStripMenuItem mehediMoveQueue = new ToolStripMenuItem("Move to Queue");
             ToolStripMenuItem ctxRemove = new ToolStripMenuItem("Remove from List", null, delegate { DeleteSelectedShihabDownloads(false); });
             ToolStripMenuItem ctxRemoveDisk = new ToolStripMenuItem("Remove + Delete File from Disk...", null, delegate { PromptAndDeleteSelectedDownloads(true); });
@@ -1433,6 +1588,9 @@ namespace ShihabMehediIDM
                 ctxOpenFolder.Enabled = hasSel;
                 ctxRefreshAddr.Enabled = hasSel;
                 ctxRedownload.Enabled = hasSel;
+                List<ShihabDownloadItem> selItemsForCtx = GetSelectedShihabItems();
+                ctxRecheckTor.Visible = selItemsForCtx.Count > 0 && selItemsForCtx[0].ShihabIsTorrent;
+                ctxRecheckTor.Enabled = ctxRecheckTor.Visible;
                 mehediMoveQueue.Enabled = hasSel;
                 ctxRemove.Enabled = hasSel;
                 ctxRemoveDisk.Enabled = hasSel;
@@ -1452,7 +1610,7 @@ namespace ShihabMehediIDM
                 new ToolStripSeparator(),
                 ctxOpen, ctxOpenWith, ctxOpenFolder,
                 new ToolStripSeparator(),
-                ctxRefreshAddr, ctxRedownload, mehediMoveQueue,
+                ctxRefreshAddr, ctxRedownload, ctxRecheckTor, mehediMoveQueue,
                 new ToolStripSeparator(),
                 ctxRemove, ctxRemoveDisk,
                 new ToolStripSeparator(),

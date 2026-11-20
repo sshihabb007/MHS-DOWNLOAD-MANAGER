@@ -21,7 +21,7 @@ namespace ShihabMehediIDM
         {
             bool dark = config.ShihabDarkMode;
             Text = "BitTorrent / Magnet & .torrent Manager — " + ShihabThemePalette.ShihabMainHeaderTitle;
-            Size = new Size(720, 510);
+            Size = new Size(740, 560);
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
             StartPosition = FormStartPosition.CenterParent;
@@ -33,17 +33,20 @@ namespace ShihabMehediIDM
 
             Color surf = ShihabThemePalette.GetShihabSurfaceBg(dark);
 
-            Label srcLbl = new Label { Text = "Magnet URI or .torrent File:", Location = new Point(16, 18), AutoSize = true };
-            TextBox srcBox = new TextBox { Location = new Point(185, 15), Width = 400, Text = initialMagnetOrPath ?? "", BackColor = surf, ForeColor = ForeColor };
-            Button browseTorBtn = ShihabThemePalette.CreateMehediStyledButton("Browse .torrent", surf, ForeColor, 108);
+            Label srcLbl = new Label { Text = "Magnet / .torrent:", Location = new Point(16, 18), AutoSize = true };
+            TextBox srcBox = new TextBox { Location = new Point(132, 15), Width = 358, Text = initialMagnetOrPath ?? "", BackColor = surf, ForeColor = ForeColor };
+            Button fetchMetaBtn = ShihabThemePalette.CreateMehediStyledButton("Fetch Info", ShihabThemePalette.GetShihabAccentBlue(), Color.White, 102);
+            fetchMetaBtn.Height = 25;
+            fetchMetaBtn.Location = new Point(496, 13);
+            Button browseTorBtn = ShihabThemePalette.CreateMehediStyledButton("Browse .torrent", surf, ForeColor, 110);
             browseTorBtn.Height = 25;
-            browseTorBtn.Location = new Point(592, 13);
+            browseTorBtn.Location = new Point(604, 13);
 
             Label infoLbl = new Label
             {
-                Text = "Info-Hash: (paste a magnet:? link or browse a .torrent file to inspect)",
+                Text = "Info-Hash: (paste a magnet:? link, HTTP .torrent URL, or browse a local .torrent file)",
                 Location = new Point(16, 48),
-                Size = new Size(680, 22),
+                Size = new Size(700, 22),
                 ForeColor = ShihabThemePalette.GetShihabAccentBlue(),
                 Font = ShihabThemePalette.UiSemibold9Font
             };
@@ -51,7 +54,7 @@ namespace ShihabMehediIDM
             ShihabModernListView filesView = new ShihabModernListView
             {
                 Location = new Point(16, 76),
-                Size = new Size(680, 235),
+                Size = new Size(700, 210),
                 BorderStyle = BorderStyle.FixedSingle,
                 CheckBoxes = true,
                 MehediDarkMode = dark,
@@ -60,64 +63,93 @@ namespace ShihabMehediIDM
                 ForeColor = ForeColor
             };
             filesView.Columns.Add("#", 45);
-            filesView.Columns.Add("File Path inside Torrent", 460);
+            filesView.Columns.Add("File Path inside Torrent", 480);
             filesView.Columns.Add("Size", 140);
 
-            ShihabTorrentMetadata currentMeta = null;
+            Button selAllBtn = ShihabThemePalette.CreateMehediStyledButton("Select All", surf, ForeColor, 86);
+            selAllBtn.Height = 23;
+            selAllBtn.Location = new Point(16, 291);
+            Button selNoneBtn = ShihabThemePalette.CreateMehediStyledButton("Select None", surf, ForeColor, 92);
+            selNoneBtn.Height = 23;
+            selNoneBtn.Location = new Point(108, 291);
+            Label selSummaryLbl = new Label { Text = "Selected: All files", Location = new Point(212, 295), Size = new Size(500, 18), ForeColor = ShihabThemePalette.GetMehediMutedText(dark) };
 
-            Action parseCurrentSource = delegate
+            ShihabTorrentMetadata currentMeta = null;
+            System.Threading.CancellationTokenSource metaFetchCts = null;
+
+            string defaultTorDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads", "Torrents");
+            Label saveLbl = new Label { Text = "Save Directory:", Location = new Point(16, 326), AutoSize = true };
+            TextBox saveBox = new TextBox { Location = new Point(125, 323), Width = 495, Text = defaultTorDir, BackColor = surf, ForeColor = ForeColor };
+            Button browseDirBtn = ShihabThemePalette.CreateMehediStyledButton("Browse", surf, ForeColor, 90);
+            browseDirBtn.Height = 25;
+            browseDirBtn.Location = new Point(626, 321);
+
+            Label renameLbl = new Label { Text = "Rename (optional):", Location = new Point(16, 358), AutoSize = true };
+            TextBox renameBox = new TextBox { Location = new Point(132, 355), Width = 330, Text = "", BackColor = surf, ForeColor = ForeColor };
+            CheckBox createSubfolderChk = new CheckBox { Text = "Create a folder for this torrent", Location = new Point(474, 357), AutoSize = true, Checked = true };
+
+            Action updateSelectionSummary = delegate
             {
-                string raw = srcBox.Text.Trim();
+                if (filesView.Items.Count == 0)
+                {
+                    selSummaryLbl.Text = (currentMeta != null && currentMeta.IsMagnetPendingMetadata)
+                        ? "Magnet metadata pending (click 'Fetch Info' to preview files, or start directly to download all files)"
+                        : "Selected: All files";
+                    return;
+                }
+                int cnt = 0;
+                long bytes = 0;
+                for (int i = 0; i < filesView.Items.Count; i++)
+                {
+                    if (filesView.Items[i].Checked)
+                    {
+                        cnt++;
+                        ShihabTorrentFileEntry fe = filesView.Items[i].Tag as ShihabTorrentFileEntry;
+                        if (fe != null) bytes += fe.SizeBytes;
+                    }
+                }
+                selSummaryLbl.Text = string.Format("Selected: {0}/{1} files ({2})", cnt, filesView.Items.Count, ShihabFormatHelpers.FormatMehediBytes(bytes));
+            };
+
+            Action renderMeta = delegate
+            {
                 filesView.BeginUpdate();
                 try
                 {
                     filesView.Items.Clear();
-                    if (string.IsNullOrEmpty(raw))
-                    {
-                        currentMeta = null;
-                        infoLbl.Text = "Info-Hash: (none)";
-                        return;
-                    }
-                    if (ShihabProcessAndPathSafety.ContainsControlOrNewline(raw))
-                    {
-                        currentMeta = null;
-                        infoLbl.Text = "Error: Invalid control characters in torrent source.";
-                        return;
-                    }
-                    if (raw.StartsWith("magnet:?", StringComparison.OrdinalIgnoreCase))
-                    {
-                        currentMeta = ShihabTorrentManager.ParseMagnetUri(raw);
-                    }
-                    else if (File.Exists(raw))
-                    {
-                        currentMeta = ShihabTorrentManager.InspectTorrentFile(raw);
-                    }
-                    else
-                    {
-                        currentMeta = null;
-                    }
-
                     if (currentMeta != null && currentMeta.ParsedSuccessfully)
                     {
-                        infoLbl.Text = string.Format("Name: {0}   |   Info-Hash: {1}   |   Total: {2}   |   Trackers: {3}   |   WebSeeds: {4}",
+                        string privTag = currentMeta.IsPrivate ? "   |   Private (BEP-27)" : "";
+                        infoLbl.Text = string.Format("Name: {0}   |   Info-Hash: {1}   |   Total: {2}   |   Trackers: {3}   |   WebSeeds: {4}{5}",
                             currentMeta.Name,
                             string.IsNullOrEmpty(currentMeta.InfoHashHex) ? "magnet" : currentMeta.InfoHashHex,
-                            ShihabFormatHelpers.FormatMehediBytes(currentMeta.TotalSize),
+                            currentMeta.TotalSize > 0 ? ShihabFormatHelpers.FormatMehediBytes(currentMeta.TotalSize) : "Pending",
                             currentMeta.Trackers.Count,
-                            currentMeta.WebSeeds.Count);
+                            currentMeta.WebSeeds.Count,
+                            privTag);
 
-                        for (int i = 0; i < currentMeta.Files.Count; i++)
+                        if (string.IsNullOrWhiteSpace(renameBox.Text) && !string.IsNullOrWhiteSpace(currentMeta.Name))
                         {
-                            ShihabTorrentFileEntry fe = currentMeta.Files[i];
-                            ListViewItem row = new ListViewItem(new string[]
+                            renameBox.Text = currentMeta.Name;
+                        }
+                        createSubfolderChk.Enabled = currentMeta.IsMultiFile || currentMeta.IsMagnetPendingMetadata;
+
+                        if (!currentMeta.IsMagnetPendingMetadata)
+                        {
+                            for (int i = 0; i < currentMeta.Files.Count; i++)
                             {
-                                fe.Index.ToString(),
-                                fe.RelativePath,
-                                ShihabFormatHelpers.FormatMehediBytes(fe.Length)
-                            });
-                            row.Checked = true;
-                            row.Tag = fe;
-                            filesView.Items.Add(row);
+                                ShihabTorrentFileEntry fe = currentMeta.Files[i];
+                                if (fe.IsPaddingFile) continue;
+                                ListViewItem row = new ListViewItem(new string[]
+                                {
+                                    fe.Index.ToString(),
+                                    fe.RelativePath,
+                                    ShihabFormatHelpers.FormatMehediBytes(fe.Length)
+                                });
+                                row.Checked = fe.Selected;
+                                row.Tag = fe;
+                                filesView.Items.Add(row);
+                            }
                         }
                     }
                     else if (currentMeta != null)
@@ -128,8 +160,110 @@ namespace ShihabMehediIDM
                 finally
                 {
                     filesView.EndUpdate();
+                    updateSelectionSummary();
                 }
             };
+
+            Action parseCurrentSource = delegate
+            {
+                string raw = srcBox.Text.Trim().Trim('"');
+                if (string.IsNullOrEmpty(raw))
+                {
+                    currentMeta = null;
+                    infoLbl.Text = "Info-Hash: (none)";
+                    renderMeta();
+                    return;
+                }
+                if (ShihabProcessAndPathSafety.ContainsControlOrNewline(raw))
+                {
+                    currentMeta = null;
+                    infoLbl.Text = "Error: Invalid control characters in torrent source.";
+                    renderMeta();
+                    return;
+                }
+                if (raw.StartsWith("magnet:?", StringComparison.OrdinalIgnoreCase))
+                {
+                    currentMeta = ShihabTorrentManager.ParseMagnetUri(raw);
+                }
+                else if (File.Exists(raw))
+                {
+                    currentMeta = ShihabTorrentManager.InspectTorrentFile(raw);
+                }
+                else if (raw.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || raw.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                {
+                    currentMeta = null;
+                    infoLbl.Text = "Remote .torrent URL detected — click 'Fetch Info' to inspect files or click 'Download Now'.";
+                }
+                else
+                {
+                    currentMeta = null;
+                }
+                renderMeta();
+            };
+
+            fetchMetaBtn.Click += delegate
+            {
+                string raw = srcBox.Text.Trim().Trim('"');
+                if (string.IsNullOrEmpty(raw)) return;
+                if (metaFetchCts != null) { try { metaFetchCts.Cancel(); metaFetchCts.Dispose(); } catch { } }
+                metaFetchCts = new System.Threading.CancellationTokenSource();
+                System.Threading.CancellationToken ct = metaFetchCts.Token;
+                fetchMetaBtn.Enabled = false;
+                fetchMetaBtn.Text = "Fetching...";
+                infoLbl.Text = "Resolving torrent metadata from trackers / DHT / peers...";
+
+                Task.Run(delegate
+                {
+                    ShihabTorrentMetadata resolved = ShihabTorrentManager.InspectTorrentOrMagnet(raw, config);
+                    if (resolved != null && resolved.ParsedSuccessfully && resolved.IsMagnetPendingMetadata)
+                    {
+                        ShihabTorrentManager.TryResolveMagnetMetadataParallel(resolved, config, Path.GetTempPath(), ct, delegate(string st)
+                        {
+                            try
+                            {
+                                if (!IsDisposed && IsHandleCreated)
+                                {
+                                    BeginInvoke((Action)delegate { if (!IsDisposed) infoLbl.Text = st; });
+                                }
+                            }
+                            catch { }
+                        });
+                    }
+                    try
+                    {
+                        if (!IsDisposed && IsHandleCreated)
+                        {
+                            BeginInvoke((Action)delegate
+                            {
+                                if (IsDisposed) return;
+                                fetchMetaBtn.Enabled = true;
+                                fetchMetaBtn.Text = "Fetch Info";
+                                currentMeta = resolved;
+                                renameBox.Text = (resolved != null && !string.IsNullOrWhiteSpace(resolved.Name)) ? resolved.Name : "";
+                                renderMeta();
+                            });
+                        }
+                    }
+                    catch { }
+                });
+            };
+
+            FormClosed += delegate
+            {
+                if (metaFetchCts != null) { try { metaFetchCts.Cancel(); metaFetchCts.Dispose(); } catch { } metaFetchCts = null; }
+            };
+
+            selAllBtn.Click += delegate
+            {
+                for (int i = 0; i < filesView.Items.Count; i++) filesView.Items[i].Checked = true;
+                updateSelectionSummary();
+            };
+            selNoneBtn.Click += delegate
+            {
+                for (int i = 0; i < filesView.Items.Count; i++) filesView.Items[i].Checked = false;
+                updateSelectionSummary();
+            };
+            filesView.ItemChecked += delegate { updateSelectionSummary(); };
 
             browseTorBtn.Click += delegate
             {
@@ -137,6 +271,7 @@ namespace ShihabMehediIDM
                 {
                     if (ofd.ShowDialog(this) == DialogResult.OK)
                     {
+                        renameBox.Text = "";
                         srcBox.Text = ofd.FileName;
                         parseCurrentSource();
                     }
@@ -144,12 +279,6 @@ namespace ShihabMehediIDM
             };
             srcBox.TextChanged += delegate { parseCurrentSource(); };
 
-            string defaultTorDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads", "Torrents");
-            Label saveLbl = new Label { Text = "Save Directory:", Location = new Point(16, 324), AutoSize = true };
-            TextBox saveBox = new TextBox { Location = new Point(125, 321), Width = 475, Text = defaultTorDir, BackColor = surf, ForeColor = ForeColor };
-            Button browseDirBtn = ShihabThemePalette.CreateMehediStyledButton("Browse", surf, ForeColor, 90);
-            browseDirBtn.Height = 25;
-            browseDirBtn.Location = new Point(606, 319);
             browseDirBtn.Click += delegate
             {
                 using (FolderBrowserDialog fbd = new FolderBrowserDialog { SelectedPath = saveBox.Text })
@@ -158,15 +287,15 @@ namespace ShihabMehediIDM
                 }
             };
 
-            CheckBox seqChk = new CheckBox { Text = "Sequential piece download (stream media)", Location = new Point(16, 354), AutoSize = true, Checked = config.ShihabTorrentSequentialDefault };
-            CheckBox seedChk = new CheckBox { Text = "Keep seeding after completion", Location = new Point(292, 354), AutoSize = true, Checked = config.ShihabTorrentKeepSeedingDefault };
-            CheckBox debridTorChk = new CheckBox { Text = "Accelerate via Debrid Cloud", Location = new Point(505, 354), AutoSize = true, Checked = false };
+            CheckBox seqChk = new CheckBox { Text = "Sequential piece download (stream media)", Location = new Point(16, 392), AutoSize = true, Checked = config.ShihabTorrentSequentialDefault };
+            CheckBox seedChk = new CheckBox { Text = "Keep seeding after completion", Location = new Point(296, 392), AutoSize = true, Checked = config.ShihabTorrentKeepSeedingDefault };
+            CheckBox debridTorChk = new CheckBox { Text = "Accelerate via Debrid Cloud", Location = new Point(512, 392), AutoSize = true, Checked = false };
 
             Button createTorrentBtn = ShihabThemePalette.CreateMehediStyledButton("Create File .torrent...", surf, ForeColor, 145);
-            createTorrentBtn.Location = new Point(16, 412);
+            createTorrentBtn.Location = new Point(16, 462);
 
             Button createFolderTorBtn = ShihabThemePalette.CreateMehediStyledButton("Folder .torrent...", surf, ForeColor, 130);
-            createFolderTorBtn.Location = new Point(167, 412);
+            createFolderTorBtn.Location = new Point(167, 462);
 
             Action<string, string, bool> startAsyncCreateTorrent = delegate(string sourcePath, string destTorrentPath, bool isFolder)
             {
@@ -195,6 +324,7 @@ namespace ShihabMehediIDM
                             createFolderTorBtn.Enabled = true;
                             if (ok)
                             {
+                                renameBox.Text = "";
                                 srcBox.Text = destTorrentPath;
                                 parseCurrentSource();
                                 MessageBox.Show(this,
@@ -250,7 +380,7 @@ namespace ShihabMehediIDM
 
             Action<bool> commitAndClose = delegate(bool startNow)
             {
-                string raw = srcBox.Text.Trim();
+                string raw = srcBox.Text.Trim().Trim('"');
                 if (string.IsNullOrEmpty(raw))
                 {
                     MessageBox.Show(this, "Please enter a Magnet URI or select a .torrent file.", "BitTorrent", MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -268,14 +398,38 @@ namespace ShihabMehediIDM
                 }
 
                 if (currentMeta == null) parseCurrentSource();
-                string itemName = (currentMeta != null && !string.IsNullOrEmpty(currentMeta.Name))
-                    ? ShihabFormatHelpers.SanitizeShihabFileName(currentMeta.Name)
-                    : "Torrent_Download";
-
-                List<int> selectedIdx = new List<int>();
-                for (int i = 0; i < filesView.Items.Count; i++)
+                if (currentMeta != null && !currentMeta.ParsedSuccessfully)
                 {
-                    if (filesView.Items[i].Checked) selectedIdx.Add(i);
+                    MessageBox.Show(this, "Invalid torrent or magnet source:\r\n" + currentMeta.ErrorMessage, "BitTorrent", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                string customName = renameBox.Text.Trim();
+                string itemName = !string.IsNullOrWhiteSpace(customName)
+                    ? ShihabFormatHelpers.SanitizeShihabFileName(customName)
+                    : ((currentMeta != null && !string.IsNullOrEmpty(currentMeta.Name))
+                        ? ShihabFormatHelpers.SanitizeShihabFileName(currentMeta.Name)
+                        : "Torrent_Download");
+
+                // CRITICAL FIX: Only persist SelectedTorrentFiles when real file list was loaded AND user unchecked some files!
+                // Never store a dummy [0] for pending magnet links, or multi-file magnets will skip files 1..N!
+                List<int> selectedIdx = new List<int>();
+                if (currentMeta != null && !currentMeta.IsMagnetPendingMetadata && filesView.Items.Count > 0)
+                {
+                    bool anyUnchecked = false;
+                    for (int i = 0; i < filesView.Items.Count; i++)
+                    {
+                        ShihabTorrentFileEntry fe = filesView.Items[i].Tag as ShihabTorrentFileEntry;
+                        int realIdx = fe != null ? fe.Index : i;
+                        if (filesView.Items[i].Checked) selectedIdx.Add(realIdx);
+                        else anyUnchecked = true;
+                    }
+                    if (!anyUnchecked) selectedIdx.Clear(); // empty = download all files cleanly
+                    else if (selectedIdx.Count == 0)
+                    {
+                        MessageBox.Show(this, "Please select at least one file inside the torrent to download.", "BitTorrent", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
                 }
 
                 ConfiguredTorrentItem = new ShihabDownloadItem
@@ -284,11 +438,12 @@ namespace ShihabMehediIDM
                     ShihabFileName = itemName,
                     MehediSaveDirectory = saveDir,
                     ShihabCategoryName = "Torrents",
-                    ShihabTotalBytes = currentMeta != null ? currentMeta.TotalSize : -1,
+                    ShihabTotalBytes = currentMeta != null && currentMeta.TotalSize > 0 ? currentMeta.TotalSize : -1,
                     ShihabIsTorrent = true,
                     ShihabTorrentMagnetOrPath = raw,
                     ShihabTorrentSequential = seqChk.Checked,
                     ShihabTorrentKeepSeeding = seedChk.Checked,
+                    ShihabTorrentCreateSubfolder = createSubfolderChk.Checked,
                     ShihabUseDebridForTorrent = debridTorChk.Checked,
                     ShihabSelectedTorrentFiles = selectedIdx,
                     ShihabDescription = currentMeta != null && !string.IsNullOrEmpty(currentMeta.InfoHashHex)
@@ -306,21 +461,23 @@ namespace ShihabMehediIDM
             };
 
             Button addQueueBtn = ShihabThemePalette.CreateMehediStyledButton("Add to Queue", ShihabThemePalette.GetShihabAccentBlue(), Color.White, 130);
-            addQueueBtn.Location = new Point(315, 412);
+            addQueueBtn.Location = new Point(335, 462);
             addQueueBtn.Click += delegate { commitAndClose(false); };
 
             Button startNowBtn = ShihabThemePalette.CreateMehediStyledButton("Download Now", ShihabThemePalette.GetMehediAccentGreen(), Color.White, 145);
-            startNowBtn.Location = new Point(453, 412);
+            startNowBtn.Location = new Point(473, 462);
             startNowBtn.Click += delegate { commitAndClose(true); };
 
             Button cancelBtn = ShihabThemePalette.CreateMehediStyledButton("Cancel", surf, ForeColor, 90);
-            cancelBtn.Location = new Point(606, 412);
+            cancelBtn.Location = new Point(626, 462);
             cancelBtn.Click += delegate { Close(); };
 
             Controls.AddRange(new Control[]
             {
-                srcLbl, srcBox, browseTorBtn, infoLbl, filesView,
-                saveLbl, saveBox, browseDirBtn, seqChk, seedChk, debridTorChk,
+                srcLbl, srcBox, fetchMetaBtn, browseTorBtn, infoLbl, filesView,
+                selAllBtn, selNoneBtn, selSummaryLbl,
+                saveLbl, saveBox, browseDirBtn, renameLbl, renameBox, createSubfolderChk,
+                seqChk, seedChk, debridTorChk,
                 createTorrentBtn, createFolderTorBtn, addQueueBtn, startNowBtn, cancelBtn
             });
 
@@ -342,6 +499,7 @@ namespace ShihabMehediIDM
         public List<ShihabDownloadItem> ConfiguredMediaItems { get; private set; }
         public string SelectedSubtitlesLang { get; private set; }
         public bool EmbedSubtitles { get; private set; }
+        public bool EmbedChapters { get; private set; }
         public string AudioExtractFormat { get; private set; }
 
         private sealed class MediaRowPayload
@@ -351,6 +509,7 @@ namespace ShihabMehediIDM
             public string FormatSelector;
             public bool IsYtDlpJob;
             public bool IsGalleryJob;
+            public bool IsLiveStream;
             public string CompanionAudioUrl;
             public long SizeBytes;
         }
@@ -382,7 +541,7 @@ namespace ShihabMehediIDM
 
             TabPage ytTab = new TabPage("Video / Playlist & Subtitles") { BackColor = BackColor, ForeColor = ForeColor };
             TabPage galTab = new TabPage("Image Gallery Extractor") { BackColor = BackColor, ForeColor = ForeColor };
-            TabPage helpersTab = new TabPage("Managed Helpers (yt-dlp / ffmpeg / gallery-dl)") { BackColor = BackColor, ForeColor = ForeColor };
+            TabPage helpersTab = new TabPage("Managed Helpers (yt-dlp / ffmpeg / deno / gallery-dl)") { BackColor = BackColor, ForeColor = ForeColor };
 
             // --- Tab 1: Video / Playlist & Subtitles ---
             Label ytUrlLbl = new Label { Text = "Video or Playlist URL:", Location = new Point(16, 18), AutoSize = true };
@@ -391,11 +550,12 @@ namespace ShihabMehediIDM
             ytFetchBtn.Height = 26;
             ytFetchBtn.Location = new Point(584, 13);
 
-            Label subLbl = new Label { Text = "Subtitles (lang):", Location = new Point(16, 52), AutoSize = true };
-            TextBox subLangBox = new TextBox { Location = new Point(120, 49), Width = 90, Text = "en,bn", BackColor = surf, ForeColor = ForeColor };
-            CheckBox embedSubChk = new CheckBox { Text = "Embed subtitles in MP4/MKV", Location = new Point(225, 51), AutoSize = true, Checked = true };
-            Label audFmtLbl = new Label { Text = "Audio Extract:", Location = new Point(435, 52), AutoSize = true };
-            ComboBox audFmtCombo = new ComboBox { Location = new Point(528, 49), Width = 165, DropDownStyle = ComboBoxStyle.DropDownList, BackColor = surf, ForeColor = ForeColor };
+            Label subLbl = new Label { Text = "Subtitles:", Location = new Point(16, 52), AutoSize = true };
+            TextBox subLangBox = new TextBox { Location = new Point(80, 49), Width = 78, Text = "en,bn", BackColor = surf, ForeColor = ForeColor };
+            CheckBox embedSubChk = new CheckBox { Text = "Embed subs", Location = new Point(166, 51), AutoSize = true, Checked = true };
+            CheckBox embedChapChk = new CheckBox { Text = "Embed chapters", Location = new Point(268, 51), AutoSize = true, Checked = true };
+            Label audFmtLbl = new Label { Text = "Audio:", Location = new Point(398, 52), AutoSize = true };
+            ComboBox audFmtCombo = new ComboBox { Location = new Point(448, 49), Width = 245, DropDownStyle = ComboBoxStyle.DropDownList, BackColor = surf, ForeColor = ForeColor };
             audFmtCombo.Items.AddRange(new object[] { "Keep Video+Audio (MP4)", "mp3", "m4a", "opus", "wav" });
             audFmtCombo.SelectedIndex = 0;
 
@@ -410,15 +570,15 @@ namespace ShihabMehediIDM
                 BackColor = surf,
                 ForeColor = ForeColor
             };
-            ytResultsList.Columns.Add("Stream / Playlist Item Title", 350);
-            ytResultsList.Columns.Add("Format / Quality", 160);
-            ytResultsList.Columns.Add("Size", 130);
+            ytResultsList.Columns.Add("Stream / Playlist Item Title", 315);
+            ytResultsList.Columns.Add("Format / Codec / FPS / HDR", 220);
+            ytResultsList.Columns.Add("Size", 115);
 
             ytFetchBtn.Click += delegate
             {
                 string rawUrl = ytUrlBox.Text.Trim();
                 Uri parsedUrl;
-                if (!ShihabProcessAndPathSafety.TryValidateHttpUrl(rawUrl, true, out parsedUrl))
+                if (!ShihabProcessAndPathSafety.TryValidateHttpUrl(rawUrl, false, out parsedUrl))
                 {
                     MessageBox.Show(this, "Please enter a valid HTTP or HTTPS video/playlist URL.", "Media & Video Probe", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return;
@@ -495,11 +655,16 @@ namespace ShihabMehediIDM
                                 if (ytdlpOk && ytdlpFormats != null && ytdlpFormats.Count > 0)
                                 {
                                     string baseTitle = string.IsNullOrWhiteSpace(mediaTitle) ? "Media_Stream" : ShihabFormatHelpers.SanitizeShihabFileName(mediaTitle);
+                                    bool streamIsLive = false;
+                                    for (int li = 0; li < ytdlpFormats.Count; li++)
+                                    {
+                                        if (ytdlpFormats[li].IsLive) { streamIsLive = true; break; }
+                                    }
                                     ListViewItem bestRow = new ListViewItem(new string[]
                                     {
-                                        baseTitle + " [Best Video + Audio Auto-Mux]",
+                                        baseTitle + (streamIsLive ? " [LIVE · Best Video + Audio]" : " [Best Video + Audio Auto-Mux]"),
                                         "bv*+ba/b (MP4/MKV)",
-                                        "Auto"
+                                        streamIsLive ? "LIVE" : "Auto"
                                     });
                                     bestRow.Checked = true;
                                     bestRow.Tag = new MediaRowPayload
@@ -507,18 +672,36 @@ namespace ShihabMehediIDM
                                         Url = rawUrl,
                                         Title = baseTitle + ".mp4",
                                         FormatSelector = "bv*+ba/b",
-                                        IsYtDlpJob = true
+                                        IsYtDlpJob = true,
+                                        IsLiveStream = streamIsLive
                                     };
                                     ytResultsList.Items.Add(bestRow);
 
-                                    for (int fi = ytdlpFormats.Count - 1; fi >= 0 && ytResultsList.Items.Count < 25; fi--)
+                                    ListViewItem compatRow = new ListViewItem(new string[]
+                                    {
+                                        baseTitle + " [Most compatible (H.264 + AAC)]",
+                                        "MP4 · H.264+AAC (universal playback)",
+                                        "Auto"
+                                    });
+                                    compatRow.Checked = false;
+                                    compatRow.Tag = new MediaRowPayload
+                                    {
+                                        Url = rawUrl,
+                                        Title = baseTitle + "_compatible.mp4",
+                                        FormatSelector = ShihabMediaHelpersManager.CompatibleFormatSelector,
+                                        IsYtDlpJob = true,
+                                        IsLiveStream = streamIsLive
+                                    };
+                                    ytResultsList.Items.Add(compatRow);
+
+                                    for (int fi = ytdlpFormats.Count - 1; fi >= 0 && ytResultsList.Items.Count < 28; fi--)
                                     {
                                         ShihabMediaFormatEntry fmt = ytdlpFormats[fi];
                                         string sel = fmt.HasVideo && !fmt.HasAudio ? (fmt.FormatId + "+bestaudio/" + fmt.FormatId) : fmt.FormatId;
                                         ListViewItem row = new ListViewItem(new string[]
                                         {
                                             baseTitle + " [" + fmt.ResolutionLabel + "]",
-                                            fmt.Extension + " (" + sel + ")",
+                                            fmt.BuildRichQualityLabel() + " (" + sel + ")",
                                             ShihabFormatHelpers.FormatMehediBytes(fmt.FileSizeBytes)
                                         });
                                         row.Checked = false;
@@ -528,6 +711,7 @@ namespace ShihabMehediIDM
                                             Title = baseTitle + "_" + fmt.FormatId + "." + fmt.Extension,
                                             FormatSelector = sel,
                                             IsYtDlpJob = true,
+                                            IsLiveStream = fmt.IsLive,
                                             SizeBytes = fmt.FileSizeBytes
                                         };
                                         ytResultsList.Items.Add(row);
@@ -588,7 +772,7 @@ namespace ShihabMehediIDM
                 });
             };
 
-            ytTab.Controls.AddRange(new Control[] { ytUrlLbl, ytUrlBox, ytFetchBtn, subLbl, subLangBox, embedSubChk, audFmtLbl, audFmtCombo, ytResultsList });
+            ytTab.Controls.AddRange(new Control[] { ytUrlLbl, ytUrlBox, ytFetchBtn, subLbl, subLangBox, embedSubChk, embedChapChk, audFmtLbl, audFmtCombo, ytResultsList });
 
             // --- Tab 2: Image Gallery Extractor ---
             Label galUrlLbl = new Label { Text = "Gallery Page URL:", Location = new Point(16, 18), AutoSize = true };
@@ -616,7 +800,7 @@ namespace ShihabMehediIDM
                 string gUrl = galUrlBox.Text.Trim();
                 if (string.IsNullOrWhiteSpace(gUrl) || gUrl == "https://") return;
                 Uri parsedGal;
-                if (!ShihabProcessAndPathSafety.TryValidateHttpUrl(gUrl, true, out parsedGal))
+                if (!ShihabProcessAndPathSafety.TryValidateHttpUrl(gUrl, false, out parsedGal))
                 {
                     MessageBox.Show(this, "Please enter a valid HTTP or HTTPS gallery URL.", "Gallery Extractor", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return;
@@ -629,7 +813,7 @@ namespace ShihabMehediIDM
                 Task.Run(delegate
                 {
                     string gTitle;
-                    List<string> imgs = ShihabMediaHelpersManager.ExtractGalleryImageUrls(gUrl, store.MehediBaseDirectory, out gTitle);
+                    List<string> imgs = ShihabMediaHelpersManager.ExtractGalleryImageUrls(gUrl, store.MehediBaseDirectory, out gTitle, config);
                     bool hasGalleryDl = File.Exists(ShihabMediaHelpersManager.GetHelperExecutablePath(store.MehediBaseDirectory, "gallery-dl"));
 
                     try
@@ -713,7 +897,7 @@ namespace ShihabMehediIDM
                 try
                 {
                     hlpList.Items.Clear();
-                    string[] names = new string[] { "yt-dlp", "ffmpeg", "gallery-dl" };
+                    string[] names = new string[] { "yt-dlp", "ffmpeg", "deno", "gallery-dl" };
                     for (int i = 0; i < names.Length; i++)
                     {
                         string p = ShihabMediaHelpersManager.GetHelperExecutablePath(store.MehediBaseDirectory, names[i]);
@@ -725,6 +909,20 @@ namespace ShihabMehediIDM
                             p
                         }));
                     }
+                    string jsSpec = ShihabMediaHelpersManager.DetectJsRuntimeSpec(store.MehediBaseDirectory);
+                    hlpList.Items.Add(new ListViewItem(new string[]
+                    {
+                        "yt-dlp JS Runtime",
+                        string.IsNullOrEmpty(jsSpec) ? "Missing (install Deno)" : "Active",
+                        string.IsNullOrEmpty(jsSpec) ? "Required for YouTube EJS signatures" : jsSpec
+                    }));
+                    string bgStatus = ShihabMediaHelpersManager.DetectBgUtilPoTokenStatus(store.MehediBaseDirectory);
+                    hlpList.Items.Add(new ListViewItem(new string[]
+                    {
+                        "bgutil PO-Token",
+                        bgStatus.StartsWith("Not", StringComparison.OrdinalIgnoreCase) ? "Optional" : "Detected",
+                        bgStatus
+                    }));
                 }
                 finally
                 {
@@ -733,7 +931,7 @@ namespace ShihabMehediIDM
             };
             reloadHelpers();
 
-            Label hlpProgLbl = new Label { Text = "Select a helper below to download/update from official GitHub Releases:", Location = new Point(16, 268), AutoSize = true };
+            Label hlpProgLbl = new Label { Text = "Select a helper below to download/update from official GitHub Releases (SHA-256 verified):", Location = new Point(16, 268), AutoSize = true };
 
             Action<string> installHelper = delegate(string helperName)
             {
@@ -750,22 +948,26 @@ namespace ShihabMehediIDM
                         });
                     }
                     catch { }
-                });
+                }, config);
             };
 
-            Button instYtdlpBtn = ShihabThemePalette.CreateMehediStyledButton("Install / Update yt-dlp", ShihabThemePalette.GetShihabAccentBlue(), Color.White, 185);
+            Button instYtdlpBtn = ShihabThemePalette.CreateMehediStyledButton("Install yt-dlp", ShihabThemePalette.GetShihabAccentBlue(), Color.White, 155);
             instYtdlpBtn.Location = new Point(16, 298);
             instYtdlpBtn.Click += delegate { installHelper("yt-dlp"); };
 
-            Button instGalBtn = ShihabThemePalette.CreateMehediStyledButton("Install / Update gallery-dl", ShihabThemePalette.GetShihabAccentBlue(), Color.White, 195);
-            instGalBtn.Location = new Point(212, 298);
-            instGalBtn.Click += delegate { installHelper("gallery-dl"); };
-
-            Button instFfmpegBtn = ShihabThemePalette.CreateMehediStyledButton("Install / Update ffmpeg", ShihabThemePalette.GetShihabAccentBlue(), Color.White, 185);
-            instFfmpegBtn.Location = new Point(418, 298);
+            Button instFfmpegBtn = ShihabThemePalette.CreateMehediStyledButton("Install ffmpeg", ShihabThemePalette.GetShihabAccentBlue(), Color.White, 155);
+            instFfmpegBtn.Location = new Point(180, 298);
             instFfmpegBtn.Click += delegate { installHelper("ffmpeg"); };
 
-            helpersTab.Controls.AddRange(new Control[] { hlpInfo, hlpList, hlpProgLbl, instYtdlpBtn, instGalBtn, instFfmpegBtn });
+            Button instDenoBtn = ShihabThemePalette.CreateMehediStyledButton("Install Deno JS", ShihabThemePalette.GetShihabAccentBlue(), Color.White, 155);
+            instDenoBtn.Location = new Point(344, 298);
+            instDenoBtn.Click += delegate { installHelper("deno"); };
+
+            Button instGalBtn = ShihabThemePalette.CreateMehediStyledButton("Install gallery-dl", ShihabThemePalette.GetShihabAccentBlue(), Color.White, 165);
+            instGalBtn.Location = new Point(508, 298);
+            instGalBtn.Click += delegate { installHelper("gallery-dl"); };
+
+            helpersTab.Controls.AddRange(new Control[] { hlpInfo, hlpList, hlpProgLbl, instYtdlpBtn, instFfmpegBtn, instDenoBtn, instGalBtn });
 
             tabs.TabPages.AddRange(new TabPage[] { ytTab, galTab, helpersTab });
 
@@ -777,6 +979,7 @@ namespace ShihabMehediIDM
                 ConfiguredMediaItems.Clear();
                 SelectedSubtitlesLang = subLangBox.Text.Trim();
                 EmbedSubtitles = embedSubChk.Checked;
+                EmbedChapters = embedChapChk.Checked;
                 AudioExtractFormat = audFmtCombo.SelectedIndex > 0 ? audFmtCombo.SelectedItem.ToString() : "";
 
                 ListView activeList = tabs.SelectedIndex == 1 ? galList : ytResultsList;
@@ -797,10 +1000,12 @@ namespace ShihabMehediIDM
                             ShihabTotalBytes = payload.SizeBytes > 0 ? payload.SizeBytes : -1,
                             ShihabIsYtDlpJob = payload.IsYtDlpJob,
                             ShihabYtDlpFormatSelector = payload.FormatSelector ?? "",
+                            ShihabIsLiveStream = payload.IsLiveStream,
                             ShihabIsGalleryJob = payload.IsGalleryJob,
                             MehediAudioCompanionUrl = payload.CompanionAudioUrl ?? "",
                             ShihabSubtitleLanguages = SelectedSubtitlesLang,
                             ShihabEmbedSubtitles = EmbedSubtitles,
+                            ShihabEmbedChapters = EmbedChapters,
                             ShihabAudioExtractFormat = AudioExtractFormat
                         };
                         ConfiguredMediaItems.Add(mediaIt);
@@ -816,6 +1021,7 @@ namespace ShihabMehediIDM
                             ShihabCategoryName = "Video",
                             ShihabSubtitleLanguages = SelectedSubtitlesLang,
                             ShihabEmbedSubtitles = EmbedSubtitles,
+                            ShihabEmbedChapters = EmbedChapters,
                             ShihabAudioExtractFormat = AudioExtractFormat
                         });
                     }
@@ -824,7 +1030,7 @@ namespace ShihabMehediIDM
                 {
                     string rawU = ytUrlBox.Text.Trim();
                     Uri parsedRaw;
-                    if (ShihabProcessAndPathSafety.TryValidateHttpUrl(rawU, true, out parsedRaw))
+                    if (ShihabProcessAndPathSafety.TryValidateHttpUrl(rawU, false, out parsedRaw))
                     {
                         bool hasYtdlp = File.Exists(ShihabMediaHelpersManager.GetHelperExecutablePath(store.MehediBaseDirectory, "yt-dlp"));
                         DiscoveredDownloadUrls.Add(rawU);
@@ -837,6 +1043,7 @@ namespace ShihabMehediIDM
                             ShihabYtDlpFormatSelector = "bv*+ba/b",
                             ShihabSubtitleLanguages = SelectedSubtitlesLang,
                             ShihabEmbedSubtitles = EmbedSubtitles,
+                            ShihabEmbedChapters = EmbedChapters,
                             ShihabAudioExtractFormat = AudioExtractFormat
                         });
                     }
@@ -845,7 +1052,7 @@ namespace ShihabMehediIDM
                 {
                     string rawG = galUrlBox.Text.Trim();
                     Uri parsedGal;
-                    if (ShihabProcessAndPathSafety.TryValidateHttpUrl(rawG, true, out parsedGal))
+                    if (ShihabProcessAndPathSafety.TryValidateHttpUrl(rawG, false, out parsedGal))
                     {
                         DiscoveredDownloadUrls.Add(rawG);
                         ConfiguredMediaItems.Add(new ShihabDownloadItem

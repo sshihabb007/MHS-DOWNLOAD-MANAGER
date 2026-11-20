@@ -18,13 +18,13 @@ using System.Windows.Forms;
 using Microsoft.Win32;
 using ShihabMehediShared;
 
-[assembly: AssemblyTitle("MHS Download Manager 1.0.7 Setup (Mehedi Hasan Shihab)")]
-[assembly: AssemblyDescription("Official Windows x64 Installer & Uninstaller for MHS Download Manager 1.0.7 (Mehedi Hasan Shihab)")]
+[assembly: AssemblyTitle("MHS Download Manager 1.1.0 Setup (Mehedi Hasan Shihab)")]
+[assembly: AssemblyDescription("Official Windows x64 Installer & Uninstaller for MHS Download Manager 1.1.0 (Mehedi Hasan Shihab)")]
 [assembly: AssemblyCompany("Mehedi Hasan Shihab")]
 [assembly: AssemblyProduct("MHS Download Manager Setup")]
 [assembly: AssemblyCopyright("Copyright (c) 2026 Mehedi Hasan Shihab")]
-[assembly: AssemblyVersion("1.0.7.0")]
-[assembly: AssemblyFileVersion("1.0.7.0")]
+[assembly: AssemblyVersion("1.1.0.0")]
+[assembly: AssemblyFileVersion("1.1.0.0")]
 
 namespace ShihabMehediInstaller
 {
@@ -59,8 +59,8 @@ namespace ShihabMehediInstaller
 
     public static class ShihabSetupTheme
     {
-        public const string ShihabProductTitle = "MHS Download Manager 1.0.7 (Mehedi Hasan Shihab)";
-        public const string MehediVersionText = "1.0.7";
+        public const string ShihabProductTitle = "MHS Download Manager 1.1.0 (Mehedi Hasan Shihab)";
+        public const string MehediVersionText = "1.1.0";
         public const string ShihabUninstallRegKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\MHSDownloadManager";
         public const string MehediRunRegKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
         public const string ShihabRunValueName = "MHSDownloadManager";
@@ -712,7 +712,15 @@ namespace ShihabMehediInstaller
                                 RegistryValueKind.String);
                         }
                     }
+                    SyncInstallerStartupConfigFlag(true);
                 }
+                else if (!mehediOpts.ShihabInPlaceUpdateMode)
+                {
+                    SyncInstallerStartupConfigFlag(false);
+                }
+
+                mehediReport(93, "Registering magnet: URI & .torrent file associations...");
+                RegisterMagnetAndTorrentAssociations(shihabInstalledExe);
 
                 if (mehediOpts.MehediRegisterNativeHost && Directory.Exists(mehediExtensionDir))
                 {
@@ -859,6 +867,113 @@ namespace ShihabMehediInstaller
                     "}\r\n";
                 File.WriteAllText(shihabFirefoxManifestPath, shihabFirefoxManifestJson, new UTF8Encoding(false));
                 WriteNativeHostRegistryKeys(FirefoxNativeHostRegistryKeys, shihabFirefoxManifestPath);
+            }
+            catch { }
+        }
+
+        private static void RegisterMagnetAndTorrentAssociations(string installedExePath)
+        {
+            try
+            {
+                string quotedExe = ShihabProcessAndPathSafety.QuoteWindowsArgument(installedExePath);
+                string openCmd = quotedExe + " \"%1\"";
+
+                // 1. Register HKCU magnet: URL Protocol
+                using (RegistryKey magKey = Registry.CurrentUser.CreateSubKey(@"Software\Classes\magnet"))
+                {
+                    if (magKey != null)
+                    {
+                        magKey.SetValue("", "URL:Magnet Protocol (MHS Download Manager)", RegistryValueKind.String);
+                        magKey.SetValue("URL Protocol", "", RegistryValueKind.String);
+                        using (RegistryKey icoKey = magKey.CreateSubKey("DefaultIcon"))
+                        {
+                            if (icoKey != null) icoKey.SetValue("", quotedExe + ",0", RegistryValueKind.String);
+                        }
+                        using (RegistryKey cmdKey = magKey.CreateSubKey(@"shell\open\command"))
+                        {
+                            if (cmdKey != null) cmdKey.SetValue("", openCmd, RegistryValueKind.String);
+                        }
+                    }
+                }
+
+                // 2. Register HKCU .torrent file association -> MHSDownloadManager.Torrent
+                using (RegistryKey extKey = Registry.CurrentUser.CreateSubKey(@"Software\Classes\.torrent"))
+                {
+                    if (extKey != null)
+                    {
+                        extKey.SetValue("", "MHSDownloadManager.Torrent", RegistryValueKind.String);
+                        extKey.SetValue("Content Type", "application/x-bittorrent", RegistryValueKind.String);
+                    }
+                }
+                using (RegistryKey progKey = Registry.CurrentUser.CreateSubKey(@"Software\Classes\MHSDownloadManager.Torrent"))
+                {
+                    if (progKey != null)
+                    {
+                        progKey.SetValue("", "BitTorrent Metadata File (MHS Download Manager)", RegistryValueKind.String);
+                        using (RegistryKey icoKey = progKey.CreateSubKey("DefaultIcon"))
+                        {
+                            if (icoKey != null) icoKey.SetValue("", quotedExe + ",0", RegistryValueKind.String);
+                        }
+                        using (RegistryKey cmdKey = progKey.CreateSubKey(@"shell\open\command"))
+                        {
+                            if (cmdKey != null) cmdKey.SetValue("", openCmd, RegistryValueKind.String);
+                        }
+                    }
+                }
+            }
+            catch { }
+        }
+
+        private static void UnregisterMagnetAndTorrentAssociations()
+        {
+            try
+            {
+                using (RegistryKey magCmd = Registry.CurrentUser.OpenSubKey(@"Software\Classes\magnet\shell\open\command", false))
+                {
+                    string val = magCmd != null ? Convert.ToString(magCmd.GetValue("") ?? "") : "";
+                    if (val.IndexOf("mdm.exe", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        try { Registry.CurrentUser.DeleteSubKeyTree(@"Software\Classes\magnet", false); } catch { }
+                    }
+                }
+            }
+            catch { }
+            try
+            {
+                using (RegistryKey extKey = Registry.CurrentUser.OpenSubKey(@"Software\Classes\.torrent", true))
+                {
+                    if (extKey != null)
+                    {
+                        string curProg = Convert.ToString(extKey.GetValue("") ?? "");
+                        if (string.Equals(curProg, "MHSDownloadManager.Torrent", StringComparison.OrdinalIgnoreCase))
+                        {
+                            extKey.DeleteValue("", false);
+                        }
+                    }
+                }
+            }
+            catch { }
+            try { Registry.CurrentUser.DeleteSubKeyTree(@"Software\Classes\MHSDownloadManager.Torrent", false); } catch { }
+        }
+
+        private static void SyncInstallerStartupConfigFlag(bool enabled)
+        {
+            try
+            {
+                string cfgPath = Path.Combine(
+                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ShihabMehediIDM"),
+                    "shihab_config.json");
+                if (!File.Exists(cfgPath)) return;
+                string raw = File.ReadAllText(cfgPath, Encoding.UTF8);
+                string updated = Regex.Replace(
+                    raw,
+                    "(\"ShihabLaunchOnStartup\"\\s*:\\s*)(true|false)",
+                    "$1" + (enabled ? "true" : "false"),
+                    RegexOptions.IgnoreCase);
+                if (!string.Equals(raw, updated, StringComparison.Ordinal))
+                {
+                    File.WriteAllText(cfgPath, updated, new UTF8Encoding(false));
+                }
             }
             catch { }
         }
@@ -1088,6 +1203,7 @@ namespace ShihabMehediInstaller
 
                 try { Registry.CurrentUser.DeleteSubKeyTree(ShihabSetupTheme.ShihabUninstallRegKey, false); } catch { }
 
+                UnregisterMagnetAndTorrentAssociations();
                 RemoveNativeHostRegistryKeys(ChromiumNativeHostRegistryKeys);
                 RemoveNativeHostRegistryKeys(FirefoxNativeHostRegistryKeys);
                 try
@@ -1279,14 +1395,14 @@ namespace ShihabMehediInstaller
             _mehediStepWelcome = new Panel { Bounds = shihabBodyBounds, BackColor = BackColor };
             Label shihabWelHead = new Label
             {
-                Text = "Welcome to MHS Download Manager 1.0.7 Setup",
+                Text = "Welcome to MHS Download Manager 1.1.0 Setup",
                 Location = new Point(22, 16),
                 AutoSize = true,
                 Font = new Font("Segoe UI Semibold", 11f)
             };
             Label mehediWelDesc = new Label
             {
-                Text = "This wizard will install MHS Download Manager 1.0.7 (Mehedi Hasan Shihab) on your computer,\n" +
+                Text = "This wizard will install MHS Download Manager 1.1.0 (Mehedi Hasan Shihab) on your computer,\n" +
                        "keeping the unpacked 'extension' folder inside your installation directory ready to load in Chrome, Brave, Edge, and Firefox.",
                 Location = new Point(22, 44),
                 Size = new Size(595, 42),
@@ -1308,15 +1424,14 @@ namespace ShihabMehediInstaller
                     "  • mdm.exe          — x64 Download Accelerator (1-128 Sparse Dynamic Segments)\r\n" +
                     "  • extension\\       — Ready-to-load Unpacked MV3 Extension (Chromium & Firefox)\r\n" +
                     "  • Uninstall.exe    — Clean Windows Uninstaller\r\n\r\n" +
-                    "Included v1.0.7 Capabilities:\r\n" +
-                    "  • Rock-Solid DWM Custom Dark/Light Chrome + Auto Desktop & Taskbar Icon Cache Refresh\r\n" +
-                    "  • Modular C# Core + Zero-Duplicate Brave/Chrome/Edge/Firefox Popup Suppression\r\n" +
-                    "  • Background Minimize Button (Top-Right Tray Action) & Glowing 3D App Branding\r\n" +
-                    "  • Resilient Auto-Updater (REST + Web Fallback + Browser Popup) with SHA-256 Verify\r\n" +
-                    "  • Top Menu Bar & 11-Button Gradient Ribbon + 1-128 Sparse Dynamic Segments\r\n" +
-                    "  • BitTorrent & Magnet Client + Managed yt-dlp / ffmpeg / gallery-dl + Debrid Cloud\r\n" +
-                    "  • Encrypted DNS (DoH), SOCKS5/PAC Relay, VPN Kill-Switch, DPAPI Vault, LAN QR & MCP\r\n" +
-                    "  • Outside-corner 'Download Video' pill + 14-browser integration + lossless MP4/WebM/MKV muxer\r\n\r\n" +
+                    "Included v1.1.0 Capabilities:\r\n" +
+                    "  • Full BitTorrent P2P & Magnet Engine (BEP-3/5 DHT/6/7/9/11 PEX/14 LSD/15/19/27/53 + Real Seeding)\r\n" +
+                    "  • 3-Tab Torrent Inspector (Files/Peers/Trackers) + OS magnet:/.torrent Associations\r\n" +
+                    "  • Parallel 8-Worker HLS + Managed Deno JS Runtime + Codec/FPS/HDR + H.264/AAC + Chapters + Live MP4\r\n" +
+                    "  • Click'n'Load 2 Server (:9666), 5 Debrid Providers (RD/AD/PM/TorBox/Mega-Debrid) & GDrive Folders\r\n" +
+                    "  • 10 Built-In Themes + Custom TOML (WCAG Guard) + 200% Scale + Global Hotkey + Drag-Out + Deferred Rename\r\n" +
+                    "  • DPAPI Saved Archive Passwords, HatchZip In-Place Extract, Multi-Server Extension & Incognito Isolation\r\n" +
+                    "  • Resilient GitHub Auto-Updater (REST + Web Fallback + SHA-256), Full CLI & 16-Tool MCP Server\r\n\r\n" +
                     "License: MIT License — Copyright (c) 2026 Mehedi Hasan Shihab"
             };
             _mehediStepWelcome.Controls.AddRange(new Control[] { shihabWelHead, mehediWelDesc, shihabPlanBox });
@@ -1422,7 +1537,7 @@ namespace ShihabMehediInstaller
             _mehediStepProgress = new Panel { Bounds = shihabBodyBounds, BackColor = BackColor };
             Label shihabProgTitle = new Label
             {
-                Text = "Installing MHS Download Manager 1.0.7...",
+                Text = "Installing MHS Download Manager 1.1.0...",
                 Location = new Point(22, 16),
                 AutoSize = true,
                 Font = new Font("Segoe UI Semibold", 11f)
@@ -1515,7 +1630,7 @@ namespace ShihabMehediInstaller
 
             _shihabLaunchAppCheck = new CheckBox
             {
-                Text = "Launch MHS Download Manager 1.0.7 now",
+                Text = "Launch MHS Download Manager 1.1.0 now",
                 Location = new Point(24, 152),
                 AutoSize = true,
                 Checked = true,

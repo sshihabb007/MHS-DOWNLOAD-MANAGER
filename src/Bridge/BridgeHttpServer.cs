@@ -464,16 +464,56 @@ namespace ShihabMehediIDM
                 return;
             }
 
+            if (shihabCleanPath.StartsWith("/shihab/api/", StringComparison.OrdinalIgnoreCase) &&
+                _shihabConfig != null && !_shihabConfig.ShihabAutomationApiEnabled)
+            {
+                WriteRawMehediHttpResponse(
+                    shihabStream,
+                    403,
+                    "Forbidden",
+                    "{\"ok\":false,\"error\":\"Local Automation API is disabled. Run 'mdm --cli api on' to re-enable.\"}",
+                    allowedCorsOrigin);
+                return;
+            }
+
             if (shihabCleanPath == "/shihab/api/status" && string.Equals(mehediMethod, "GET", StringComparison.OrdinalIgnoreCase))
             {
+                string filterId = ParseMehediQueryParam(shihabPath, "id").Trim();
+                string filterStatus = ParseMehediQueryParam(shihabPath, "status").Trim();
+                string filterSearch = ParseMehediQueryParam(shihabPath, "search").Trim();
+                string filterCat = ParseMehediQueryParam(shihabPath, "category").Trim();
+                string filterQueue = ParseMehediQueryParam(shihabPath, "queue").Trim();
+                int filterLimit = 0;
+                int.TryParse(ParseMehediQueryParam(shihabPath, "limit"), out filterLimit);
+
+                long defaultFreeBytes = TryGetFreeDiskBytesForPath(
+                    (_shihabConfig != null && _shihabConfig.ShihabCategories != null && _shihabConfig.ShihabCategories.Count > 0)
+                        ? _shihabConfig.ShihabCategories[0].ShihabDefaultFolder
+                        : Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+
                 List<ShihabDownloadItem> items = _mehediEngine.GetShihabDownloadsSnapshot();
                 StringBuilder jb = new StringBuilder("[");
+                int emitted = 0;
                 for (int i = 0; i < items.Count; i++)
                 {
                     ShihabDownloadItem it = items[i];
-                    if (i > 0) jb.Append(",");
+                    if (!string.IsNullOrEmpty(filterId) && !it.ShihabId.StartsWith(filterId, StringComparison.OrdinalIgnoreCase)) continue;
+                    if (!string.IsNullOrEmpty(filterStatus) && (it.ShihabStatusText ?? "").IndexOf(filterStatus, StringComparison.OrdinalIgnoreCase) < 0) continue;
+                    if (!string.IsNullOrEmpty(filterCat) && !string.Equals(it.ShihabCategoryName ?? "", filterCat, StringComparison.OrdinalIgnoreCase)) continue;
+                    if (!string.IsNullOrEmpty(filterQueue) && !string.Equals(it.MehediQueueName ?? "", filterQueue, StringComparison.OrdinalIgnoreCase)) continue;
+                    if (!string.IsNullOrEmpty(filterSearch) &&
+                        (it.ShihabFileName ?? "").IndexOf(filterSearch, StringComparison.OrdinalIgnoreCase) < 0 &&
+                        (it.MehediUrl ?? "").IndexOf(filterSearch, StringComparison.OrdinalIgnoreCase) < 0)
+                    {
+                        continue;
+                    }
+                    if (filterLimit > 0 && emitted >= filterLimit) break;
+                    if (emitted > 0) jb.Append(",");
+                    long itemFree = !string.IsNullOrWhiteSpace(it.MehediSaveDirectory)
+                        ? TryGetFreeDiskBytesForPath(it.MehediSaveDirectory)
+                        : defaultFreeBytes;
                     jb.AppendFormat(CultureInfo.InvariantCulture,
-                        "{{\"id\":\"{0}\",\"fileName\":\"{1}\",\"status\":\"{2}\",\"percent\":{3:0.0},\"totalBytes\":{4},\"downloadedBytes\":{5},\"speedBps\":{6:0},\"checksumStatus\":\"{7}\",\"url\":\"{8}\"}}",
+                        "{{\"id\":\"{0}\",\"fileName\":\"{1}\",\"status\":\"{2}\",\"percent\":{3:0.0},\"totalBytes\":{4},\"downloadedBytes\":{5},\"speedBps\":{6:0},\"checksumStatus\":\"{7}\",\"url\":\"{8}\",\"uploadedBytes\":{9},\"uploadSpeedBps\":{10:0},\"activePeers\":{11},\"listenPort\":{12},\"category\":\"{13}\",\"queue\":\"{14}\",\"saveDir\":\"{15}\",\"private\":{16},\"freeSpaceBytes\":{17}}}",
                         ShihabJsonCodec.EscapeString(it.ShihabId),
                         ShihabJsonCodec.EscapeString(it.ShihabFileName),
                         ShihabJsonCodec.EscapeString(it.ShihabStatusText),
@@ -482,7 +522,17 @@ namespace ShihabMehediIDM
                         it.MehediDownloadedBytes,
                         it.ShihabCurrentSpeedBps,
                         ShihabJsonCodec.EscapeString(it.ShihabChecksumStatus),
-                        ShihabJsonCodec.EscapeString(it.MehediUrl));
+                        ShihabJsonCodec.EscapeString(it.MehediUrl),
+                        it.ShihabTorrentUploadedBytes,
+                        it.ShihabTorrentUploadSpeedBps,
+                        it.ShihabTorrentActivePeers,
+                        it.ShihabTorrentListenPort,
+                        ShihabJsonCodec.EscapeString(it.ShihabCategoryName ?? ""),
+                        ShihabJsonCodec.EscapeString(it.MehediQueueName ?? ""),
+                        ShihabJsonCodec.EscapeString(it.MehediSaveDirectory ?? ""),
+                        it.ShihabIsPrivateIncognito ? "true" : "false",
+                        itemFree);
+                    emitted++;
                 }
                 jb.Append("]");
                 WriteRawMehediHttpResponse(shihabStream, 200, "OK", jb.ToString(), allowedCorsOrigin);
@@ -499,22 +549,76 @@ namespace ShihabMehediIDM
                 }
                 string url = ShihabJsonCodec.GetString(addObj, "url", "").Trim();
                 Uri validatedUrl;
-                if (!ShihabProcessAndPathSafety.TryValidateExternalShellUri(url, true, out validatedUrl))
+                string validatedLocalTorrent;
+                bool isLocalTorrent = ShihabProcessAndPathSafety.TryValidateLocalTorrentFilePath(url, out validatedLocalTorrent);
+                if (!isLocalTorrent && !ShihabProcessAndPathSafety.TryValidateExternalShellUri(url, true, out validatedUrl))
                 {
-                    WriteRawMehediHttpResponse(shihabStream, 400, "Bad Request", "{\"ok\":false,\"error\":\"Valid http/https/ftp/magnet url is required\"}", allowedCorsOrigin);
+                    WriteRawMehediHttpResponse(shihabStream, 400, "Bad Request", "{\"ok\":false,\"error\":\"Valid http/https/ftp/magnet url or local .torrent file is required\"}", allowedCorsOrigin);
                     return;
                 }
+                if (isLocalTorrent) url = validatedLocalTorrent;
 
                 string fileName = ShihabJsonCodec.GetString(addObj, "fileName", "");
                 string checksum = ShihabJsonCodec.GetString(addObj, "checksum", "");
                 string kind = ShihabJsonCodec.GetString(addObj, "kind", "");
+                if (isLocalTorrent && string.IsNullOrWhiteSpace(kind)) kind = "torrent";
                 string format = ShihabJsonCodec.GetString(addObj, "format", "");
                 string postBody = ShihabJsonCodec.GetString(addObj, "postBody", "");
                 bool audioOnly = ShihabJsonCodec.GetBool(addObj, "audioOnly", false);
-                bool incognito = ShihabJsonCodec.GetBool(addObj, "incognito", false);
+                bool incognito = ShihabJsonCodec.GetBool(addObj, "incognito", false) || ShihabJsonCodec.GetBool(addObj, "private", false);
+                string reqQueue = ShihabJsonCodec.GetString(addObj, "queue", "").Trim();
+                string reqCategory = ShihabJsonCodec.GetString(addObj, "category", "").Trim();
+                string reqSaveDir = NormalizeSafeCaptureSaveDirectory(ShihabJsonCodec.GetString(addObj, "saveDir", ""));
+                string reqCookie = ShihabJsonCodec.GetString(addObj, "cookie", "");
+                string reqReferer = ShihabJsonCodec.GetString(addObj, "referer", "");
+                string reqUserAgent = ShihabJsonCodec.GetString(addObj, "userAgent", "");
+                string reqDeferredRename = ShihabJsonCodec.GetString(addObj, "deferredRename", "").Trim();
+                long reqLimitKb = ShihabJsonCodec.GetLong(addObj, "limitKb", 0);
+                bool reqStartNow = ShihabJsonCodec.GetBool(addObj, "start", true);
 
                 ShihabDownloadItem newItem = CreateItemFromApiOrCapture(url, fileName, checksum, kind, format, audioOnly, incognito, postBody);
-                _mehediEngine.AddShihabDownloadItem(newItem, true);
+                if (!string.IsNullOrEmpty(reqCategory)) newItem.ShihabCategoryName = reqCategory;
+                if (!string.IsNullOrEmpty(reqQueue)) newItem.MehediQueueName = reqQueue;
+                if (!string.IsNullOrEmpty(reqSaveDir))
+                {
+                    newItem.MehediSaveDirectory = reqSaveDir;
+                    if (!newItem.ShihabIsTorrent)
+                    {
+                        newItem.ShihabFileName = ShihabFormatHelpers.EnsureShihabUniqueFilePath(reqSaveDir, newItem.ShihabFileName);
+                    }
+                }
+                if (!string.IsNullOrEmpty(reqCookie)) newItem.ShihabCookies = reqCookie;
+                if (!string.IsNullOrEmpty(reqReferer)) newItem.MehediReferer = reqReferer;
+                if (!string.IsNullOrEmpty(reqUserAgent)) newItem.MehediUserAgent = reqUserAgent;
+                if (!string.IsNullOrEmpty(reqDeferredRename)) newItem.ShihabDeferredRenameTarget = reqDeferredRename;
+                if (reqLimitKb > 0)
+                {
+                    newItem.ShihabUseItemSpeedLimit = true;
+                    newItem.MehediItemSpeedLimitKb = (int)Math.Min(1000000L, reqLimitKb);
+                }
+                if (!reqStartNow)
+                {
+                    if (string.IsNullOrEmpty(newItem.MehediQueueName)) newItem.MehediQueueName = "Main Download Queue";
+                    newItem.SetMehediStatusEnum(ShihabDownloadStatus.ShihabQueued, "Queued");
+                }
+                if (newItem.ShihabIsTorrent)
+                {
+                    newItem.ShihabTorrentKeepSeeding = ShihabJsonCodec.GetBool(addObj, "keepSeeding", _shihabConfig.ShihabTorrentKeepSeedingDefault);
+                    newItem.ShihabTorrentSequential = ShihabJsonCodec.GetBool(addObj, "sequential", _shihabConfig.ShihabTorrentSequentialDefault);
+                    newItem.ShihabTorrentCreateSubfolder = ShihabJsonCodec.GetBool(addObj, "createSubfolder", true);
+                    object selRaw;
+                    if (addObj.TryGetValue("selectedFiles", out selRaw) && selRaw is List<object>)
+                    {
+                        List<object> selArr = (List<object>)selRaw;
+                        List<int> selIdx = new List<int>();
+                        for (int s = 0; s < selArr.Count; s++)
+                        {
+                            try { selIdx.Add(Convert.ToInt32(selArr[s], CultureInfo.InvariantCulture)); } catch { }
+                        }
+                        if (selIdx.Count > 0) newItem.ShihabSelectedTorrentFiles = selIdx;
+                    }
+                }
+                _mehediEngine.AddShihabDownloadItem(newItem, reqStartNow);
                 WriteRawMehediHttpResponse(shihabStream, 200, "OK",
                     "{\"ok\":true,\"id\":\"" + ShihabJsonCodec.EscapeString(newItem.ShihabId) + "\",\"fileName\":\"" + ShihabJsonCodec.EscapeString(newItem.ShihabFileName) + "\"}",
                     allowedCorsOrigin);
@@ -531,7 +635,8 @@ namespace ShihabMehediIDM
                 }
                 string act = ShihabJsonCodec.GetString(actObj, "action", "").Trim().ToLowerInvariant();
                 string targetId = ShihabJsonCodec.GetString(actObj, "id", "").Trim();
-                ExecuteBridgeActionOnEngine(act, targetId);
+                string targetQueue = ShihabJsonCodec.GetString(actObj, "queue", "").Trim();
+                ExecuteBridgeActionOnEngine(act, targetId, targetQueue);
                 WriteRawMehediHttpResponse(shihabStream, 200, "OK", "{\"ok\":true}", allowedCorsOrigin);
                 return;
             }
@@ -603,14 +708,50 @@ namespace ShihabMehediIDM
                 return;
             }
 
+            if (shihabCleanPath == "/shihab/video-info" && string.Equals(mehediMethod, "POST", StringComparison.OrdinalIgnoreCase))
+            {
+                Dictionary<string, object> reqObj = ShihabJsonCodec.ParseObjectOrNull(mehediBody);
+                string reqUrl = reqObj != null ? ShihabJsonCodec.GetString(reqObj, "url", "").Trim() : "";
+                bool isPl = reqObj != null && ShihabJsonCodec.GetBool(reqObj, "isPlaylist", false);
+                Uri validatedInfoUri;
+                if (!ShihabProcessAndPathSafety.TryValidateHttpUrl(reqUrl, false, out validatedInfoUri))
+                {
+                    WriteRawMehediHttpResponse(shihabStream, 400, "Bad Request", "{\"ok\":false,\"error\":\"Valid http/https url is required\"}", allowedCorsOrigin);
+                    return;
+                }
+                string summaryJson;
+                string infoErr;
+                bool okInfo = ShihabMediaHelpersManager.QueryVideoOrPlaylistInfo(
+                    _shihabStore.MehediBaseDirectory,
+                    validatedInfoUri.AbsoluteUri,
+                    isPl,
+                    out summaryJson,
+                    out infoErr,
+                    _shihabConfig);
+                if (okInfo && !string.IsNullOrWhiteSpace(summaryJson))
+                {
+                    WriteRawMehediHttpResponse(shihabStream, 200, "OK", summaryJson, allowedCorsOrigin);
+                }
+                else
+                {
+                    WriteRawMehediHttpResponse(shihabStream, 400, "Bad Request",
+                        "{\"ok\":false,\"error\":\"" + ShihabJsonCodec.EscapeString(string.IsNullOrWhiteSpace(infoErr) ? "Unable to probe video metadata" : infoErr) + "\"}",
+                        allowedCorsOrigin);
+                }
+                return;
+            }
+
             if (shihabCleanPath == "/shihab/capture" && string.Equals(mehediMethod, "POST", StringComparison.OrdinalIgnoreCase))
             {
                 ShihabCapturedLinkDto shihabDto = DeserializeMehediJson<ShihabCapturedLinkDto>(mehediBody);
                 Uri validCaptureUrl;
+                string validLocalTor = string.Empty;
+                bool isLocalTorCapture = shihabDto != null && ShihabProcessAndPathSafety.TryValidateLocalTorrentFilePath(shihabDto.ShihabUrl, out validLocalTor);
                 if (shihabDto != null &&
                     !string.IsNullOrWhiteSpace(shihabDto.ShihabUrl) &&
-                    ShihabProcessAndPathSafety.TryValidateExternalShellUri(shihabDto.ShihabUrl, true, out validCaptureUrl))
+                    (isLocalTorCapture || ShihabProcessAndPathSafety.TryValidateExternalShellUri(shihabDto.ShihabUrl, true, out validCaptureUrl)))
                 {
+                    if (isLocalTorCapture) shihabDto.ShihabUrl = validLocalTor;
                     shihabDto.ShihabSaveDirectory = NormalizeSafeCaptureSaveDirectory(shihabDto.ShihabSaveDirectory);
                     if (OnShihabSingleCaptureReceived != null)
                     {
@@ -763,16 +904,26 @@ namespace ShihabMehediIDM
             {
                 item.ShihabIsGalleryJob = true;
             }
-            else if (k == "torrent" || url.StartsWith("magnet:", StringComparison.OrdinalIgnoreCase) || url.EndsWith(".torrent", StringComparison.OrdinalIgnoreCase))
+            else if (k == "torrent" || ShihabTorrentManager.IsMagnetOrTorrentInput(url))
             {
                 item.ShihabIsTorrentOrMagnet = true;
                 item.ShihabTorrentMagnetOrPath = url;
+                if (string.IsNullOrWhiteSpace(fileName))
+                {
+                    if (File.Exists(url)) item.ShihabFileName = Path.GetFileName(url);
+                    else if (url.StartsWith("magnet:", StringComparison.OrdinalIgnoreCase)) item.ShihabFileName = "magnet_download.torrent";
+                }
             }
 
-            ShihabCategoryRule cat = _shihabConfig.ResolveMehediCategoryForFile(item.ShihabFileName);
+            ShihabCategoryRule cat = item.ShihabIsTorrent
+                ? _shihabConfig.ResolveMehediCategoryForFile("download.torrent")
+                : _shihabConfig.ResolveMehediCategoryForFile(item.ShihabFileName);
             item.ShihabCategoryName = cat.ShihabName;
             item.MehediSaveDirectory = cat.ShihabDefaultFolder;
-            item.ShihabFileName = ShihabFormatHelpers.EnsureShihabUniqueFilePath(item.MehediSaveDirectory, item.ShihabFileName);
+            if (!item.ShihabIsTorrent)
+            {
+                item.ShihabFileName = ShihabFormatHelpers.EnsureShihabUniqueFilePath(item.MehediSaveDirectory, item.ShihabFileName);
+            }
             return item;
         }
 
@@ -801,16 +952,40 @@ namespace ShihabMehediIDM
             return item;
         }
 
-        private void ExecuteBridgeActionOnEngine(string act, string targetId)
+        private static long TryGetFreeDiskBytesForPath(string folderPath)
         {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(folderPath)) return -1L;
+                string root = Path.GetPathRoot(Path.GetFullPath(folderPath));
+                if (string.IsNullOrEmpty(root)) return -1L;
+                DriveInfo di = new DriveInfo(root);
+                return di.IsReady ? di.AvailableFreeSpace : -1L;
+            }
+            catch
+            {
+                return -1L;
+            }
+        }
+
+        private void ExecuteBridgeActionOnEngine(string act, string targetId, string targetQueue = "")
+        {
+            string qName = string.IsNullOrWhiteSpace(targetQueue) ? "Main Download Queue" : targetQueue.Trim();
             if (act == "start_queue")
             {
-                _mehediEngine.StartShihabQueue("Main Download Queue");
+                _mehediEngine.StartShihabQueue(qName);
                 return;
             }
             if (act == "stop_queue")
             {
-                _mehediEngine.StopShihabQueue("Main Download Queue");
+                if (string.Equals(qName, "all", StringComparison.OrdinalIgnoreCase))
+                {
+                    _mehediEngine.StopAllShihabQueues();
+                }
+                else
+                {
+                    _mehediEngine.StopShihabQueue(qName);
+                }
                 return;
             }
             if (string.IsNullOrWhiteSpace(targetId)) return;
@@ -820,7 +995,9 @@ namespace ShihabMehediIDM
             for (int i = 0; i < snap.Count; i++)
             {
                 ShihabDownloadItem it = snap[i];
-                bool matches = targetAll || string.Equals(it.ShihabId, targetId, StringComparison.OrdinalIgnoreCase);
+                bool matches = targetAll ||
+                    string.Equals(it.ShihabId, targetId, StringComparison.OrdinalIgnoreCase) ||
+                    (targetId.Length >= 6 && it.ShihabId.StartsWith(targetId, StringComparison.OrdinalIgnoreCase));
                 if (!matches) continue;
                 if (act == "pause") _mehediEngine.PauseShihabDownload(it);
                 else if (act == "start" || act == "resume") _mehediEngine.StartOrResumeMehediDownload(it);
@@ -1006,6 +1183,7 @@ namespace ShihabMehediIDM
                 ShihabForceKey = string.IsNullOrWhiteSpace(_shihabConfig.ShihabForceKeyName) ? "Ins" : _shihabConfig.ShihabForceKeyName,
                 ShihabCaptureOpenedFiles = _shihabConfig.ShihabCaptureOpenedFiles,
                 ShihabCaptureMinSizeKb = _shihabConfig.ShihabCaptureMinSizeKb,
+                ShihabContextMenuItems = _shihabConfig.MehediContextMenuItemsCsv ?? MehediAppConfiguration.DefaultMehediContextMenuCsv,
                 ShihabActiveDownloads = mehediActive,
                 ShihabUpdateAvailable = updAvail,
                 ShihabLatestVersion = updAvail ? cachedUpd.LatestVersion : curVer,
@@ -1047,7 +1225,7 @@ namespace ShihabMehediIDM
             }
         }
 
-        public static bool SendUrlToExistingShihabInstance(int shihabPort, string url, string saveDir, string fileName)
+        public static bool SendUrlToExistingShihabInstance(int shihabPort, string url, string saveDir, string fileName, string customConfigDir = null)
         {
             try
             {
@@ -1059,7 +1237,7 @@ namespace ShihabMehediIDM
                     ShihabSilentMode = true
                 };
                 string mehediJson = SerializeShihabJson(shihabDto);
-                PostLocalShihabJson(shihabPort, "/shihab/capture", mehediJson, null);
+                PostLocalShihabJson(shihabPort, "/shihab/capture", mehediJson, customConfigDir);
                 return true;
             }
             catch

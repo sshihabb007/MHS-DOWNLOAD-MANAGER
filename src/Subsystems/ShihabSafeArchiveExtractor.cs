@@ -34,6 +34,105 @@ namespace ShihabMehediIDM
             "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
         };
 
+        public static bool TryResolvePrimarySplitArchiveIfReady(string completedArchivePath, out string primaryArchivePath, out string waitingReason)
+        {
+            primaryArchivePath = completedArchivePath ?? "";
+            waitingReason = "";
+            if (string.IsNullOrWhiteSpace(completedArchivePath) || !File.Exists(completedArchivePath))
+            {
+                waitingReason = "Archive file missing.";
+                return false;
+            }
+            string fullPath = Path.GetFullPath(completedArchivePath);
+            string dir = Path.GetDirectoryName(fullPath);
+            string name = Path.GetFileName(fullPath);
+
+            // Case 1: foo.partN.rar -> check foo.part1.rar / foo.part01.rar / foo.part001.rar
+            Match rarPartMatch = RarPartVolRegex.Match(name);
+            if (rarPartMatch.Success)
+            {
+                int partNum = 1;
+                int.TryParse(rarPartMatch.Groups[2].Value, out partNum);
+                string prefix = rarPartMatch.Groups[1].Value;
+                if (partNum > 1)
+                {
+                    string foundPart1 = FindSplitPartOneFile(dir, prefix);
+                    if (string.IsNullOrEmpty(foundPart1))
+                    {
+                        waitingReason = "Waiting for split RAR part 1 to finish downloading.";
+                        return false;
+                    }
+                    if (!AreAllSplitArchiveVolumesReady(foundPart1, out waitingReason))
+                    {
+                        return false;
+                    }
+                    primaryArchivePath = foundPart1;
+                    return true;
+                }
+                return AreAllSplitArchiveVolumesReady(fullPath, out waitingReason);
+            }
+
+            // Case 2: foo.zip.002 / foo.7z.002 -> check .001
+            Match numSplitMatch = NumSplitVolRegex.Match(name);
+            if (numSplitMatch.Success)
+            {
+                string basePref = numSplitMatch.Groups[1].Value;
+                if (numSplitMatch.Groups[2].Value != "001")
+                {
+                    string part001 = Path.Combine(dir, basePref + ".001");
+                    if (!File.Exists(part001))
+                    {
+                        waitingReason = "Waiting for split archive .001 volume to finish downloading.";
+                        return false;
+                    }
+                    if (!AreAllSplitArchiveVolumesReady(part001, out waitingReason))
+                    {
+                        return false;
+                    }
+                    primaryArchivePath = part001;
+                    return true;
+                }
+                return AreAllSplitArchiveVolumesReady(fullPath, out waitingReason);
+            }
+
+            // Case 3: old-style foo.r01 -> check foo.rar
+            if (OldRarVolRegex.IsMatch(name))
+            {
+                string primaryRar = Path.Combine(dir, Path.GetFileNameWithoutExtension(name) + ".rar");
+                if (!File.Exists(primaryRar))
+                {
+                    waitingReason = "Waiting for primary .rar volume to finish downloading.";
+                    return false;
+                }
+                string[] inProg = Directory.GetFiles(dir, Path.GetFileNameWithoutExtension(name) + ".r*.*part*");
+                if (inProg.Length > 0)
+                {
+                    waitingReason = "Waiting for remaining old-style RAR volumes to finish downloading.";
+                    return false;
+                }
+                primaryArchivePath = primaryRar;
+                return true;
+            }
+
+            return AreAllSplitArchiveVolumesReady(fullPath, out waitingReason);
+        }
+
+        private static string FindSplitPartOneFile(string dir, string prefix)
+        {
+            string[] candidates = new string[]
+            {
+                Path.Combine(dir, prefix + ".part1.rar"),
+                Path.Combine(dir, prefix + ".part01.rar"),
+                Path.Combine(dir, prefix + ".part001.rar"),
+                Path.Combine(dir, prefix + ".part0001.rar")
+            };
+            for (int i = 0; i < candidates.Length; i++)
+            {
+                if (File.Exists(candidates[i])) return candidates[i];
+            }
+            return "";
+        }
+
         public static bool IsSupportedArchiveFile(string fileName)
         {
             if (string.IsNullOrWhiteSpace(fileName)) return false;
@@ -47,7 +146,9 @@ namespace ShihabMehediIDM
                    lower.EndsWith(".rar") ||
                    lower.EndsWith(".tar.xz") ||
                    lower.EndsWith(".txz") ||
-                   SplitNumericExtRegex.IsMatch(lower);
+                   SplitNumericExtRegex.IsMatch(lower) ||
+                   NumSplitVolRegex.IsMatch(lower) ||
+                   OldRarVolRegex.IsMatch(lower);
         }
 
         public static bool AreAllSplitArchiveVolumesReady(string archiveFilePath, out string waitingReason)
@@ -151,6 +252,211 @@ namespace ShihabMehediIDM
                 out errorMessage);
         }
 
+        public static bool ExtractArchiveSafelyWithConfig(
+            string archiveFilePath,
+            MehediAppConfiguration cfg,
+            ShihabStateStore store,
+            string explicitPassword,
+            string motwHostUrl,
+            string motwRefererUrl,
+            out string finalDestinationPath,
+            out string errorMessage)
+        {
+            finalDestinationPath = "";
+            errorMessage = "";
+            string subMode = cfg != null ? cfg.ShihabExtractSubfolderMode : "Smart";
+            bool deleteOnSuccess = cfg != null && cfg.ShihabDeleteArchiveAfterExtract;
+            bool useHatchZip = cfg != null && cfg.ShihabUseHatchZipInPlace;
+
+            List<string> candidates = new List<string>();
+            if (!string.IsNullOrEmpty(explicitPassword)) candidates.Add(explicitPassword);
+            candidates.Add("");
+
+            List<string> savedDecrypted = new List<string>();
+            if (cfg != null && cfg.ShihabSavedArchivePasswords != null)
+            {
+                for (int i = 0; i < cfg.ShihabSavedArchivePasswords.Count; i++)
+                {
+                    string dec = ShihabSecretsVault.UnprotectSecret(cfg.ShihabSavedArchivePasswords[i] ?? "");
+                    if (!string.IsNullOrEmpty(dec) && !candidates.Contains(dec))
+                    {
+                        candidates.Add(dec);
+                        savedDecrypted.Add(dec);
+                    }
+                }
+            }
+
+            // Optional HatchZip in-place extraction for large archives on tight disk space
+            if (useHatchZip)
+            {
+                string hatchExe = FindHatchZipExecutable();
+                if (!string.IsNullOrEmpty(hatchExe))
+                {
+                    for (int i = 0; i < candidates.Count; i++)
+                    {
+                        string hzDest, hzErr;
+                        if (TryExtractWithHatchZipInPlace(hatchExe, archiveFilePath, candidates[i], motwHostUrl, motwRefererUrl, out hzDest, out hzErr))
+                        {
+                            PromoteSavedArchivePasswordMru(cfg, store, candidates[i]);
+                            finalDestinationPath = hzDest;
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            string lastErr = "";
+            for (int i = 0; i < candidates.Count; i++)
+            {
+                string pwd = candidates[i];
+                string dest;
+                string err;
+                if (ExtractArchiveSafely(archiveFilePath, subMode, pwd, deleteOnSuccess, motwHostUrl, motwRefererUrl, out dest, out err))
+                {
+                    if (!string.IsNullOrEmpty(pwd))
+                    {
+                        PromoteSavedArchivePasswordMru(cfg, store, pwd);
+                    }
+                    finalDestinationPath = dest;
+                    return true;
+                }
+                lastErr = err;
+                if (i == 0 && !string.IsNullOrEmpty(explicitPassword)) continue;
+                // Only keep trying passwords if the error indicates password/encryption/header failure
+                if (!LooksLikeArchivePasswordError(err) && i > 0)
+                {
+                    break;
+                }
+            }
+            errorMessage = lastErr;
+            return false;
+        }
+
+        private static bool LooksLikeArchivePasswordError(string err)
+        {
+            if (string.IsNullOrWhiteSpace(err)) return true;
+            string low = err.ToLowerInvariant();
+            return low.IndexOf("password", StringComparison.Ordinal) >= 0 ||
+                   low.IndexOf("encrypted", StringComparison.Ordinal) >= 0 ||
+                   low.IndexOf("wrong", StringComparison.Ordinal) >= 0 ||
+                   low.IndexOf("data error", StringComparison.Ordinal) >= 0 ||
+                   low.IndexOf("crc failed", StringComparison.Ordinal) >= 0 ||
+                   low.IndexOf("exited with code 2", StringComparison.Ordinal) >= 0;
+        }
+
+        public static void PromoteSavedArchivePasswordMru(MehediAppConfiguration cfg, ShihabStateStore store, string plainPassword)
+        {
+            if (cfg == null || string.IsNullOrEmpty(plainPassword)) return;
+            try
+            {
+                if (cfg.ShihabSavedArchivePasswords == null) cfg.ShihabSavedArchivePasswords = new List<string>();
+                int matchIdx = -1;
+                for (int i = 0; i < cfg.ShihabSavedArchivePasswords.Count; i++)
+                {
+                    if (string.Equals(ShihabSecretsVault.UnprotectSecret(cfg.ShihabSavedArchivePasswords[i] ?? ""), plainPassword, StringComparison.Ordinal))
+                    {
+                        matchIdx = i;
+                        break;
+                    }
+                }
+                if (matchIdx > 0)
+                {
+                    string existing = cfg.ShihabSavedArchivePasswords[matchIdx];
+                    cfg.ShihabSavedArchivePasswords.RemoveAt(matchIdx);
+                    cfg.ShihabSavedArchivePasswords.Insert(0, existing);
+                    if (store != null) store.SaveMehediConfig(cfg);
+                }
+                else if (matchIdx < 0)
+                {
+                    cfg.ShihabSavedArchivePasswords.Insert(0, ShihabSecretsVault.ProtectSecret(plainPassword));
+                    while (cfg.ShihabSavedArchivePasswords.Count > 25) cfg.ShihabSavedArchivePasswords.RemoveAt(cfg.ShihabSavedArchivePasswords.Count - 1);
+                    if (store != null) store.SaveMehediConfig(cfg);
+                }
+            }
+            catch { }
+        }
+
+        public static string FindHatchZipExecutable()
+        {
+            string[] candidates = new string[]
+            {
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Programs\HatchZip\hatchzip.exe"),
+                Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "hatchzip.exe")
+            };
+            for (int i = 0; i < candidates.Length; i++)
+            {
+                if (File.Exists(candidates[i])) return candidates[i];
+            }
+            string pathEnv = Environment.GetEnvironmentVariable("PATH") ?? "";
+            string[] dirs = pathEnv.Split(new char[] { ';' }, StringSplitOptions.RemoveEmptyEntries);
+            for (int i = 0; i < dirs.Length; i++)
+            {
+                try
+                {
+                    string d = dirs[i].Trim().Trim('"');
+                    if (string.IsNullOrEmpty(d) || !Path.IsPathRooted(d) || d.StartsWith(@"\\", StringComparison.Ordinal)) continue;
+                    string cand = Path.Combine(d, "hatchzip.exe");
+                    if (File.Exists(cand)) return cand;
+                }
+                catch { }
+            }
+            return "";
+        }
+
+        private static bool TryExtractWithHatchZipInPlace(
+            string hatchExe,
+            string archivePath,
+            string password,
+            string motwHostUrl,
+            string motwRefererUrl,
+            out string destDir,
+            out string errorMsg)
+        {
+            destDir = "";
+            errorMsg = "";
+            try
+            {
+                string parentDir = Path.GetDirectoryName(Path.GetFullPath(archivePath));
+                string outDir = GetUniqueDirectoryPath(parentDir, GetArchiveStem(Path.GetFileName(archivePath)));
+                Directory.CreateDirectory(outDir);
+                System.Diagnostics.ProcessStartInfo psi = new System.Diagnostics.ProcessStartInfo();
+                psi.FileName = hatchExe;
+                psi.Arguments = ShihabProcessAndPathSafety.BuildWindowsArgumentString(archivePath, "-o", outDir);
+                psi.WorkingDirectory = parentDir;
+                psi.UseShellExecute = false;
+                psi.CreateNoWindow = true;
+                psi.RedirectStandardOutput = true;
+                psi.RedirectStandardError = true;
+                if (!string.IsNullOrEmpty(password))
+                {
+                    psi.EnvironmentVariables["HATCHZIP_PASSWORD"] = password.Replace("\r", "").Replace("\n", "").Replace("\0", "");
+                }
+                using (System.Diagnostics.Process proc = System.Diagnostics.Process.Start(psi))
+                {
+                    if (proc == null) return false;
+                    string err = proc.StandardError.ReadToEnd();
+                    proc.WaitForExit(600000);
+                    if (proc.ExitCode != 0)
+                    {
+                        errorMsg = !string.IsNullOrWhiteSpace(err) ? err.Trim() : ("hatchzip exited with code " + proc.ExitCode);
+                        TryDeleteDirectory(outDir);
+                        return false;
+                    }
+                }
+                if (!string.IsNullOrWhiteSpace(motwHostUrl) || !string.IsNullOrWhiteSpace(motwRefererUrl))
+                {
+                    ShihabOsAndDiskSafety.PropagateMarkOfTheWebToDirectory(outDir, motwHostUrl, motwRefererUrl);
+                }
+                destDir = outDir;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                errorMsg = ex.Message;
+                return false;
+            }
+        }
+
         public static bool ExtractArchiveSafely(
             string archiveFilePath,
             string subfolderMode,
@@ -192,11 +498,20 @@ namespace ShihabMehediIDM
 
                 if (format == "zip")
                 {
+                    bool fallbackToSevenZip = false;
                     try
                     {
                         ExtractZipToStaging(archiveFilePath, stagingDir, compressedBytes, diskBudgetCap);
                     }
                     catch (InvalidDataException)
+                    {
+                        fallbackToSevenZip = true;
+                    }
+                    catch (NotSupportedException)
+                    {
+                        fallbackToSevenZip = true;
+                    }
+                    if (fallbackToSevenZip)
                     {
                         TryDeleteDirectory(stagingDir);
                         Directory.CreateDirectory(stagingDir);

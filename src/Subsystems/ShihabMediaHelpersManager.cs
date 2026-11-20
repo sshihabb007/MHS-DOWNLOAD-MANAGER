@@ -16,16 +16,63 @@ namespace ShihabMehediIDM
         public string FormatId { get; set; }
         public string ResolutionLabel { get; set; }
         public string Extension { get; set; }
+        public string VideoCodec { get; set; }
+        public string AudioCodec { get; set; }
+        public int Fps { get; set; }
+        public string DynamicRange { get; set; }
+        public bool IsLive { get; set; }
         public long FileSizeBytes { get; set; }
         public string DirectUrl { get; set; }
         public bool HasVideo { get; set; }
         public bool HasAudio { get; set; }
 
+        public string BuildRichQualityLabel()
+        {
+            List<string> parts = new List<string>();
+            string res = string.IsNullOrEmpty(ResolutionLabel) ? FormatId : ResolutionLabel;
+            string ext = string.IsNullOrEmpty(Extension) ? "MP4" : Extension.ToUpperInvariant();
+            parts.Add(res + " " + ext);
+            string codecTag = FormatShortCodecName(VideoCodec, AudioCodec, HasVideo, HasAudio);
+            if (!string.IsNullOrEmpty(codecTag)) parts.Add(codecTag);
+            if (Fps >= 45) parts.Add(Fps + " fps");
+            if (!string.IsNullOrEmpty(DynamicRange) &&
+                !string.Equals(DynamicRange, "SDR", StringComparison.OrdinalIgnoreCase))
+            {
+                parts.Add(DynamicRange.ToUpperInvariant());
+            }
+            if (IsLive) parts.Add("LIVE");
+            return string.Join(" · ", parts.ToArray());
+        }
+
+        public static string FormatShortCodecName(string vcodec, string acodec, bool hasVideo, bool hasAudio)
+        {
+            string vc = (vcodec ?? "").Trim().ToLowerInvariant();
+            string ac = (acodec ?? "").Trim().ToLowerInvariant();
+            string vLabel = "";
+            if (hasVideo && !string.IsNullOrEmpty(vc) && vc != "none")
+            {
+                if (vc.StartsWith("av01")) vLabel = "AV1";
+                else if (vc.StartsWith("vp9") || vc.StartsWith("vp09")) vLabel = "VP9";
+                else if (vc.StartsWith("avc") || vc.StartsWith("h264")) vLabel = "H.264";
+                else if (vc.StartsWith("hev") || vc.StartsWith("hvc") || vc.StartsWith("h265")) vLabel = "HEVC";
+                else vLabel = vc.Split('.')[0].ToUpperInvariant();
+            }
+            string aLabel = "";
+            if (hasAudio && !string.IsNullOrEmpty(ac) && ac != "none")
+            {
+                if (ac.StartsWith("mp4a")) aLabel = "AAC";
+                else if (ac.StartsWith("opus")) aLabel = "Opus";
+                else if (ac.StartsWith("mp3")) aLabel = "MP3";
+                else aLabel = ac.Split('.')[0].ToUpperInvariant();
+            }
+            if (!string.IsNullOrEmpty(vLabel) && !string.IsNullOrEmpty(aLabel)) return vLabel + "+" + aLabel;
+            return !string.IsNullOrEmpty(vLabel) ? vLabel : aLabel;
+        }
+
         public override string ToString()
         {
-            return string.Format("{0} ({1}) - {2}",
-                string.IsNullOrEmpty(ResolutionLabel) ? FormatId : ResolutionLabel,
-                string.IsNullOrEmpty(Extension) ? "mp4" : Extension.ToUpperInvariant(),
+            return string.Format("{0} - {1}",
+                BuildRichQualityLabel(),
                 FileSizeBytes > 0 ? ShihabFormatHelpers.FormatMehediBytes(FileSizeBytes) : "Stream");
         }
     }
@@ -47,6 +94,9 @@ namespace ShihabMehediIDM
         public const string GalleryDlReleaseApiUrl = "https://api.github.com/repos/mikf/gallery-dl/releases/latest";
         public const string FfmpegDownloadUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip";
         public const string FfmpegChecksumsUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/checksums.sha256";
+        public const string DenoDownloadUrl = "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip";
+        public const string DenoSha256Url = "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip.sha256sum";
+        public const string CompatibleFormatSelector = "bv*[vcodec^=avc]+ba[acodec^=mp4a]/b[ext=mp4]/b";
 
         private const int MaxRedirects = 5;
         private const int MaxTextResponseBytes = 4 * 1024 * 1024;
@@ -101,23 +151,55 @@ namespace ShihabMehediIDM
         public static void InstallOrUpdateHelperAsync(
             string baseDataDir,
             string toolKey,
-            Action<string> onProgressStatus)
+            Action<string> onProgressStatus,
+            MehediAppConfiguration cfg = null)
         {
             ThreadPool.QueueUserWorkItem(delegate
             {
                 string err;
-                if (!InstallOrUpdateTool(baseDataDir, toolKey, onProgressStatus, out err) && onProgressStatus != null)
+                if (!InstallOrUpdateTool(baseDataDir, toolKey, onProgressStatus, out err, cfg) && onProgressStatus != null)
                 {
                     onProgressStatus(err);
                 }
             });
         }
 
+        public static string DetectJsRuntimeSpec(string baseDataDir)
+        {
+            string denoPath = GetToolExecutablePath(baseDataDir, "deno");
+            if (File.Exists(denoPath)) return "deno:" + denoPath;
+            string nodePath = GetToolExecutablePath(baseDataDir, "node");
+            if (File.Exists(nodePath)) return "node:" + nodePath;
+            string qjsPath = GetToolExecutablePath(baseDataDir, "qjs");
+            if (File.Exists(qjsPath)) return "quickjs:" + qjsPath;
+            return "";
+        }
+
+        public static string DetectBgUtilPoTokenStatus(string baseDataDir)
+        {
+            try
+            {
+                using (System.Net.Sockets.TcpClient probe = new System.Net.Sockets.TcpClient())
+                {
+                    IAsyncResult ar = probe.BeginConnect(IPAddress.Loopback, 4416, null, null);
+                    if (ar.AsyncWaitHandle.WaitOne(180, false) && probe.Connected)
+                    {
+                        try { probe.EndConnect(ar); } catch { }
+                        return "Active (HTTP 127.0.0.1:4416)";
+                    }
+                }
+            }
+            catch { }
+            string cliPath = GetToolExecutablePath(baseDataDir, "bgutil-pot");
+            if (File.Exists(cliPath)) return "Installed (" + cliPath + ")";
+            return "Not detected (optional)";
+        }
+
         public static List<string> ExtractGalleryImageUrls(string pageUrl, string userAgent)
         {
             string title;
             string appData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ShihabMehediIDM");
-            return ExtractGalleryImageUrls(pageUrl, appData, out title);
+            return ExtractGalleryImageUrls(pageUrl, appData, out title, ShihabLocalNetworkRelay.ActiveConfig);
         }
 
         public static string GetToolExecutablePath(string baseDataDir, string toolName)
@@ -167,10 +249,12 @@ namespace ShihabMehediIDM
             string baseDataDir,
             string toolKey,
             Action<string> onProgressStatus,
-            out string errorMessage)
+            out string errorMessage,
+            MehediAppConfiguration cfg = null)
         {
             errorMessage = "";
             string toolsDir = GetToolsDirectory(baseDataDir);
+            MehediAppConfiguration effectiveCfg = cfg ?? ShihabLocalNetworkRelay.ActiveConfig;
             try
             {
                 ShihabAutoUpdater.EnforceModernTls();
@@ -179,12 +263,12 @@ namespace ShihabMehediIDM
                 {
                     if (onProgressStatus != null) onProgressStatus("Downloading yt-dlp.exe + SHA2-256SUMS from official GitHub release...");
                     string target = Path.Combine(toolsDir, "yt-dlp.exe");
-                    string expectedSha = FetchExpectedSha256FromSidecar(YtDlpSha256SumsUrl, "yt-dlp.exe");
+                    string expectedSha = FetchExpectedSha256FromSidecar(YtDlpSha256SumsUrl, "yt-dlp.exe", effectiveCfg);
                     if (!IsValidSha256Hex(expectedSha))
                     {
                         throw new InvalidOperationException("Could not retrieve a valid SHA-256 checksum from yt-dlp SHA2-256SUMS.");
                     }
-                    DownloadAndVerifyBinaryFile(YtDlpDownloadUrl, target, expectedSha);
+                    DownloadAndVerifyBinaryFile(YtDlpDownloadUrl, target, expectedSha, effectiveCfg);
                     if (onProgressStatus != null) onProgressStatus("yt-dlp.exe SHA-256 verified and installed at " + target);
                     return true;
                 }
@@ -192,13 +276,56 @@ namespace ShihabMehediIDM
                 {
                     if (onProgressStatus != null) onProgressStatus("Downloading gallery-dl.exe from official GitHub release...");
                     string target = Path.Combine(toolsDir, "gallery-dl.exe");
-                    string expectedSha = FetchExpectedSha256FromGitHubReleaseApi(GalleryDlReleaseApiUrl, "gallery-dl.exe");
+                    string expectedSha = FetchExpectedSha256FromGitHubReleaseApi(GalleryDlReleaseApiUrl, "gallery-dl.exe", effectiveCfg);
                     if (!IsValidSha256Hex(expectedSha))
                     {
                         throw new InvalidOperationException("Could not retrieve a valid SHA-256 digest for gallery-dl.exe from GitHub release metadata.");
                     }
-                    DownloadAndVerifyBinaryFile(GalleryDlDownloadUrl, target, expectedSha);
+                    DownloadAndVerifyBinaryFile(GalleryDlDownloadUrl, target, expectedSha, effectiveCfg);
                     if (onProgressStatus != null) onProgressStatus("gallery-dl.exe SHA-256 verified and installed at " + target);
+                    return true;
+                }
+                if (key == "deno")
+                {
+                    if (onProgressStatus != null) onProgressStatus("Downloading deno-x86_64-pc-windows-msvc.zip + sha256sum...");
+                    string zipTmp = Path.Combine(toolsDir, "deno_tmp.zip");
+                    try
+                    {
+                        string expectedSha = FetchExpectedSha256FromSidecar(DenoSha256Url, "deno-x86_64-pc-windows-msvc.zip", effectiveCfg);
+                        if (!IsValidSha256Hex(expectedSha))
+                        {
+                            expectedSha = FetchExpectedSha256FromGitHubReleaseApi("https://api.github.com/repos/denoland/deno/releases/latest", "deno-x86_64-pc-windows-msvc.zip", effectiveCfg);
+                        }
+                        if (!IsValidSha256Hex(expectedSha))
+                        {
+                            throw new InvalidOperationException("Could not retrieve a valid SHA-256 checksum for Deno.");
+                        }
+                        DownloadAndVerifyBinaryFile(DenoDownloadUrl, zipTmp, expectedSha, effectiveCfg);
+                        if (onProgressStatus != null) onProgressStatus("Extracting deno.exe...");
+                        using (ZipArchive za = ZipFile.OpenRead(zipTmp))
+                        {
+                            foreach (ZipArchiveEntry entry in za.Entries)
+                            {
+                                string entryLeaf = Path.GetFileName(entry.FullName ?? "");
+                                if (!string.Equals(entryLeaf, "deno.exe", StringComparison.OrdinalIgnoreCase)) continue;
+                                if (entry.Length < 0 || entry.Length > MaxFfmpegExtractedEntryBytes)
+                                {
+                                    throw new InvalidDataException("Deno archive entry exceeds safe size limit.");
+                                }
+                                string dest;
+                                if (!ShihabProcessAndPathSafety.ResolvePathStrictlyUnderRoot(toolsDir, "deno.exe", out dest))
+                                {
+                                    throw new InvalidOperationException("Invalid Deno extraction destination.");
+                                }
+                                ExtractZipEntryAtomically(entry, dest, MaxFfmpegExtractedEntryBytes);
+                            }
+                        }
+                    }
+                    finally
+                    {
+                        try { if (File.Exists(zipTmp)) File.Delete(zipTmp); } catch { }
+                    }
+                    if (onProgressStatus != null) onProgressStatus("deno.exe SHA-256 verified and installed in " + toolsDir);
                     return true;
                 }
                 if (key == "ffmpeg")
@@ -207,12 +334,12 @@ namespace ShihabMehediIDM
                     string zipTmp = Path.Combine(toolsDir, "ffmpeg_tmp.zip");
                     try
                     {
-                        string expectedSha = FetchExpectedSha256FromSidecar(FfmpegChecksumsUrl, "ffmpeg-master-latest-win64-gpl.zip");
+                        string expectedSha = FetchExpectedSha256FromSidecar(FfmpegChecksumsUrl, "ffmpeg-master-latest-win64-gpl.zip", effectiveCfg);
                         if (!IsValidSha256Hex(expectedSha))
                         {
                             throw new InvalidOperationException("Could not retrieve a valid SHA-256 checksum from FFmpeg checksums.sha256.");
                         }
-                        DownloadAndVerifyBinaryFile(FfmpegDownloadUrl, zipTmp, expectedSha);
+                        DownloadAndVerifyBinaryFile(FfmpegDownloadUrl, zipTmp, expectedSha, effectiveCfg);
                         if (onProgressStatus != null) onProgressStatus("Extracting ffmpeg.exe and ffprobe.exe...");
                         using (ZipArchive za = ZipFile.OpenRead(zipTmp))
                         {
@@ -374,9 +501,9 @@ namespace ShihabMehediIDM
             }
         }
 
-        private static string FetchExpectedSha256FromSidecar(string sumsUrl, string assetName)
+        private static string FetchExpectedSha256FromSidecar(string sumsUrl, string assetName, MehediAppConfiguration cfg = null)
         {
-            using (HttpWebResponse resp = GetValidatedHttpResponse(sumsUrl, true, true, 15000, null, null, null))
+            using (HttpWebResponse resp = GetValidatedHttpResponse(sumsUrl, true, true, 15000, cfg, null, null))
             using (Stream s = resp.GetResponseStream())
             {
                 string body = ReadBoundedUtf8Text(s, MaxTextResponseBytes);
@@ -397,9 +524,9 @@ namespace ShihabMehediIDM
             return "";
         }
 
-        private static string FetchExpectedSha256FromGitHubReleaseApi(string releaseApiUrl, string assetName)
+        private static string FetchExpectedSha256FromGitHubReleaseApi(string releaseApiUrl, string assetName, MehediAppConfiguration cfg = null)
         {
-            using (HttpWebResponse resp = GetValidatedHttpResponse(releaseApiUrl, true, true, 15000, null, null, "application/vnd.github+json"))
+            using (HttpWebResponse resp = GetValidatedHttpResponse(releaseApiUrl, true, true, 15000, cfg, null, "application/vnd.github+json"))
             using (Stream s = resp.GetResponseStream())
             {
                 string json = ReadBoundedUtf8Text(s, MaxTextResponseBytes);
@@ -424,7 +551,7 @@ namespace ShihabMehediIDM
             return "";
         }
 
-        private static void DownloadAndVerifyBinaryFile(string url, string destinationPath, string expectedSha256Hex)
+        private static void DownloadAndVerifyBinaryFile(string url, string destinationPath, string expectedSha256Hex, MehediAppConfiguration cfg = null)
         {
             if (!IsValidSha256Hex(expectedSha256Hex))
             {
@@ -433,7 +560,7 @@ namespace ShihabMehediIDM
             string tmp = destinationPath + ".tmp";
             try
             {
-                using (HttpWebResponse resp = GetValidatedHttpResponse(url, true, true, 45000, null, null, null))
+                using (HttpWebResponse resp = GetValidatedHttpResponse(url, true, true, 45000, cfg, null, null))
                 using (Stream inStream = resp.GetResponseStream())
                 using (FileStream outFs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None))
                 {
@@ -486,24 +613,32 @@ namespace ShihabMehediIDM
             string targetUrl,
             bool isPlaylist,
             out string summaryJson,
-            out string errorMessage)
+            out string errorMessage,
+            MehediAppConfiguration cfg = null)
         {
             summaryJson = "";
             string mediaTitle;
             List<ShihabMediaFormatEntry> formats;
             List<ShihabPlaylistEntryInfo> entries;
-            if (!QueryVideoOrPlaylistInfo(targetUrl, baseDataDir, null, out mediaTitle, out formats, out entries, out errorMessage))
+            if (!QueryVideoOrPlaylistInfo(targetUrl, baseDataDir, cfg ?? ShihabLocalNetworkRelay.ActiveConfig, out mediaTitle, out formats, out entries, out errorMessage))
             {
                 return false;
             }
 
+            bool anyLive = false;
             List<object> fmtList = new List<object>();
             for (int i = 0; i < formats.Count; i++)
             {
+                if (formats[i].IsLive) anyLive = true;
                 Dictionary<string, object> fd = new Dictionary<string, object>();
                 fd["id"] = formats[i].FormatId ?? "";
                 fd["ext"] = formats[i].Extension ?? "";
                 fd["resolution"] = formats[i].ResolutionLabel ?? "";
+                fd["label"] = formats[i].BuildRichQualityLabel();
+                fd["videoCodec"] = formats[i].VideoCodec ?? "";
+                fd["audioCodec"] = formats[i].AudioCodec ?? "";
+                fd["fps"] = formats[i].Fps;
+                fd["dynamicRange"] = formats[i].DynamicRange ?? "";
                 fd["sizeBytes"] = formats[i].FileSizeBytes;
                 fd["hasVideo"] = formats[i].HasVideo;
                 fd["hasAudio"] = formats[i].HasAudio;
@@ -522,8 +657,10 @@ namespace ShihabMehediIDM
             }
 
             Dictionary<string, object> summary = new Dictionary<string, object>();
+            summary["ok"] = true;
             summary["title"] = mediaTitle ?? "";
             summary["isPlaylist"] = isPlaylist || entries.Count > 0;
+            summary["isLive"] = anyLive;
             summary["formats"] = fmtList;
             summary["entries"] = entryList;
             summaryJson = ShihabJsonCodec.Serialize(summary);
@@ -561,7 +698,16 @@ namespace ShihabMehediIDM
             List<string> argv = new List<string>();
             argv.Add("--dump-single-json");
             argv.Add("--no-warnings");
-            argv.Add("--ignore-config");
+            if (cfg == null || !cfg.ShihabUseUserYtDlpConfig)
+            {
+                argv.Add("--ignore-config");
+            }
+            string jsRuntimeSpec = DetectJsRuntimeSpec(baseDataDir);
+            if (!string.IsNullOrEmpty(jsRuntimeSpec))
+            {
+                argv.Add("--js-runtimes");
+                argv.Add(jsRuntimeSpec);
+            }
             argv.Add("--flat-playlist");
             string proxyArg = StripControlCharacters(ShihabLocalNetworkRelay.GetSubprocessProxyUrl(cfg));
             if (!string.IsNullOrEmpty(proxyArg))
@@ -595,6 +741,8 @@ namespace ShihabMehediIDM
             {
                 mediaTitle = ShihabJsonCodec.GetString(root, "title");
                 string rootType = ShihabJsonCodec.GetString(root, "_type");
+                bool rootIsLive = ShihabJsonCodec.GetBool(root, "is_live", false) ||
+                    string.Equals(ShihabJsonCodec.GetString(root, "live_status"), "is_live", StringComparison.OrdinalIgnoreCase);
                 List<object> rawEntries = ShihabJsonCodec.GetArray(root, "entries");
                 if (string.Equals(rootType, "playlist", StringComparison.OrdinalIgnoreCase) || rawEntries != null)
                 {
@@ -644,15 +792,33 @@ namespace ShihabMehediIDM
                         string ext = ShihabJsonCodec.GetString(fmtObj, "ext");
                         string res = ShihabJsonCodec.GetString(fmtObj, "resolution");
                         string note = ShihabJsonCodec.GetString(fmtObj, "format_note");
+                        long height = ShihabJsonCodec.GetLong(fmtObj, "height");
                         string vcodec = ShihabJsonCodec.GetString(fmtObj, "vcodec");
                         string acodec = ShihabJsonCodec.GetString(fmtObj, "acodec");
+                        int fpsVal = 0;
+                        object rawFps;
+                        if (fmtObj.TryGetValue("fps", out rawFps) && rawFps != null)
+                        {
+                            double parsedFps;
+                            if (double.TryParse(Convert.ToString(rawFps, CultureInfo.InvariantCulture), NumberStyles.Float, CultureInfo.InvariantCulture, out parsedFps))
+                            {
+                                fpsVal = (int)Math.Round(parsedFps);
+                            }
+                        }
+                        string dynRange = ShihabJsonCodec.GetString(fmtObj, "dynamic_range");
                         long fsize = ShihabJsonCodec.GetLong(fmtObj, "filesize");
                         if (fsize <= 0) fsize = ShihabJsonCodec.GetLong(fmtObj, "filesize_approx");
+                        string resLabel = height > 0 ? (height + "p") : (!string.IsNullOrEmpty(res) ? res : (!string.IsNullOrEmpty(note) ? note : fid));
                         formats.Add(new ShihabMediaFormatEntry
                         {
                             FormatId = fid,
                             Extension = string.IsNullOrEmpty(ext) ? "mp4" : ext,
-                            ResolutionLabel = !string.IsNullOrEmpty(res) ? res : (!string.IsNullOrEmpty(note) ? note : fid),
+                            ResolutionLabel = resLabel,
+                            VideoCodec = vcodec ?? "",
+                            AudioCodec = acodec ?? "",
+                            Fps = fpsVal,
+                            DynamicRange = dynRange ?? "",
+                            IsLive = rootIsLive,
                             FileSizeBytes = fsize,
                             DirectUrl = ShihabJsonCodec.GetString(fmtObj, "url"),
                             HasVideo = !string.IsNullOrEmpty(vcodec) && !string.Equals(vcodec, "none", StringComparison.OrdinalIgnoreCase),
@@ -709,10 +875,29 @@ namespace ShihabMehediIDM
             }
             Directory.CreateDirectory(saveDir);
 
-            string toolsDir = GetToolsDirectory(baseDataDir);
-            string ffmpegExe = Path.Combine(toolsDir, "ffmpeg.exe");
+            string ffmpegExe = GetToolExecutablePath(baseDataDir, "ffmpeg");
+            bool hasFfmpeg = File.Exists(ffmpegExe);
             string baseStem = Path.GetFileNameWithoutExtension(ShihabFormatHelpers.SanitizeShihabFileName(item.ShihabFileName));
             if (string.IsNullOrWhiteSpace(baseStem) || baseStem == "download") baseStem = "%(title).120s";
+
+            // Avoid overwriting prior live-stream recordings when resuming/re-recording
+            if (item.ShihabIsLiveStream && baseStem.IndexOf("%(", StringComparison.Ordinal) < 0)
+            {
+                string candMp4 = Path.Combine(saveDir, baseStem + ".mp4");
+                string candTs = Path.Combine(saveDir, baseStem + ".ts");
+                if (File.Exists(candMp4) || File.Exists(candTs))
+                {
+                    int recNum = 1;
+                    while (recNum < 999 &&
+                           (File.Exists(Path.Combine(saveDir, baseStem + " (recording " + recNum + ").mp4")) ||
+                            File.Exists(Path.Combine(saveDir, baseStem + " (recording " + recNum + ").ts"))))
+                    {
+                        recNum++;
+                    }
+                    baseStem = baseStem + " (recording " + recNum + ")";
+                }
+            }
+
             string outTemplate;
             if (!ShihabProcessAndPathSafety.ResolvePathStrictlyUnderRoot(saveDir, baseStem + ".%(ext)s", out outTemplate))
             {
@@ -722,13 +907,28 @@ namespace ShihabMehediIDM
             List<string> argv = new List<string>();
             argv.Add("--newline");
             argv.Add("--no-warnings");
-            argv.Add("--ignore-config");
+            if (cfg == null || !cfg.ShihabUseUserYtDlpConfig)
+            {
+                argv.Add("--ignore-config");
+            }
             argv.Add("--continue");
             argv.Add("--no-playlist");
-            if (File.Exists(ffmpegExe))
+            int concFrags = Math.Min(8, Math.Max(1, item.MehediMaxConnections));
+            if (concFrags > 1)
+            {
+                argv.Add("--concurrent-fragments");
+                argv.Add(concFrags.ToString(CultureInfo.InvariantCulture));
+            }
+            string jsRuntimeSpec = DetectJsRuntimeSpec(baseDataDir);
+            if (!string.IsNullOrEmpty(jsRuntimeSpec))
+            {
+                argv.Add("--js-runtimes");
+                argv.Add(jsRuntimeSpec);
+            }
+            if (hasFfmpeg)
             {
                 argv.Add("--ffmpeg-location");
-                argv.Add(toolsDir);
+                argv.Add(Path.GetDirectoryName(ffmpegExe));
             }
 
             string proxyUrl = StripControlCharacters(ShihabLocalNetworkRelay.GetSubprocessProxyUrl(cfg));
@@ -764,8 +964,18 @@ namespace ShihabMehediIDM
             }
             else if (!string.IsNullOrWhiteSpace(item.ShihabYtDlpFormatSelector))
             {
+                string sel = StripControlCharacters(item.ShihabYtDlpFormatSelector).Trim();
+                if (string.Equals(sel, "compatible", StringComparison.OrdinalIgnoreCase))
+                {
+                    sel = CompatibleFormatSelector;
+                }
                 argv.Add("-f");
-                argv.Add(StripControlCharacters(item.ShihabYtDlpFormatSelector));
+                argv.Add(sel);
+                if (hasFfmpeg)
+                {
+                    argv.Add("--merge-output-format");
+                    argv.Add("mp4");
+                }
             }
             else
             {
@@ -775,13 +985,18 @@ namespace ShihabMehediIDM
                 argv.Add("mp4");
             }
 
+            if (item.ShihabEmbedChapters && hasFfmpeg && string.IsNullOrWhiteSpace(item.ShihabAudioOnlyExtractFormat))
+            {
+                argv.Add("--embed-chapters");
+            }
+
             if (!string.IsNullOrWhiteSpace(item.ShihabSubtitleLanguages))
             {
                 argv.Add("--write-subs");
                 argv.Add("--write-auto-subs");
                 argv.Add("--sub-langs");
                 argv.Add(StripControlCharacters(item.ShihabSubtitleLanguages));
-                if (item.ShihabEmbedSubtitles && File.Exists(ffmpegExe))
+                if (item.ShihabEmbedSubtitles && hasFfmpeg)
                 {
                     argv.Add("--embed-subs");
                 }
@@ -808,61 +1023,115 @@ namespace ShihabMehediIDM
             argv.Add("--");
             argv.Add(parsedTarget.AbsoluteUri);
 
+            item.ShihabStopLiveAndSaveRequested = false;
+            DateTime startedUtc = DateTime.UtcNow.AddSeconds(-2);
             string detectedOutFile = "";
-            string stdoutAll;
-            string stderrAll;
-            int exitCode = ShihabWindowsJobRunner.RunManagedSubprocess(
-                ytdlpExe,
-                ShihabProcessAndPathSafety.BuildWindowsArgumentString(argv.ToArray()),
-                saveDir,
-                0,
-                delegate(string line)
+            string stdoutAll = "";
+            string stderrAll = "";
+            int exitCode = -1;
+
+            using (CancellationTokenSource liveStopCts = CancellationTokenSource.CreateLinkedTokenSource(cancelToken))
+            using (Timer liveStopPoll = new Timer(delegate
+            {
+                if (item.ShihabStopLiveAndSaveRequested && !liveStopCts.IsCancellationRequested)
                 {
-                    if (string.IsNullOrWhiteSpace(line)) return;
-                    try
-                    {
-                        Match dm = YtDlpDestinationRegex.Match(line.Trim());
-                        if (dm.Success)
+                    try { liveStopCts.Cancel(); } catch { }
+                }
+            }, null, 250, 250))
+            {
+                try
+                {
+                    exitCode = ShihabWindowsJobRunner.RunManagedSubprocess(
+                        ytdlpExe,
+                        ShihabProcessAndPathSafety.BuildWindowsArgumentString(argv.ToArray()),
+                        saveDir,
+                        0,
+                        delegate(string line)
                         {
-                            string p = dm.Groups[1].Value.Trim().Trim('"');
-                            if (!string.IsNullOrEmpty(p))
+                            if (string.IsNullOrWhiteSpace(line)) return;
+                            try
                             {
-                                string candidateLeaf = Path.GetFileName(p);
-                                string resolved;
-                                if (!string.IsNullOrEmpty(candidateLeaf) &&
-                                    ShihabProcessAndPathSafety.ResolvePathStrictlyUnderRoot(saveDir, candidateLeaf, out resolved))
+                                if (line.IndexOf("[live]", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                    line.IndexOf("live stream", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                    line.IndexOf("hlsnative", StringComparison.OrdinalIgnoreCase) >= 0)
                                 {
-                                    detectedOutFile = resolved;
+                                    item.ShihabIsLiveStream = true;
+                                }
+                                Match dm = YtDlpDestinationRegex.Match(line.Trim());
+                                if (dm.Success)
+                                {
+                                    string p = dm.Groups[1].Value.Trim().Trim('"');
+                                    if (!string.IsNullOrEmpty(p))
+                                    {
+                                        string candidateLeaf = Path.GetFileName(p);
+                                        string resolved;
+                                        if (!string.IsNullOrEmpty(candidateLeaf) &&
+                                            ShihabProcessAndPathSafety.ResolvePathStrictlyUnderRoot(saveDir, candidateLeaf, out resolved))
+                                        {
+                                            detectedOutFile = resolved;
+                                        }
+                                    }
+                                }
+                                Match pm = YtDlpProgressRegex.Match(line);
+                                if (pm.Success)
+                                {
+                                    double pct = 0;
+                                    double totalNum = 0;
+                                    double spdNum = 0;
+                                    double.TryParse(pm.Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out pct);
+                                    double.TryParse(pm.Groups[2].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out totalNum);
+                                    long totalBytes = ParseUnitBytes(totalNum, pm.Groups[3].Value);
+                                    if (pm.Groups[4].Success && double.TryParse(pm.Groups[4].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out spdNum))
+                                    {
+                                        item.ShihabCurrentSpeedBps = ParseUnitBytes(spdNum, pm.Groups[5].Value);
+                                    }
+                                    if (totalBytes > 0)
+                                    {
+                                        item.ShihabTotalBytes = totalBytes;
+                                        item.MehediDownloadedBytes = (long)Math.Round(totalBytes * (pct / 100.0));
+                                    }
+                                    item.ShihabStatusText = item.ShihabIsLiveStream
+                                        ? string.Format("Recording Live ({0})", ShihabFormatHelpers.FormatMehediBytes(item.MehediDownloadedBytes))
+                                        : string.Format("Downloading ({0:0.0}%)", pct);
+                                    if (onProgressChanged != null) onProgressChanged();
                                 }
                             }
-                        }
-                        Match pm = YtDlpProgressRegex.Match(line);
-                        if (pm.Success)
-                        {
-                            double pct = 0;
-                            double totalNum = 0;
-                            double spdNum = 0;
-                            double.TryParse(pm.Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out pct);
-                            double.TryParse(pm.Groups[2].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out totalNum);
-                            long totalBytes = ParseUnitBytes(totalNum, pm.Groups[3].Value);
-                            if (pm.Groups[4].Success && double.TryParse(pm.Groups[4].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out spdNum))
-                            {
-                                item.ShihabCurrentSpeedBps = ParseUnitBytes(spdNum, pm.Groups[5].Value);
-                            }
-                            if (totalBytes > 0)
-                            {
-                                item.ShihabTotalBytes = totalBytes;
-                                item.MehediDownloadedBytes = (long)Math.Round(totalBytes * (pct / 100.0));
-                            }
-                            item.ShihabStatusText = string.Format("Downloading ({0:0.0}%)", pct);
-                            if (onProgressChanged != null) onProgressChanged();
-                        }
-                    }
-                    catch (RegexMatchTimeoutException) { }
-                },
-                cancelToken,
-                out stdoutAll,
-                out stderrAll);
+                            catch (RegexMatchTimeoutException) { }
+                        },
+                        liveStopCts.Token,
+                        out stdoutAll,
+                        out stderrAll);
+                }
+                catch (OperationCanceledException)
+                {
+                    if (!item.ShihabStopLiveAndSaveRequested) throw;
+                }
+            }
+
+            if (item.ShihabStopLiveAndSaveRequested)
+            {
+                string recordedPart = FindNewestRecordedMediaFile(saveDir, detectedOutFile, startedUtc);
+                if (string.IsNullOrEmpty(recordedPart) || !File.Exists(recordedPart))
+                {
+                    errorMessage = "Stopped live recording, but no recorded segment file was found to save.";
+                    return false;
+                }
+                string savedMp4Path;
+                if (hasFfmpeg && TryRemuxRecordingToMp4(ffmpegExe, recordedPart, saveDir, out savedMp4Path))
+                {
+                    finalFilePath = savedMp4Path;
+                    try { if (!string.Equals(recordedPart, savedMp4Path, StringComparison.OrdinalIgnoreCase) && File.Exists(recordedPart)) File.Delete(recordedPart); } catch { }
+                }
+                else
+                {
+                    finalFilePath = recordedPart;
+                }
+                FileInfo recFin = new FileInfo(finalFilePath);
+                item.ShihabFileName = recFin.Name;
+                item.ShihabTotalBytes = recFin.Length;
+                item.MehediDownloadedBytes = recFin.Length;
+                return true;
+            }
 
             cancelToken.ThrowIfCancellationRequested();
             if (exitCode != 0)
@@ -899,6 +1168,69 @@ namespace ShihabMehediIDM
                 return true;
             }
             return true;
+        }
+
+        private static string FindNewestRecordedMediaFile(string saveDir, string detectedOutFile, DateTime sinceUtc)
+        {
+            if (!string.IsNullOrEmpty(detectedOutFile))
+            {
+                if (File.Exists(detectedOutFile)) return detectedOutFile;
+                if (File.Exists(detectedOutFile + ".part")) return detectedOutFile + ".part";
+            }
+            string best = "";
+            DateTime newest = sinceUtc;
+            try
+            {
+                string[] files = Directory.GetFiles(saveDir);
+                for (int i = 0; i < files.Length; i++)
+                {
+                    FileInfo fi = new FileInfo(files[i]);
+                    if (fi.Length > 0 && fi.LastWriteTimeUtc >= newest)
+                    {
+                        newest = fi.LastWriteTimeUtc;
+                        best = fi.FullName;
+                    }
+                }
+            }
+            catch { }
+            return best;
+        }
+
+        private static bool TryRemuxRecordingToMp4(string ffmpegExe, string inputPath, string saveDir, out string outMp4Path)
+        {
+            outMp4Path = "";
+            try
+            {
+                string leaf = Path.GetFileName(inputPath);
+                if (leaf.EndsWith(".part", StringComparison.OrdinalIgnoreCase))
+                {
+                    leaf = leaf.Substring(0, leaf.Length - 5);
+                }
+                string stem = Path.GetFileNameWithoutExtension(leaf);
+                if (string.IsNullOrWhiteSpace(stem)) stem = "live_recording";
+                string uniqueLeaf = ShihabFormatHelpers.EnsureShihabUniqueFilePath(saveDir, stem + ".mp4");
+                string targetMp4;
+                if (!ShihabProcessAndPathSafety.ResolvePathStrictlyUnderRoot(saveDir, uniqueLeaf, out targetMp4))
+                {
+                    return false;
+                }
+                string args = ShihabProcessAndPathSafety.BuildWindowsArgumentString(
+                    "-y",
+                    "-i", inputPath,
+                    "-c", "copy",
+                    "-movflags", "+faststart",
+                    targetMp4);
+                string so, se;
+                int code = ShihabWindowsJobRunner.RunManagedSubprocess(ffmpegExe, args, saveDir, 60000, null, CancellationToken.None, out so, out se);
+                if (code == 0 && File.Exists(targetMp4) && new FileInfo(targetMp4).Length > 0)
+                {
+                    outMp4Path = targetMp4;
+                    return true;
+                }
+                try { if (File.Exists(targetMp4)) File.Delete(targetMp4); } catch { }
+            }
+            catch { }
+            return false;
         }
 
         public static bool ExecuteGalleryDlJob(
@@ -996,7 +1328,7 @@ namespace ShihabMehediIDM
 
             // Fallback to built-in gallery extractor when gallery-dl.exe is not installed
             string gTitle;
-            List<string> urls = ExtractGalleryImageUrls(parsedTarget.AbsoluteUri, baseDataDir, out gTitle);
+            List<string> urls = ExtractGalleryImageUrls(parsedTarget.AbsoluteUri, baseDataDir, out gTitle, cfg);
             if (urls.Count == 0)
             {
                 errorMessage = "No gallery media URLs found (install gallery-dl helper for site-specific extractors).";
@@ -1054,7 +1386,7 @@ namespace ShihabMehediIDM
             return (long)val;
         }
 
-        public static List<string> ExtractGalleryImageUrls(string pageUrl, string baseDataDir, out string galleryTitle)
+        public static List<string> ExtractGalleryImageUrls(string pageUrl, string baseDataDir, out string galleryTitle, MehediAppConfiguration cfg = null)
         {
             galleryTitle = "Image_Gallery";
             List<string> results = new List<string>();
@@ -1064,18 +1396,26 @@ namespace ShihabMehediIDM
                 return results;
             }
 
+            MehediAppConfiguration effectiveCfg = cfg ?? ShihabLocalNetworkRelay.ActiveConfig;
             string gdlExe = GetToolExecutablePath(baseDataDir, "gallery-dl");
             if (File.Exists(gdlExe))
             {
                 try
                 {
                     string stdoutAll, stderrAll;
-                    string argStr = ShihabProcessAndPathSafety.BuildWindowsArgumentString(
-                        "--no-warnings",
-                        "--ignore-config",
-                        "--get-urls",
-                        "--",
-                        baseUri.AbsoluteUri);
+                    List<string> gArgs = new List<string>();
+                    gArgs.Add("--no-warnings");
+                    gArgs.Add("--ignore-config");
+                    string pUrl = StripControlCharacters(ShihabLocalNetworkRelay.GetSubprocessProxyUrl(effectiveCfg));
+                    if (!string.IsNullOrEmpty(pUrl))
+                    {
+                        gArgs.Add("--proxy");
+                        gArgs.Add(pUrl);
+                    }
+                    gArgs.Add("--get-urls");
+                    gArgs.Add("--");
+                    gArgs.Add(baseUri.AbsoluteUri);
+                    string argStr = ShihabProcessAndPathSafety.BuildWindowsArgumentString(gArgs.ToArray());
                     int code = ShihabWindowsJobRunner.RunManagedSubprocess(
                         gdlExe,
                         argStr,
@@ -1111,8 +1451,8 @@ namespace ShihabMehediIDM
                     false,
                     true,
                     12000,
-                    null,
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36",
+                    effectiveCfg,
+                    effectiveCfg != null ? effectiveCfg.GetEffectiveDefaultUserAgent() : "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36",
                     null))
                 using (Stream s = resp.GetResponseStream())
                 {

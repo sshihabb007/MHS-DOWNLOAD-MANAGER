@@ -22,7 +22,89 @@ document.addEventListener("DOMContentLoaded", async () => {
   const shihabUpdateBanner = document.getElementById("shihabUpdateBanner");
   const shihabUpdateBannerText = document.getElementById("shihabUpdateBannerText");
   const shihabUpdateBannerBtn = document.getElementById("shihabUpdateBannerBtn");
+  const shihabServerSelect = document.getElementById("shihabServerSelect");
+  const shihabUnpairBtn = document.getElementById("shihabUnpairServerBtn");
+  const shihabTogglePairBtn = document.getElementById("shihabTogglePairBtn");
+  const shihabPairBox = document.getElementById("shihabPairRemoteBox");
+  const shihabRemoteUrlInp = document.getElementById("shihabRemoteUrlInput");
+  const shihabRemoteCodeInp = document.getElementById("shihabRemoteCodeInput");
+  const shihabPairSubmitBtn = document.getElementById("shihabPairSubmitBtn");
+  const shihabPairStatusMsg = document.getElementById("shihabPairStatusMsg");
+  const shihabHideFullscreenChk = document.getElementById("shihabHideFullscreenChk");
   let mehediLatestReleaseUrl = "";
+
+  if (shihabHideFullscreenChk) {
+    chrome.storage.local.get(["shihabHideVideoInFullscreen"], (st) => {
+      shihabHideFullscreenChk.checked = Boolean(st && st.shihabHideVideoInFullscreen);
+    });
+    shihabHideFullscreenChk.addEventListener("change", () => {
+      chrome.storage.local.set({ shihabHideVideoInFullscreen: Boolean(shihabHideFullscreenChk.checked) }).catch(() => {});
+    });
+  }
+
+  async function mehediRefreshServersDropdown() {
+    if (!shihabServerSelect) return;
+    try {
+      const srvState = await chrome.runtime.sendMessage({ shihabCmd: "shihab_get_servers_state" });
+      if (!srvState || !srvState.ok) return;
+      shihabServerSelect.textContent = "";
+      const localOpt = document.createElement("option");
+      localOpt.value = "local";
+      localOpt.textContent = "This computer (127.0.0.1)";
+      shihabServerSelect.appendChild(localOpt);
+      for (const s of (srvState.servers || [])) {
+        const opt = document.createElement("option");
+        opt.value = s.id;
+        opt.textContent = `${s.name} (${s.baseUrl})`;
+        shihabServerSelect.appendChild(opt);
+      }
+      shihabServerSelect.value = srvState.activeServerId || "local";
+      if (shihabUnpairBtn) {
+        shihabUnpairBtn.style.display = shihabServerSelect.value !== "local" ? "inline-block" : "none";
+      }
+    } catch (_) {}
+  }
+
+  if (shihabServerSelect) {
+    shihabServerSelect.addEventListener("change", async () => {
+      const chosen = shihabServerSelect.value || "local";
+      await chrome.runtime.sendMessage({ shihabCmd: "shihab_set_active_server", serverId: chosen });
+      if (shihabUnpairBtn) shihabUnpairBtn.style.display = chosen !== "local" ? "inline-block" : "none";
+    });
+  }
+  if (shihabUnpairBtn) {
+    shihabUnpairBtn.addEventListener("click", async () => {
+      const chosen = shihabServerSelect ? shihabServerSelect.value : "local";
+      if (chosen && chosen !== "local") {
+        await chrome.runtime.sendMessage({ shihabCmd: "shihab_unpair_remote_server", serverId: chosen });
+        await mehediRefreshServersDropdown();
+      }
+    });
+  }
+  if (shihabTogglePairBtn && shihabPairBox) {
+    shihabTogglePairBtn.addEventListener("click", () => {
+      shihabPairBox.style.display = shihabPairBox.style.display === "none" ? "flex" : "none";
+    });
+  }
+  if (shihabPairSubmitBtn) {
+    shihabPairSubmitBtn.addEventListener("click", async () => {
+      if (shihabPairStatusMsg) shihabPairStatusMsg.textContent = "Pairing...";
+      const res = await chrome.runtime.sendMessage({
+        shihabCmd: "shihab_pair_remote_server",
+        baseUrl: shihabRemoteUrlInp ? shihabRemoteUrlInp.value : "",
+        code: shihabRemoteCodeInp ? shihabRemoteCodeInp.value : ""
+      });
+      if (res && res.ok) {
+        if (shihabPairStatusMsg) shihabPairStatusMsg.textContent = "Paired & selected!";
+        if (shihabRemoteCodeInp) shihabRemoteCodeInp.value = "";
+        await mehediRefreshServersDropdown();
+        setTimeout(() => { if (shihabPairBox) shihabPairBox.style.display = "none"; }, 900);
+      } else if (shihabPairStatusMsg) {
+        shihabPairStatusMsg.textContent = (res && res.error) || "Pairing failed.";
+      }
+    });
+  }
+  mehediRefreshServersDropdown();
 
   const shihabTabs = await chrome.tabs.query({ active: true, currentWindow: true });
   const mehediActiveTab = shihabTabs && shihabTabs[0] ? shihabTabs[0] : null;
@@ -93,12 +175,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     if (!shihabRes || !shihabRes.mehediOnline) {
       shihabDot.classList.remove("online");
-      mehediSub.textContent = "Offline — Launch mdm.exe v1.0.7";
+      mehediSub.textContent = "Offline — Launch mdm.exe v1.1.0";
       shihabToggleBtn.textContent = "Offline";
       return;
     }
 
-    const mehediBridgeVer = (shihabRes.shihabBridgeInfo && shihabRes.shihabBridgeInfo.version) || "1.0.7";
+    const mehediBridgeVer = (shihabRes.shihabBridgeInfo && shihabRes.shihabBridgeInfo.version) || "1.1.0";
     shihabDot.classList.add("online");
     mehediSub.textContent = shihabRes.shihabEnabled
       ? `Connected · mdm.exe v${mehediBridgeVer}`

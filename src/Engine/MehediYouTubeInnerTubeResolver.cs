@@ -163,6 +163,7 @@ namespace ShihabMehediIDM
                     shihabVisReq.AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate;
                     shihabVisReq.UserAgent = ChromeDesktopUserAgent;
                     shihabVisReq.Headers["Accept-Language"] = "en-US,en;q=0.9";
+                    ShihabDnsAndNetworkManager.ApplyNetworkBindingAndProxy(shihabVisReq, ShihabLocalNetworkRelay.ActiveConfig, validatedUri.AbsoluteUri);
 
                     using (HttpWebResponse mehediVisResp = (HttpWebResponse)shihabVisReq.GetResponse())
                     using (Stream shihabVisStream = mehediVisResp.GetResponseStream())
@@ -352,6 +353,7 @@ namespace ShihabMehediIDM
                 shihabReq.AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate;
                 shihabReq.UserAgent = ChromeDesktopUserAgent;
                 shihabReq.Headers["Accept-Language"] = "en-US,en;q=0.9";
+                ShihabDnsAndNetworkManager.ApplyNetworkBindingAndProxy(shihabReq, ShihabLocalNetworkRelay.ActiveConfig, validatedUri.AbsoluteUri);
 
                 using (HttpWebResponse mehediResp = (HttpWebResponse)shihabReq.GetResponse())
                 using (Stream shihabStream = mehediResp.GetResponseStream())
@@ -627,6 +629,7 @@ namespace ShihabMehediIDM
                 shihabHttp.Accept = "application/json";
                 shihabHttp.UserAgent = shihabUa;
                 shihabHttp.AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate;
+                ShihabDnsAndNetworkManager.ApplyNetworkBindingAndProxy(shihabHttp, ShihabLocalNetworkRelay.ActiveConfig, "https://www.youtube.com/youtubei/v1/player?prettyPrint=false");
                 shihabHttp.Headers["X-YouTube-Client-Name"] = shihabClientNameHeader;
                 shihabHttp.Headers["X-YouTube-Client-Version"] = mehediClientVer;
                 shihabHttp.Headers["X-Goog-Api-Format-Version"] = "2";

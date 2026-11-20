@@ -32,7 +32,7 @@ namespace ShihabMehediIDM
             bool isRtl = ShihabThemeManager.IsRightToLeftLanguage(_mehediConfig.ShihabLanguageCode);
             RightToLeft = isRtl ? RightToLeft.Yes : RightToLeft.No;
 
-            int uiScale = _mehediConfig.ShihabUiScalePercent > 0 ? Math.Max(80, Math.Min(150, _mehediConfig.ShihabUiScalePercent)) : 100;
+            int uiScale = _mehediConfig.ShihabUiScalePercent > 0 ? Math.Max(80, Math.Min(200, _mehediConfig.ShihabUiScalePercent)) : 100;
             float scaledFontPt = 9.0f * (uiScale / 100.0f);
             if (_scaledUiFont == null || Math.Abs(_scaledUiFont.Size - scaledFontPt) > 0.15f)
             {
@@ -217,6 +217,18 @@ namespace ShihabMehediIDM
 
         private void OnShihabMainFormFirstShown()
         {
+            if (string.Equals(_mehediConfig.ShihabCompleteDialogSnoozeUntilUtc, "RESTART", StringComparison.OrdinalIgnoreCase))
+            {
+                _mehediConfig.ShihabCompleteDialogSnoozeUntilUtc = "";
+                _shihabStore.SaveMehediConfig(_mehediConfig);
+            }
+
+            if (_shihabStartupCli != null && _shihabStartupCli.ShihabFromHostStealth)
+            {
+                Hide();
+                ShowInTaskbar = false;
+            }
+
             if (_mehediConfig.MehediShowFloatingDropTarget)
             {
                 ToggleMehediFloatingDropTarget();
@@ -738,14 +750,16 @@ namespace ShihabMehediIDM
             {
                 if (!Clipboard.ContainsText()) return;
                 string mehediText = Clipboard.GetText().Trim();
-                if (string.IsNullOrEmpty(mehediText) || mehediText == _shihabLastClipboardText || mehediText.Length > 2048 ||
+                int maxClipLen = mehediText.StartsWith("magnet:?", StringComparison.OrdinalIgnoreCase) ? 16384 : 2048;
+                if (string.IsNullOrEmpty(mehediText) || mehediText == _shihabLastClipboardText || mehediText.Length > maxClipLen ||
                     ShihabProcessAndPathSafety.ContainsControlOrNewline(mehediText))
                 {
                     return;
                 }
                 _shihabLastClipboardText = mehediText;
 
-                if (mehediText.StartsWith("magnet:?xt=urn:btih:", StringComparison.OrdinalIgnoreCase))
+                if (mehediText.StartsWith("magnet:?", StringComparison.OrdinalIgnoreCase) &&
+                    mehediText.IndexOf("xt=urn:btih:", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
                     OpenShihabTorrentDialog(mehediText);
                     return;
@@ -784,6 +798,8 @@ namespace ShihabMehediIDM
             }
             string t = url.Trim();
             if (t.StartsWith("magnet:?", StringComparison.OrdinalIgnoreCase)) return true;
+            string localTor;
+            if (ShihabProcessAndPathSafety.TryValidateLocalTorrentFilePath(t, out localTor)) return true;
             Uri u;
             if (!Uri.TryCreate(t, UriKind.Absolute, out u)) return false;
             return string.Equals(u.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) ||
@@ -909,11 +925,15 @@ namespace ShihabMehediIDM
                 {
                     shihabNewItem.ShihabAudioExtractFormat = "mp3";
                 }
-                if (shihabTrimmedUrl.StartsWith("magnet:?", StringComparison.OrdinalIgnoreCase) ||
-                    shihabTrimmedUrl.EndsWith(".torrent", StringComparison.OrdinalIgnoreCase))
+                if (ShihabTorrentManager.IsMagnetOrTorrentInput(shihabTrimmedUrl))
                 {
                     shihabNewItem.ShihabIsTorrent = true;
                     shihabNewItem.ShihabTorrentMagnetOrPath = shihabTrimmedUrl;
+                    if (!mehediDto.ShihabSilentMode && !mehediDto.MehediAddToQueueOnly && _mehediConfig.ShihabShowStartDownloadDialog)
+                    {
+                        OpenShihabTorrentDialog(shihabTrimmedUrl);
+                        return;
+                    }
                 }
                 if (!string.IsNullOrWhiteSpace(mehediDto.MehediUserAgent))
                 {
@@ -1025,7 +1045,8 @@ namespace ShihabMehediIDM
                                 shihabBatch.ShihabCookies ?? "",
                                 shihabBatch.MehediUserAgent ?? "",
                                 mehediLink.MehediText ?? "",
-                                mehediDlg.MehediStartNow);
+                                mehediDlg.MehediStartNow,
+                                mehediDlg.ShihabOverrideSaveFolder);
                         }
                     }
                 }
@@ -1057,14 +1078,119 @@ namespace ShihabMehediIDM
                     ExitShihabApplicationCleanly();
                     return;
                 }
-                if (mehediItem.ShihabShowCompleteDialog && _mehediConfig.ShihabShowDownloadCompleteDialog)
+                if (mehediItem.ShihabShowCompleteDialog && _mehediConfig.ShihabShowDownloadCompleteDialog && !IsCompleteDialogCurrentlySnoozed())
                 {
-                    MehediDownloadCompleteForm shihabDoneForm = new MehediDownloadCompleteForm(mehediItem, _mehediConfig);
-                    IWin32Window mehediOwner = GetShihabDialogOwnerOrNull();
-                    if (mehediOwner != null) shihabDoneForm.Show(mehediOwner);
-                    else shihabDoneForm.Show();
+                    _recentCompletedBatch.Add(mehediItem);
+                    if (_completeCoalesceTimer == null)
+                    {
+                        _completeCoalesceTimer = new System.Windows.Forms.Timer { Interval = 600 };
+                        _completeCoalesceTimer.Tick += delegate
+                        {
+                            _completeCoalesceTimer.Stop();
+                            FlushCoalescedCompletedDialogs();
+                        };
+                    }
+                    _completeCoalesceTimer.Stop();
+                    _completeCoalesceTimer.Start();
                 }
             });
+        }
+
+        private bool IsCompleteDialogCurrentlySnoozed()
+        {
+            string raw = (_mehediConfig != null ? _mehediConfig.ShihabCompleteDialogSnoozeUntilUtc : "") ?? "";
+            raw = raw.Trim();
+            if (raw.Length == 0) return false;
+            if (string.Equals(raw, "RESTART", StringComparison.OrdinalIgnoreCase)) return true;
+            DateTime untilUtc;
+            if (DateTime.TryParse(
+                raw,
+                System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal,
+                out untilUtc))
+            {
+                if (untilUtc > DateTime.UtcNow) return true;
+            }
+            _mehediConfig.ShihabCompleteDialogSnoozeUntilUtc = "";
+            return false;
+        }
+
+        private void FlushCoalescedCompletedDialogs()
+        {
+            if (IsDisposed || _recentCompletedBatch.Count == 0) return;
+            List<ShihabDownloadItem> batch = new List<ShihabDownloadItem>(_recentCompletedBatch);
+            _recentCompletedBatch.Clear();
+            if (IsCompleteDialogCurrentlySnoozed() || !_mehediConfig.ShihabShowDownloadCompleteDialog) return;
+
+            IWin32Window mehediOwner = GetShihabDialogOwnerOrNull();
+            if (batch.Count == 1)
+            {
+                MehediDownloadCompleteForm shihabDoneForm = new MehediDownloadCompleteForm(
+                    batch[0],
+                    _mehediConfig,
+                    delegate { _shihabStore.SaveMehediConfig(_mehediConfig); });
+                if (mehediOwner != null) shihabDoneForm.Show(mehediOwner);
+                else shihabDoneForm.Show();
+                return;
+            }
+
+            long totalBatchBytes = 0;
+            for (int i = 0; i < batch.Count; i++)
+            {
+                totalBatchBytes += Math.Max(0L, batch[i].MehediDownloadedBytes);
+            }
+            bool dark = _mehediConfig.ShihabDarkMode;
+            Form batchDlg = new Form
+            {
+                Text = string.Format("Downloads Complete ({0} files) — MHS Download Manager", batch.Count),
+                ClientSize = new Size(490, 260),
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                MaximizeBox = false,
+                MinimizeBox = false,
+                StartPosition = FormStartPosition.CenterScreen,
+                BackColor = ShihabThemePalette.GetMehediWindowBg(dark),
+                ForeColor = ShihabThemePalette.GetShihabPrimaryText(dark),
+                Font = ShihabThemePalette.UiRegular9Font,
+                Icon = ShihabThemePalette.CreateShihabAppIcon()
+            };
+            ShihabThemePalette.ApplyMehediNativeDarkFrame(batchDlg, dark);
+
+            Label header = new Label
+            {
+                Text = string.Format("{0} downloads completed ({1})", batch.Count, ShihabFormatHelpers.FormatMehediBytes(totalBatchBytes)),
+                Location = new Point(16, 14),
+                AutoSize = true,
+                Font = ShihabThemePalette.UiSemibold92Font,
+                ForeColor = ShihabThemePalette.GetMehediAccentGreen()
+            };
+            ListBox filesList = new ListBox
+            {
+                Location = new Point(16, 44),
+                Size = new Size(458, 152),
+                BackColor = ShihabThemePalette.GetShihabSurfaceBg(dark),
+                ForeColor = batchDlg.ForeColor,
+                BorderStyle = BorderStyle.FixedSingle
+            };
+            for (int i = 0; i < batch.Count; i++)
+            {
+                filesList.Items.Add(string.Format("{0}  ({1})", batch[i].ShihabFileName, ShihabFormatHelpers.FormatMehediBytes(batch[i].MehediDownloadedBytes)));
+            }
+            string openDir = batch[0].MehediSaveDirectory;
+            Button openFolderBtn = ShihabThemePalette.CreateMehediStyledButton("Open Folder", ShihabThemePalette.GetShihabAccentBlue(), Color.White, 124);
+            openFolderBtn.Location = new Point(222, 210);
+            openFolderBtn.Click += delegate
+            {
+                ShihabThemePalette.SafeOpenContainingFolderOrFile(batch[0].GetShihabFullTargetPath(), openDir);
+                batchDlg.Close();
+            };
+            Button closeBtn = ShihabThemePalette.CreateMehediStyledButton("Close", ShihabThemePalette.GetShihabSurfaceBg(dark), batchDlg.ForeColor, 118);
+            closeBtn.Location = new Point(356, 210);
+            closeBtn.Click += delegate { batchDlg.Close(); };
+
+            batchDlg.Controls.AddRange(new Control[] { header, filesList, openFolderBtn, closeBtn });
+            batchDlg.CancelButton = closeBtn;
+            if (mehediOwner != null) batchDlg.Show(mehediOwner);
+            else batchDlg.Show();
         }
 
         private void HandleMehediItemFailed(ShihabDownloadItem shihabFailedItem)
@@ -1138,6 +1264,8 @@ namespace ShihabMehediIDM
             }
             catch { }
 
+            try { UnregisterConfiguredGlobalHotkey(); } catch { }
+            try { if (_completeCoalesceTimer != null) { _completeCoalesceTimer.Stop(); _completeCoalesceTimer.Dispose(); _completeCoalesceTimer = null; } } catch { }
             try { if (_refreshDebounceTimer != null) { _refreshDebounceTimer.Stop(); _refreshDebounceTimer.Dispose(); _refreshDebounceTimer = null; } } catch { }
             try { if (_mehediUiTickTimer != null) { _mehediUiTickTimer.Stop(); _mehediUiTickTimer.Dispose(); _mehediUiTickTimer = null; } } catch { }
             try { if (_shihabPeriodicUpdateTimer != null) { _shihabPeriodicUpdateTimer.Stop(); _shihabPeriodicUpdateTimer.Dispose(); _shihabPeriodicUpdateTimer = null; } } catch { }
@@ -1147,6 +1275,7 @@ namespace ShihabMehediIDM
             try { _shihabStore.SaveMehediConfig(_mehediConfig); } catch { }
             try { _mehediBridge.Dispose(); } catch { }
             try { if (_shihabRemoteServer != null) _shihabRemoteServer.Dispose(); } catch { }
+            try { if (_shihabClickNLoadServer != null) _shihabClickNLoadServer.Dispose(); } catch { }
             try { ShihabLocalNetworkRelay.Stop(); } catch { }
             try
             {

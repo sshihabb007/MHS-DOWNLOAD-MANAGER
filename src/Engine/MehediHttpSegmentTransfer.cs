@@ -215,6 +215,7 @@ namespace ShihabMehediIDM
                 long workerBytesSinceSpeedTick = 0;
                 int mehediTransientRetries = 0;
                 bool overlapVerifiedForThisRun = false;
+                bool overlapAutoRestartedOnce = false;
 
                 while (!mehediToken.IsCancellationRequested)
                 {
@@ -285,6 +286,7 @@ namespace ShihabMehediIDM
 
                     try
                     {
+                        bool needCleanOverlapRestart = false;
                         HttpWebRequest shihabReq;
                         using (HttpWebResponse mehediResp = GetResponseWithSafeRedirects(
                             targetUrl,
@@ -292,12 +294,12 @@ namespace ShihabMehediIDM
                             shihabItem,
                             shihabReqStart,
                             mehediReqEnd,
-                            shihabReqStart > 0 ? ifRangeVal : null,
+                            shihabSubStart > 0 ? ifRangeVal : null,
                             mehediToken,
                             out shihabReq))
                         using (Stream shihabNetStream = mehediResp.GetResponseStream())
                         {
-                            if (shihabReqStart > 0 && mehediResp.StatusCode != HttpStatusCode.PartialContent)
+                            if (shihabSubStart > 0 && mehediResp.StatusCode != HttpStatusCode.PartialContent)
                             {
                                 int segCount;
                                 lock (shihabSegmentLock)
@@ -334,106 +336,153 @@ namespace ShihabMehediIDM
                                 {
                                     throw new IOException("Resume overlap verification failed: server closed stream before sending overlap bytes.");
                                 }
+                                bool overlapMismatch = false;
                                 for (int ov = 0; ov < overlapBytesToVerify; ov++)
                                 {
                                     if (wireOverlap[ov] != expectedOverlapBytes[ov])
                                     {
+                                        overlapMismatch = true;
+                                        break;
+                                    }
+                                }
+                                if (overlapMismatch)
+                                {
+                                    int segCount;
+                                    lock (shihabSegmentLock)
+                                    {
+                                        segCount = shihabItem.MehediSegments != null ? shihabItem.MehediSegments.Count : 0;
+                                    }
+                                    if (!overlapAutoRestartedOnce && mehediChunk.MehediStartByte == 0 && segCount == 1)
+                                    {
+                                        overlapAutoRestartedOnce = true;
+                                        overlapVerifiedForThisRun = true;
+                                        lock (shihabSegmentLock)
+                                        {
+                                            mehediChunk.MehediDownloadedBytes = 0;
+                                            mehediChunk.ShihabSegmentState = "File changed on server — restarting cleanly...";
+                                        }
+                                        EmitShihabLog("[Resume] Remote bytes changed at overlap boundary for " + shihabItem.ShihabFileName + "; restarting cleanly from byte 0.");
+                                        needCleanOverlapRestart = true;
+                                    }
+                                    else
+                                    {
                                         throw new IOException("Resume overlap verification failed: remote file bytes changed on server.");
                                     }
                                 }
-                                overlapVerifiedForThisRun = true;
-                            }
-
-                            if (!shihabItem.ShihabResumeSupported && shihabItem.ShihabTotalBytes <= 0 && mehediResp.ContentLength > 0)
-                            {
-                                shihabItem.ShihabTotalBytes = mehediResp.ContentLength;
-                            }
-
-                            if (shihabPartFs == null)
-                            {
-                                EnsureSparseSharedPartFile(sharedSparsePartPath, shihabItem.ShihabTotalBytes);
-                                shihabPartFs = new FileStream(sharedSparsePartPath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.ReadWrite, SegmentStreamBufferBytes);
-                            }
-                            shihabPartFs.Seek(shihabSubStart, SeekOrigin.Begin);
-
-                            lock (shihabSegmentLock)
-                            {
-                                mehediChunk.ShihabSegmentState = "Receiving data...";
-                            }
-
-                            while (!mehediToken.IsCancellationRequested)
-                            {
-                                int mehediRead = shihabNetStream.Read(mehediBuf, 0, mehediBuf.Length);
-                                if (mehediRead <= 0)
+                                else
                                 {
-                                    break;
+                                    overlapVerifiedForThisRun = true;
+                                }
+                            }
+
+                            if (!needCleanOverlapRestart)
+                            {
+                                if (!shihabItem.ShihabResumeSupported && shihabItem.ShihabTotalBytes <= 0 && mehediResp.ContentLength > 0)
+                                {
+                                    shihabItem.ShihabTotalBytes = mehediResp.ContentLength;
                                 }
 
-                                if (telemetry != null)
+                                if (shihabPartFs == null)
                                 {
-                                    telemetry.FirstByteReceived = true;
+                                    EnsureSparseSharedPartFile(sharedSparsePartPath, shihabItem.ShihabTotalBytes);
+                                    shihabPartFs = new FileStream(sharedSparsePartPath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.ReadWrite, SegmentStreamBufferBytes);
                                 }
+                                shihabPartFs.Seek(shihabSubStart, SeekOrigin.Begin);
 
-                                mehediSubSliceReadTotal += mehediRead;
-                                int shihabToWrite = mehediRead;
                                 lock (shihabSegmentLock)
                                 {
-                                    if (mehediChunk.ShihabEndByte >= 0)
-                                    {
-                                        long shihabAllowed = (mehediChunk.ShihabEndByte - mehediChunk.MehediStartByte + 1L) - mehediChunk.MehediDownloadedBytes;
-                                        if (shihabAllowed <= 0)
-                                        {
-                                            shihabToWrite = 0;
-                                            shihabReachedDynamicBoundary = true;
-                                        }
-                                        else if (shihabToWrite > shihabAllowed)
-                                        {
-                                            shihabToWrite = (int)shihabAllowed;
-                                            shihabReachedDynamicBoundary = true;
-                                        }
-                                    }
+                                    mehediChunk.ShihabSegmentState = "Receiving data...";
                                 }
 
-                                if (shihabToWrite > 0)
+                                bool checkHtmlOnFirstChunk = (mehediChunk.MehediStartByte == 0 && shihabSubStart == 0);
+                                while (!mehediToken.IsCancellationRequested)
                                 {
-                                    // Commit bytes to disk BEFORE advancing downloaded progress counter
-                                    shihabPartFs.Write(mehediBuf, 0, shihabToWrite);
-                                    lock (shihabSegmentLock)
+                                    int mehediRead = shihabNetStream.Read(mehediBuf, 0, mehediBuf.Length);
+                                    if (mehediRead <= 0)
                                     {
-                                        mehediChunk.MehediDownloadedBytes += shihabToWrite;
+                                        break;
                                     }
-                                    _mehediConfig.RecordQuotaBytes(shihabToWrite);
+                                    if (checkHtmlOnFirstChunk)
+                                    {
+                                        checkHtmlOnFirstChunk = false;
+                                        long respLenForCheck = mehediResp.ContentLength > 0 ? mehediResp.ContentLength : shihabItem.ShihabTotalBytes;
+                                        if (IsUnexpectedHtmlErrorPayload(shihabItem.ShihabFileName, mehediResp.ContentType, respLenForCheck, mehediBuf, mehediRead))
+                                        {
+                                            throw new IOException("Server returned an HTML error or login page instead of the requested file (" + shihabItem.ShihabFileName + ").");
+                                        }
+                                    }
 
                                     if (telemetry != null)
                                     {
-                                        workerBytesSinceSpeedTick += shihabToWrite;
-                                        long wNowMs = shihabItemThrottleWatch.ElapsedMilliseconds;
-                                        long wDelta = wNowMs - workerLastSpeedMs;
-                                        if (wDelta >= 250L)
+                                        telemetry.FirstByteReceived = true;
+                                    }
+
+                                    mehediSubSliceReadTotal += mehediRead;
+                                    int shihabToWrite = mehediRead;
+                                    lock (shihabSegmentLock)
+                                    {
+                                        if (mehediChunk.ShihabEndByte >= 0)
                                         {
-                                            double inst = (workerBytesSinceSpeedTick * 1000.0) / Math.Max(1.0, (double)wDelta);
-                                            telemetry.SmoothedBps = telemetry.SmoothedBps <= 1.0
-                                                ? inst
-                                                : (telemetry.SmoothedBps * 0.6) + (inst * 0.4);
-                                            workerBytesSinceSpeedTick = 0;
-                                            workerLastSpeedMs = wNowMs;
+                                            long shihabAllowed = (mehediChunk.ShihabEndByte - mehediChunk.MehediStartByte + 1L) - mehediChunk.MehediDownloadedBytes;
+                                            if (shihabAllowed <= 0)
+                                            {
+                                                shihabToWrite = 0;
+                                                shihabReachedDynamicBoundary = true;
+                                            }
+                                            else if (shihabToWrite > shihabAllowed)
+                                            {
+                                                shihabToWrite = (int)shihabAllowed;
+                                                shihabReachedDynamicBoundary = true;
+                                            }
                                         }
                                     }
 
-                                    ApplyMehediSpeedLimiter(
-                                        shihabItem,
-                                        shihabToWrite,
-                                        shihabItemThrottleWatch,
-                                        ref mehediItemWindowStartMs,
-                                        ref shihabItemWindowBytes,
-                                        mehediToken);
-                                }
+                                    if (shihabToWrite > 0)
+                                    {
+                                        // Commit bytes to disk BEFORE advancing downloaded progress counter
+                                        shihabPartFs.Write(mehediBuf, 0, shihabToWrite);
+                                        lock (shihabSegmentLock)
+                                        {
+                                            mehediChunk.MehediDownloadedBytes += shihabToWrite;
+                                        }
+                                        _mehediConfig.RecordQuotaBytes(shihabToWrite);
 
-                                if (shihabReachedDynamicBoundary)
-                                {
-                                    break;
+                                        if (telemetry != null)
+                                        {
+                                            workerBytesSinceSpeedTick += shihabToWrite;
+                                            long wNowMs = shihabItemThrottleWatch.ElapsedMilliseconds;
+                                            long wDelta = wNowMs - workerLastSpeedMs;
+                                            if (wDelta >= 250L)
+                                            {
+                                                double inst = (workerBytesSinceSpeedTick * 1000.0) / Math.Max(1.0, (double)wDelta);
+                                                telemetry.SmoothedBps = telemetry.SmoothedBps <= 1.0
+                                                    ? inst
+                                                    : (telemetry.SmoothedBps * 0.6) + (inst * 0.4);
+                                                workerBytesSinceSpeedTick = 0;
+                                                workerLastSpeedMs = wNowMs;
+                                            }
+                                        }
+
+                                        ApplyMehediSpeedLimiter(
+                                            shihabItem,
+                                            shihabToWrite,
+                                            shihabItemThrottleWatch,
+                                            ref mehediItemWindowStartMs,
+                                            ref shihabItemWindowBytes,
+                                            mehediToken);
+                                    }
+
+                                    if (shihabReachedDynamicBoundary)
+                                    {
+                                        break;
+                                    }
                                 }
                             }
+                        }
+
+                        if (needCleanOverlapRestart)
+                        {
+                            continue;
                         }
 
                         if (mehediSubSliceReadTotal > 0)
@@ -450,6 +499,7 @@ namespace ShihabMehediIDM
                         string mehediErrMsg = shihabSubEx.Message ?? "";
                         bool mehediIsFatalMismatchOrAuth =
                             mehediErrMsg.IndexOf("overlap verification failed", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                            mehediErrMsg.IndexOf("HTML error or login page", StringComparison.OrdinalIgnoreCase) >= 0 ||
                             mehediErrMsg.IndexOf("403", StringComparison.OrdinalIgnoreCase) >= 0 ||
                             mehediErrMsg.IndexOf("401", StringComparison.OrdinalIgnoreCase) >= 0 ||
                             mehediErrMsg.IndexOf("Forbidden", StringComparison.OrdinalIgnoreCase) >= 0 ||

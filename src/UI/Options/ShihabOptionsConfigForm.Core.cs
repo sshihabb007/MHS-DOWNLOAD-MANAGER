@@ -34,6 +34,7 @@ namespace ShihabMehediIDM
         private List<ShihabSiteLoginCredential> _snapSiteLogins;
         private List<ShihabDebridAccount> _snapDebridAccounts;
         private List<ShihabHostConnectionLimit> _snapHostLimits;
+        private List<string> _snapArchivePasswords;
         private bool _committedOk;
         private bool _vaultWasPurged;
 
@@ -41,6 +42,7 @@ namespace ShihabMehediIDM
         private CheckBox _shihabBrowserChk;
         private CheckBox _mehediStartupChk;
         private CheckBox _shihabClipChk;
+        private TextBox _shihabGlobalHotkeyBox;
         private CheckedListBox _shihabBrowsersClb;
         private CheckBox _shihabMinTrayChk;
         private CheckBox _shihabCloseTrayChk;
@@ -62,6 +64,9 @@ namespace ShihabMehediIDM
         private CheckBox _mehediStartDlgChk;
         private CheckBox _shihabProgDlgChk;
         private CheckBox _mehediCompDlgChk;
+        private CheckBox _shihabKeepPrivChk;
+        private CheckBox _shihabCnlChk;
+        private CheckBox _shihabUserYtCfgChk;
         private CheckBox _shihabDarkChk;
         private ComboBox _shihabThemePresetCombo;
         private ComboBox _shihabExtSubCombo;
@@ -69,6 +74,7 @@ namespace ShihabMehediIDM
         private CheckBox _shihabDelArchChk;
         private CheckBox _shihabMotwChk;
         private CheckBox _shihabSleepChk;
+        private CheckBox _shihabHatchZipChk;
         private ComboBox _shihabDupCombo;
         private CheckBox _shihabAvEnableChk;
         private TextBox _mehediAvExeBox;
@@ -244,6 +250,10 @@ namespace ShihabMehediIDM
                     });
                 }
             }
+
+            _snapArchivePasswords = _shihabConfig.ShihabSavedArchivePasswords != null
+                ? new List<string>(_shihabConfig.ShihabSavedArchivePasswords)
+                : new List<string>();
         }
 
         private void RestoreSnapshotOnCancel()
@@ -254,6 +264,7 @@ namespace ShihabMehediIDM
             _shihabConfig.ShihabSiteLogins = _vaultWasPurged ? new List<ShihabSiteLoginCredential>() : (_snapSiteLogins ?? new List<ShihabSiteLoginCredential>());
             _shihabConfig.ShihabDebridAccounts = _vaultWasPurged ? new List<ShihabDebridAccount>() : (_snapDebridAccounts ?? new List<ShihabDebridAccount>());
             _shihabConfig.ShihabHostConnectionLimits = _snapHostLimits ?? new List<ShihabHostConnectionLimit>();
+            _shihabConfig.ShihabSavedArchivePasswords = _vaultWasPurged ? new List<string>() : (_snapArchivePasswords ?? new List<string>());
         }
 
         private void BuildGeneralTab(TabPage shihabGenTab, bool shihabDark)
@@ -300,10 +311,24 @@ namespace ShihabMehediIDM
             };
             _shihabClipChk = new CheckBox
             {
-                Text = "Automatically start downloading of URLs placed to clipboard",
+                Text = "Auto-download URLs copied to clipboard",
                 Location = new Point(18, 100),
                 AutoSize = true,
                 Checked = _shihabConfig.ShihabMonitorClipboard
+            };
+            Label shihabHotkeyLbl = new Label
+            {
+                Text = "Global Hotkey:",
+                Location = new Point(365, 102),
+                AutoSize = true
+            };
+            _shihabGlobalHotkeyBox = new TextBox
+            {
+                Location = new Point(452, 98),
+                Width = 142,
+                Text = _shihabConfig.ShihabGlobalHotkeySpec ?? "",
+                BackColor = _surfColor,
+                ForeColor = ForeColor
             };
 
             GroupBox mehediBrowsersGrp = new GroupBox
@@ -482,6 +507,7 @@ namespace ShihabMehediIDM
             shihabGenTab.Controls.AddRange(new Control[]
             {
                 _shihabBrowserChk, mehediRestartBridgeBtn, _mehediStartupChk, _shihabMinTrayChk, _shihabCloseTrayChk, _shihabClipChk,
+                shihabHotkeyLbl, _shihabGlobalHotkeyBox,
                 mehediBrowsersGrp, shihabCtxMenuLbl, mehediCtxEditBtn, mehediPanelsLbl, shihabPanelsEditBtn,
                 shihabLangLbl, _shihabLangCombo, shihabScaleLbl, _shihabScaleCombo
             });
@@ -820,6 +846,9 @@ namespace ShihabMehediIDM
             _mehediStartDlgChk = new CheckBox { Text = "Show start download dialog ('Download File Info')", Location = new Point(18, 42), AutoSize = true, Checked = _shihabConfig.ShihabShowStartDownloadDialog };
             _shihabProgDlgChk = new CheckBox { Text = "Show download progress dialog during active transfers", Location = new Point(18, 66), AutoSize = true, Checked = _shihabConfig.MehediShowDownloadProgressDialog };
             _mehediCompDlgChk = new CheckBox { Text = "Show download complete dialog when finished", Location = new Point(18, 90), AutoSize = true, Checked = _shihabConfig.ShihabShowDownloadCompleteDialog };
+            _shihabKeepPrivChk = new CheckBox { Text = "Keep private downloads (strip cookies)", Location = new Point(358, 42), AutoSize = true, Checked = _shihabConfig.ShihabKeepPrivateDownloads };
+            _shihabCnlChk = new CheckBox { Text = "Enable Click'n'Load 2 (127.0.0.1:9666)", Location = new Point(358, 66), AutoSize = true, Checked = _shihabConfig.ShihabEnableClickNLoad };
+            _shihabUserYtCfgChk = new CheckBox { Text = "Use my yt-dlp config file", Location = new Point(358, 90), AutoSize = true, Checked = _shihabConfig.ShihabUseUserYtDlpConfig };
             _shihabDarkChk = new CheckBox { Text = "Dark Mode UI Theme", Location = new Point(18, 114), AutoSize = true, Checked = _shihabConfig.ShihabDarkMode };
 
             Label shihabThemePresetLbl = new Label { Text = "Theme:", Location = new Point(185, 116), AutoSize = true };
@@ -879,10 +908,10 @@ namespace ShihabMehediIDM
             _shihabMotwChk = new CheckBox { Text = "Mark-of-the-Web", Location = new Point(285, 138), AutoSize = true, Checked = _shihabConfig.ShihabWriteZoneIdentifier };
             _shihabSleepChk = new CheckBox { Text = "Prevent Sleep", Location = new Point(435, 138), AutoSize = true, Checked = _shihabConfig.ShihabPreventSystemSleep };
 
-            Label mehediDupLbl = new Label { Text = "If target file already exists on disk:", Location = new Point(18, 166), AutoSize = true };
+            Label mehediDupLbl = new Label { Text = "If target file already exists on disk:", Location = new Point(18, 165), AutoSize = true };
             _shihabDupCombo = new ComboBox
             {
-                Location = new Point(245, 163),
+                Location = new Point(245, 162),
                 Width = 340,
                 DropDownStyle = ComboBoxStyle.DropDownList,
                 BackColor = _surfColor,
@@ -892,23 +921,35 @@ namespace ShihabMehediIDM
             _shihabDupCombo.Items.Add("Overwrite existing file");
             _shihabDupCombo.SelectedIndex = (_shihabConfig.MehediDuplicateFileMode == 1) ? 1 : 0;
 
+            _shihabHatchZipChk = new CheckBox
+            {
+                Text = "Use HatchZip in-place archive extraction (zero-copy)",
+                Location = new Point(18, 190),
+                AutoSize = true,
+                Checked = _shihabConfig.ShihabUseHatchZipInPlace
+            };
+            Button shihabArchPwdBtn = ShihabThemePalette.CreateMehediStyledButton("Archive Passwords...", _surfColor, ForeColor, 152);
+            shihabArchPwdBtn.Height = 24;
+            shihabArchPwdBtn.Location = new Point(456, 187);
+            shihabArchPwdBtn.Click += delegate { ShowArchivePasswordsModal(shihabDark); };
+
             GroupBox mehediAvGrp = new GroupBox
             {
                 Text = "Virus checking on download completion",
-                Location = new Point(16, 204),
-                Size = new Size(592, 125),
+                Location = new Point(16, 216),
+                Size = new Size(592, 114),
                 ForeColor = ForeColor
             };
             _shihabAvEnableChk = new CheckBox
             {
                 Text = "Automatically check downloaded files with virus scanner:",
-                Location = new Point(14, 24),
+                Location = new Point(14, 21),
                 AutoSize = true,
                 Checked = _shihabConfig.ShihabEnableVirusCheck
             };
             _mehediAvExeBox = new TextBox
             {
-                Location = new Point(14, 52),
+                Location = new Point(14, 48),
                 Width = 460,
                 Text = _shihabConfig.MehediVirusScannerExe ?? "",
                 BackColor = _surfColor,
@@ -916,7 +957,7 @@ namespace ShihabMehediIDM
             };
             Button shihabAvBrowseBtn = ShihabThemePalette.CreateMehediStyledButton("Browse", _surfColor, ForeColor, 94);
             shihabAvBrowseBtn.Height = 25;
-            shihabAvBrowseBtn.Location = new Point(484, 50);
+            shihabAvBrowseBtn.Location = new Point(484, 46);
             shihabAvBrowseBtn.Click += delegate
             {
                 using (OpenFileDialog mehediOfd = new OpenFileDialog())
@@ -925,10 +966,10 @@ namespace ShihabMehediIDM
                     if (mehediOfd.ShowDialog(this) == DialogResult.OK) _mehediAvExeBox.Text = mehediOfd.FileName;
                 }
             };
-            Label mehediAvArgsLbl = new Label { Text = "Command line parameters (%1 = downloaded file):", Location = new Point(14, 88), AutoSize = true };
+            Label mehediAvArgsLbl = new Label { Text = "Command line parameters (%1 = downloaded file):", Location = new Point(14, 82), AutoSize = true };
             _shihabAvArgsBox = new TextBox
             {
-                Location = new Point(315, 85),
+                Location = new Point(315, 79),
                 Width = 263,
                 Text = string.IsNullOrWhiteSpace(_shihabConfig.ShihabVirusScannerArgs) ? "\"%1\"" : _shihabConfig.ShihabVirusScannerArgs,
                 BackColor = _surfColor,
@@ -966,10 +1007,11 @@ namespace ShihabMehediIDM
 
             mehediDownloadsTab.Controls.AddRange(new Control[]
             {
-                _mehediStartDlgChk, _shihabProgDlgChk, _mehediCompDlgChk, _shihabDarkChk,
+                _mehediStartDlgChk, _shihabProgDlgChk, _mehediCompDlgChk,
+                _shihabKeepPrivChk, _shihabCnlChk, _shihabUserYtCfgChk, _shihabDarkChk,
                 shihabThemePresetLbl, _shihabThemePresetCombo, shihabExtSubLbl, _shihabExtSubCombo,
                 _shihabAutoExtGlobalChk, _shihabDelArchChk, _shihabMotwChk, _shihabSleepChk,
-                mehediDupLbl, _shihabDupCombo, mehediAvGrp, mehediNativeGrp
+                mehediDupLbl, _shihabDupCombo, _shihabHatchZipChk, shihabArchPwdBtn, mehediAvGrp, mehediNativeGrp
             });
         }
 

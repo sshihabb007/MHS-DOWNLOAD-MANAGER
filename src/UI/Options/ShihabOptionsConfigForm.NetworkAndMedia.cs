@@ -500,7 +500,7 @@ namespace ShihabMehediIDM
 
             Label shihabDebProvLbl = new Label { Text = "Provider:", Location = new Point(16, 222), AutoSize = true };
             ComboBox shihabDebProvCombo = new ComboBox { Location = new Point(80, 219), Width = 135, DropDownStyle = ComboBoxStyle.DropDownList, BackColor = _surfColor, ForeColor = ForeColor };
-            shihabDebProvCombo.Items.AddRange(new object[] { "Real-Debrid", "AllDebrid", "Premiumize" });
+            shihabDebProvCombo.Items.AddRange(new object[] { "Real-Debrid", "AllDebrid", "Premiumize", "TorBox", "Mega-Debrid" });
             shihabDebProvCombo.SelectedIndex = 0;
 
             Label shihabDebTokLbl = new Label { Text = "API Token:", Location = new Point(225, 222), AutoSize = true };
@@ -585,10 +585,26 @@ namespace ShihabMehediIDM
             shihabForgetAllBtn.Location = new Point(14, 84);
             shihabForgetAllBtn.Click += delegate
             {
-                if (MessageBox.Show(this, "Purge all saved site logins, proxy passwords, Debrid API tokens, and paired remote devices?", "Forget All Sign-Ins", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
+                if (MessageBox.Show(this, "Purge all saved site logins, proxy passwords, Debrid API tokens, saved archive passwords, and paired remote devices?", "Forget All Sign-Ins", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
                 {
                     int count = ShihabSecretsVault.ForgetAllSignIns(_mehediStore);
-                    _shihabConfig.ShihabSiteLogins.Clear();
+                    if (_shihabConfig.ShihabSiteLogins != null) _shihabConfig.ShihabSiteLogins.Clear();
+                    if (_shihabConfig.ShihabPairedRemoteDevices != null) _shihabConfig.ShihabPairedRemoteDevices.Clear();
+                    if (_shihabConfig.ShihabSavedArchivePasswords != null) _shihabConfig.ShihabSavedArchivePasswords.Clear();
+                    if (_shihabConfig.ShihabDebridAccounts != null)
+                    {
+                        for (int di = 0; di < _shihabConfig.ShihabDebridAccounts.Count; di++)
+                        {
+                            _shihabConfig.ShihabDebridAccounts[di].MehediEnabled = false;
+                            _shihabConfig.ShihabDebridAccounts[di].MehediEncryptedApiToken = "";
+                            _shihabConfig.ShihabDebridAccounts[di].ShihabAccountStatus = "Not signed in";
+                        }
+                    }
+                    _shihabConfig.ShihabProxyUser = "";
+                    _shihabConfig.MehediProxyPassword = "";
+                    if (_shihabPrxUserBox != null) _shihabPrxUserBox.Text = "";
+                    if (_shihabPrxPassBox != null) _shihabPrxPassBox.Text = "";
+                    shihabDebTokBox.Text = "";
                     _vaultWasPurged = true;
                     _snapSiteLogins.Clear();
                     _snapDebridAccounts.Clear();
@@ -645,12 +661,32 @@ namespace ShihabMehediIDM
             {
                 shihabCheckUpdNowBtn.Enabled = false;
                 shihabCheckUpdNowBtn.Text = "Checking GitHub...";
-                bool prevPre = _shihabConfig.ShihabUpdateIncludePrereleases;
                 bool includePre = _shihabPreRelChk.Checked;
+                MehediAppConfiguration checkCfg = new MehediAppConfiguration
+                {
+                    ShihabUpdateRepoSlug = _shihabConfig.ShihabUpdateRepoSlug,
+                    ShihabUpdateApiOverrideUrl = _shihabConfig.ShihabUpdateApiOverrideUrl,
+                    ShihabUpdateIncludePrereleases = includePre,
+                    ShihabSkippedUpdateVersion = _shihabConfig.ShihabSkippedUpdateVersion,
+                    ShihabProxyMode = _shihabConfig.ShihabProxyMode,
+                    MehediUseHttpProxy = _shihabConfig.MehediUseHttpProxy,
+                    ShihabProxyAddress = _shihabConfig.ShihabProxyAddress,
+                    MehediProxyPort = _shihabConfig.MehediProxyPort,
+                    ShihabProxyUser = _shihabConfig.ShihabProxyUser,
+                    MehediProxyPassword = _shihabConfig.MehediProxyPassword,
+                    ShihabUseSocksProxy = _shihabConfig.ShihabUseSocksProxy,
+                    MehediSocksHost = _shihabConfig.MehediSocksHost,
+                    ShihabSocksPort = _shihabConfig.ShihabSocksPort,
+                    ShihabPacScriptUrl = _shihabConfig.ShihabPacScriptUrl,
+                    ShihabDnsMode = _shihabConfig.ShihabDnsMode,
+                    ShihabDnsProvider = _shihabConfig.ShihabDnsProvider,
+                    ShihabCustomDohUrl = _shihabConfig.ShihabCustomDohUrl,
+                    ShihabPlainDnsServer = _shihabConfig.ShihabPlainDnsServer,
+                    ShihabDnsFallbackToSystem = _shihabConfig.ShihabDnsFallbackToSystem,
+                    ShihabBoundNetworkAdapter = _shihabConfig.ShihabBoundNetworkAdapter
+                };
                 Task.Run(delegate
                 {
-                    MehediAppConfiguration checkCfg = _shihabConfig;
-                    checkCfg.ShihabUpdateIncludePrereleases = includePre;
                     ShihabUpdateCheckResult updRes = ShihabAutoUpdater.CheckForUpdates(checkCfg, true);
                     string utcStamp = DateTime.UtcNow.ToString("u");
                     if (IsDisposed || !IsHandleCreated) return;
@@ -660,7 +696,6 @@ namespace ShihabMehediIDM
                         {
                             if (IsDisposed) return;
                             _shihabConfig.ShihabLastUpdateCheckUtc = utcStamp;
-                            _shihabConfig.ShihabUpdateIncludePrereleases = prevPre;
                             shihabCheckUpdNowBtn.Enabled = true;
                             shihabCheckUpdNowBtn.Text = "Check for Updates Now...";
                             shihabCurVerLbl.Text = "Installed Version: v" + ShihabAutoUpdater.GetCurrentAppVersion() +

@@ -163,22 +163,79 @@ namespace ShihabMehediIDM
         private static string BuildMcpToolsListJson()
         {
             return "{\"tools\":[" +
-                "{\"name\":\"list_downloads\",\"description\":\"List all downloads in MHS Download Manager with live status, size, progress, and checksum.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}," +
-                "{\"name\":\"add_download\",\"description\":\"Add a new URL or Magnet link to MHS Download Manager.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"fileName\":{\"type\":\"string\"},\"checksum\":{\"type\":\"string\"}},\"required\":[\"url\"]}}," +
+                "{\"name\":\"list_downloads\",\"description\":\"List downloads in MHS Download Manager with live status, size, progress, checksum, category, queue, and free disk space. Supports optional filtering.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"},\"status\":{\"type\":\"string\"},\"search\":{\"type\":\"string\"},\"category\":{\"type\":\"string\"},\"queue\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\"}}}}," +
+                "{\"name\":\"add_download\",\"description\":\"Add a new URL, Magnet link, or local .torrent file to MHS Download Manager.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"fileName\":{\"type\":\"string\"},\"checksum\":{\"type\":\"string\"},\"saveDir\":{\"type\":\"string\"},\"category\":{\"type\":\"string\"},\"queue\":{\"type\":\"string\"},\"private\":{\"type\":\"boolean\"},\"cookie\":{\"type\":\"string\"},\"referer\":{\"type\":\"string\"},\"userAgent\":{\"type\":\"string\"},\"limitKb\":{\"type\":\"integer\"},\"start\":{\"type\":\"boolean\"},\"deferredRename\":{\"type\":\"string\"}},\"required\":[\"url\"]}}," +
                 "{\"name\":\"pause_downloads\",\"description\":\"Pause a specific download by id or 'all'.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"}}}}," +
                 "{\"name\":\"resume_downloads\",\"description\":\"Resume/start a specific download by id or 'all'.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"}}}}," +
                 "{\"name\":\"remove_downloads\",\"description\":\"Remove a download by id (optionally deleteFile=true).\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"},\"deleteFile\":{\"type\":\"boolean\"}},\"required\":[\"id\"]}}," +
-                "{\"name\":\"start_queue\",\"description\":\"Start the Main Download Queue.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}," +
+                "{\"name\":\"start_queue\",\"description\":\"Start a download queue by name (defaults to Main Download Queue).\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"queue\":{\"type\":\"string\"}}}}," +
+                "{\"name\":\"stop_queue\",\"description\":\"Stop a running download queue by name (defaults to Main Download Queue, or 'all').\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"queue\":{\"type\":\"string\"}}}}," +
                 "{\"name\":\"probe_url\",\"description\":\"Probe a URL for final redirect target, Content-Length, filename, and HTTP Range support.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"}},\"required\":[\"url\"]}}," +
                 "{\"name\":\"video_info\",\"description\":\"Inspect media formats and title for a video URL via yt-dlp.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"}},\"required\":[\"url\"]}}," +
                 "{\"name\":\"playlist_info\",\"description\":\"Inspect playlist items for a media playlist URL via yt-dlp.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"}},\"required\":[\"url\"]}}," +
                 "{\"name\":\"torrent_info\",\"description\":\"Inspect a .torrent file, HTTP torrent URL, or magnet URI.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"target\":{\"type\":\"string\"}},\"required\":[\"target\"]}}," +
-                "{\"name\":\"start_video\",\"description\":\"Queue a media/video download job via yt-dlp.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"format\":{\"type\":\"string\"},\"audioOnly\":{\"type\":\"boolean\"}},\"required\":[\"url\"]}}," +
+                "{\"name\":\"start_video\",\"description\":\"Queue a media/video download job via yt-dlp (format='compatible' selects H.264+AAC).\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"format\":{\"type\":\"string\"},\"audioOnly\":{\"type\":\"boolean\"}},\"required\":[\"url\"]}}," +
                 "{\"name\":\"start_playlist\",\"description\":\"Queue a playlist download job via yt-dlp.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"}},\"required\":[\"url\"]}}," +
                 "{\"name\":\"start_gallery\",\"description\":\"Queue an image gallery download job via gallery-dl.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"}},\"required\":[\"url\"]}}," +
                 "{\"name\":\"start_torrent\",\"description\":\"Queue a BitTorrent .torrent or magnet download job.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"target\":{\"type\":\"string\"}},\"required\":[\"target\"]}}," +
                 "{\"name\":\"check_updates\",\"description\":\"Check GitHub Releases for a newer version of MHS Download Manager.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}" +
                 "]}";
+        }
+
+        private static string BuildStatusQueryString(string id, string status, string search, string category, string queue, int limit)
+        {
+            List<string> q = new List<string>();
+            if (!string.IsNullOrWhiteSpace(id)) q.Add("id=" + Uri.EscapeDataString(id.Trim()));
+            if (!string.IsNullOrWhiteSpace(status)) q.Add("status=" + Uri.EscapeDataString(status.Trim()));
+            if (!string.IsNullOrWhiteSpace(search)) q.Add("search=" + Uri.EscapeDataString(search.Trim()));
+            if (!string.IsNullOrWhiteSpace(category)) q.Add("category=" + Uri.EscapeDataString(category.Trim()));
+            if (!string.IsNullOrWhiteSpace(queue)) q.Add("queue=" + Uri.EscapeDataString(queue.Trim()));
+            if (limit > 0) q.Add("limit=" + limit.ToString(CultureInfo.InvariantCulture));
+            return q.Count > 0 ? ("/shihab/api/status?" + string.Join("&", q.ToArray())) : "/shihab/api/status";
+        }
+
+        private static List<ShihabDownloadItem> FilterOfflineItems(
+            List<ShihabDownloadItem> items,
+            string id,
+            string status,
+            string search,
+            string category,
+            string queue,
+            int limit)
+        {
+            List<ShihabDownloadItem> filtered = new List<ShihabDownloadItem>();
+            if (items == null) return filtered;
+            for (int i = 0; i < items.Count; i++)
+            {
+                ShihabDownloadItem it = items[i];
+                if (it == null) continue;
+                if (!string.IsNullOrWhiteSpace(id) && !it.ShihabId.StartsWith(id.Trim(), StringComparison.OrdinalIgnoreCase)) continue;
+                if (!string.IsNullOrWhiteSpace(status) && (it.ShihabStatusText ?? "").IndexOf(status.Trim(), StringComparison.OrdinalIgnoreCase) < 0) continue;
+                if (!string.IsNullOrWhiteSpace(category) && !string.Equals(it.ShihabCategoryName ?? "", category.Trim(), StringComparison.OrdinalIgnoreCase)) continue;
+                if (!string.IsNullOrWhiteSpace(queue) && !string.Equals(it.MehediQueueName ?? "", queue.Trim(), StringComparison.OrdinalIgnoreCase)) continue;
+                if (!string.IsNullOrWhiteSpace(search) &&
+                    (it.ShihabFileName ?? "").IndexOf(search.Trim(), StringComparison.OrdinalIgnoreCase) < 0 &&
+                    (it.MehediUrl ?? "").IndexOf(search.Trim(), StringComparison.OrdinalIgnoreCase) < 0)
+                {
+                    continue;
+                }
+                filtered.Add(it);
+                if (limit > 0 && filtered.Count >= limit) break;
+            }
+            return filtered;
+        }
+
+        private static long TryGetFreeDiskBytesSafe(string folder)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(folder)) folder = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                string root = Path.GetPathRoot(Path.GetFullPath(folder));
+                if (string.IsNullOrEmpty(root)) return -1L;
+                DriveInfo di = new DriveInfo(root);
+                return di.IsReady ? di.AvailableFreeSpace : -1L;
+            }
+            catch { return -1L; }
         }
 
         private static string ExecuteMcpToolCall(
@@ -190,25 +247,38 @@ namespace ShihabMehediIDM
             string liveResp;
             if (toolName == "list_downloads")
             {
-                if (TryCallLiveBridge(store, cfg, "GET", "/shihab/api/status", null, out liveResp) && !string.IsNullOrWhiteSpace(liveResp))
+                string fId = ShihabJsonCodec.GetString(args, "id");
+                string fStatus = ShihabJsonCodec.GetString(args, "status");
+                string fSearch = ShihabJsonCodec.GetString(args, "search");
+                string fCat = ShihabJsonCodec.GetString(args, "category");
+                string fQueue = ShihabJsonCodec.GetString(args, "queue");
+                int fLimit = (int)ShihabJsonCodec.GetLong(args, "limit", 0);
+                string statusPath = BuildStatusQueryString(fId, fStatus, fSearch, fCat, fQueue, fLimit);
+                if (TryCallLiveBridge(store, cfg, "GET", statusPath, null, out liveResp) && !string.IsNullOrWhiteSpace(liveResp))
                 {
                     return liveResp;
                 }
-                List<ShihabDownloadItem> items = store.LoadMehediDownloads();
-                if (items.Count == 0) return "No downloads in list.";
-                StringBuilder sb = new StringBuilder();
+                List<ShihabDownloadItem> items = FilterOfflineItems(store.LoadMehediDownloads(), fId, fStatus, fSearch, fCat, fQueue, fLimit);
+                long freeBytes = TryGetFreeDiskBytesSafe(cfg != null && cfg.ShihabCategories != null && cfg.ShihabCategories.Count > 0 ? cfg.ShihabCategories[0].ShihabDefaultFolder : "");
+                List<object> arr = new List<object>(items.Count);
                 for (int i = 0; i < items.Count; i++)
                 {
                     ShihabDownloadItem it = items[i];
-                    sb.AppendFormat("[{0}] {1} | {2:0.0}% of {3} | Status: {4} | URL: {5}\n",
-                        it.ShihabId.Substring(0, Math.Min(8, it.ShihabId.Length)),
-                        it.ShihabFileName,
-                        it.GetMehediPercent(),
-                        ShihabFormatHelpers.FormatMehediBytes(it.ShihabTotalBytes),
-                        it.ShihabStatusText,
-                        it.MehediUrl);
+                    Dictionary<string, object> row = new Dictionary<string, object>();
+                    row["id"] = it.ShihabId ?? "";
+                    row["fileName"] = it.ShihabFileName ?? "";
+                    row["status"] = it.ShihabStatusText ?? "";
+                    row["percent"] = Math.Round(it.GetMehediPercent(), 1);
+                    row["totalBytes"] = it.ShihabTotalBytes;
+                    row["downloadedBytes"] = it.MehediDownloadedBytes;
+                    row["category"] = it.ShihabCategoryName ?? "";
+                    row["queue"] = it.MehediQueueName ?? "";
+                    row["url"] = it.MehediUrl ?? "";
+                    row["private"] = it.ShihabIsPrivateIncognito;
+                    row["freeSpaceBytes"] = TryGetFreeDiskBytesSafe(it.MehediSaveDirectory) >= 0 ? TryGetFreeDiskBytesSafe(it.MehediSaveDirectory) : freeBytes;
+                    arr.Add(row);
                 }
-                return sb.ToString().TrimEnd();
+                return ShihabJsonCodec.Serialize(arr);
             }
             if (toolName == "add_download" || toolName == "start_video" || toolName == "start_playlist" || toolName == "start_gallery" || toolName == "start_torrent")
             {
@@ -218,16 +288,32 @@ namespace ShihabMehediIDM
                 string checksum = ShihabJsonCodec.GetString(args, "checksum");
                 string fmt = ShihabJsonCodec.GetString(args, "format");
                 bool audioOnly = ShihabJsonCodec.GetBool(args, "audioOnly", false);
+                bool isPriv = ShihabJsonCodec.GetBool(args, "private", false) || ShihabJsonCodec.GetBool(args, "incognito", false);
+                string reqQueue = ShihabJsonCodec.GetString(args, "queue");
+                string reqCat = ShihabJsonCodec.GetString(args, "category");
+                string reqSaveDir = ShihabJsonCodec.GetString(args, "saveDir");
+                string reqCookie = ShihabJsonCodec.GetString(args, "cookie");
+                string reqReferer = ShihabJsonCodec.GetString(args, "referer");
+                string reqUa = ShihabJsonCodec.GetString(args, "userAgent");
+                string reqDefRename = ShihabJsonCodec.GetString(args, "deferredRename");
+                int reqLimitKb = (int)ShihabJsonCodec.GetLong(args, "limitKb", 0);
+                bool startNow = ShihabJsonCodec.GetBool(args, "start", true);
                 if (string.IsNullOrWhiteSpace(url)) return "Error: url/target is required.";
 
                 string kind = toolName == "start_video" || toolName == "start_playlist" ? "ytdlp"
                     : (toolName == "start_gallery" ? "gallery" : (toolName == "start_torrent" ? "torrent" : "http"));
-                if (!IsAllowedTargetForKind(url.Trim(), kind, false))
+                if (kind == "http" && ShihabTorrentManager.IsMagnetOrTorrentInput(url.Trim()))
+                {
+                    kind = "torrent";
+                }
+                if (!IsAllowedTargetForKind(url.Trim(), kind, true))
                 {
                     return "Error: invalid or unsupported target URL for " + toolName + ".";
                 }
 
-                QueueOrDispatchItem(store, cfg, url.Trim(), fileName, checksum, kind, fmt, audioOnly);
+                QueueOrDispatchItem(
+                    store, cfg, url.Trim(), fileName, checksum, kind, fmt, audioOnly,
+                    isPriv, reqQueue, reqCat, reqSaveDir, reqCookie, reqReferer, reqUa, reqLimitKb, startNow, reqDefRename);
                 return "Queued (" + kind + "): " + url.Trim();
             }
             if (toolName == "pause_downloads")
@@ -251,34 +337,45 @@ namespace ShihabMehediIDM
                         count++;
                     }
                 }
-                store.SaveShihabDownloads(items);
+                store.SaveShihabDownloads(items, cfg != null && cfg.ShihabKeepPrivateDownloads);
                 return string.Format("Paused {0} download(s).", count);
             }
-            if (toolName == "resume_downloads" || toolName == "start_queue")
+            if (toolName == "resume_downloads" || toolName == "start_queue" || toolName == "stop_queue")
             {
-                string id = toolName == "start_queue" ? "all" : ShihabJsonCodec.GetString(args, "id");
+                string queueName = ShihabJsonCodec.GetString(args, "queue");
+                if (string.IsNullOrWhiteSpace(queueName)) queueName = "Main Download Queue";
+                string id = (toolName == "start_queue" || toolName == "stop_queue") ? "all" : ShihabJsonCodec.GetString(args, "id");
                 if (string.IsNullOrWhiteSpace(id)) id = "all";
-                string actName = toolName == "start_queue" ? "start_queue" : "resume";
+                string actName = toolName == "start_queue" ? "start_queue" : (toolName == "stop_queue" ? "stop_queue" : "resume");
                 Dictionary<string, object> payload = new Dictionary<string, object>();
                 payload["action"] = actName;
                 payload["id"] = id;
+                payload["queue"] = queueName;
                 if (TryCallLiveBridge(store, cfg, "POST", "/shihab/api/action", ShihabJsonCodec.Serialize(payload), out liveResp))
                 {
-                    return "Started/resumed via live engine: " + id;
+                    return toolName == "stop_queue"
+                        ? ("Stopped queue via live engine: " + queueName)
+                        : ("Started/resumed via live engine: " + (toolName == "start_queue" ? queueName : id));
                 }
                 List<ShihabDownloadItem> items = store.LoadMehediDownloads();
                 int count = 0;
                 for (int i = 0; i < items.Count; i++)
                 {
-                    if (items[i].GetShihabStatusEnum() != ShihabDownloadStatus.ShihabCompleted &&
-                        (id == "all" || items[i].ShihabId.StartsWith(id, StringComparison.OrdinalIgnoreCase)))
+                    if (items[i].GetShihabStatusEnum() == ShihabDownloadStatus.ShihabCompleted) continue;
+                    bool matches = (toolName == "start_queue" || toolName == "stop_queue")
+                        ? (string.Equals(queueName, "all", StringComparison.OrdinalIgnoreCase) || string.Equals(items[i].MehediQueueName ?? "", queueName, StringComparison.OrdinalIgnoreCase))
+                        : (id == "all" || items[i].ShihabId.StartsWith(id, StringComparison.OrdinalIgnoreCase));
+                    if (matches)
                     {
-                        items[i].SetMehediStatusEnum(ShihabDownloadStatus.ShihabQueued, "Queued");
+                        if (toolName == "stop_queue") items[i].SetMehediStatusEnum(ShihabDownloadStatus.ShihabPaused, "Paused");
+                        else items[i].SetMehediStatusEnum(ShihabDownloadStatus.ShihabQueued, "Queued");
                         count++;
                     }
                 }
-                store.SaveShihabDownloads(items);
-                return string.Format("Queued {0} download(s) for resumption.", count);
+                store.SaveShihabDownloads(items, cfg != null && cfg.ShihabKeepPrivateDownloads);
+                return toolName == "stop_queue"
+                    ? string.Format("Stopped queue '{0}' ({1} item(s)).", queueName, count)
+                    : string.Format("Queued {0} download(s) for resumption.", count);
             }
             if (toolName == "remove_downloads")
             {
@@ -367,9 +464,13 @@ namespace ShihabMehediIDM
             {
                 return ShihabProcessAndPathSafety.TryValidateHttpUrl(s, false, out parsed);
             }
-            if (kind == "torrent" && allowLocalTorrentFile && s.EndsWith(".torrent", StringComparison.OrdinalIgnoreCase) && File.Exists(s))
+            if (kind == "torrent" && allowLocalTorrentFile)
             {
-                return true;
+                string validLocalTor;
+                if (ShihabProcessAndPathSafety.TryValidateLocalTorrentFilePath(s, out validLocalTor))
+                {
+                    return true;
+                }
             }
             if (s.StartsWith("magnet:?", StringComparison.OrdinalIgnoreCase))
             {
@@ -466,7 +567,17 @@ namespace ShihabMehediIDM
             string checksum,
             string kind,
             string ytFormat,
-            bool audioOnly)
+            bool audioOnly,
+            bool isPrivate = false,
+            string queueName = "",
+            string categoryName = "",
+            string saveDir = "",
+            string cookie = "",
+            string referer = "",
+            string userAgent = "",
+            int limitKb = 0,
+            bool startNow = true,
+            string deferredRename = "")
         {
             string liveResp;
             Dictionary<string, object> payloadObj = new Dictionary<string, object>();
@@ -476,6 +587,17 @@ namespace ShihabMehediIDM
             payloadObj["kind"] = kind ?? "http";
             payloadObj["format"] = ytFormat ?? "";
             payloadObj["audioOnly"] = audioOnly;
+            payloadObj["private"] = isPrivate;
+            payloadObj["incognito"] = isPrivate;
+            if (!string.IsNullOrWhiteSpace(queueName)) payloadObj["queue"] = queueName.Trim();
+            if (!string.IsNullOrWhiteSpace(categoryName)) payloadObj["category"] = categoryName.Trim();
+            if (!string.IsNullOrWhiteSpace(saveDir)) payloadObj["saveDir"] = saveDir.Trim();
+            if (!string.IsNullOrWhiteSpace(cookie)) payloadObj["cookie"] = cookie;
+            if (!string.IsNullOrWhiteSpace(referer)) payloadObj["referer"] = referer;
+            if (!string.IsNullOrWhiteSpace(userAgent)) payloadObj["userAgent"] = userAgent;
+            if (!string.IsNullOrWhiteSpace(deferredRename)) payloadObj["deferredRename"] = deferredRename.Trim();
+            if (limitKb > 0) payloadObj["limitKb"] = limitKb;
+            payloadObj["start"] = startNow;
 
             if (TryCallLiveBridge(store, cfg, "POST", "/shihab/api/add", ShihabJsonCodec.Serialize(payloadObj), out liveResp))
             {
@@ -489,6 +611,16 @@ namespace ShihabMehediIDM
                 ? ShihabFormatHelpers.ExtractMehediFileNameFromUrl(targetUrl)
                 : ShihabFormatHelpers.SanitizeShihabFileName(fileName);
             item.ShihabExpectedChecksum = checksum ?? "";
+            item.ShihabIsPrivateIncognito = isPrivate;
+            if (!string.IsNullOrWhiteSpace(cookie)) item.ShihabCookies = cookie;
+            if (!string.IsNullOrWhiteSpace(referer)) item.MehediReferer = referer;
+            if (!string.IsNullOrWhiteSpace(userAgent)) item.MehediUserAgent = userAgent;
+            if (!string.IsNullOrWhiteSpace(deferredRename)) item.ShihabDeferredRenameTarget = deferredRename.Trim();
+            if (limitKb > 0)
+            {
+                item.ShihabUseItemSpeedLimit = true;
+                item.MehediItemSpeedLimitKb = Math.Min(1000000, limitKb);
+            }
             if (kind == "ytdlp")
             {
                 item.ShihabIsYtDlpJob = true;
@@ -502,12 +634,15 @@ namespace ShihabMehediIDM
             else if (kind == "torrent" || targetUrl.StartsWith("magnet:", StringComparison.OrdinalIgnoreCase) || targetUrl.EndsWith(".torrent", StringComparison.OrdinalIgnoreCase))
             {
                 item.ShihabIsTorrentOrMagnet = true;
+                item.ShihabTorrentMagnetOrPath = targetUrl;
             }
             ShihabCategoryRule cat = cfg.ResolveMehediCategoryForFile(item.ShihabFileName);
-            item.ShihabCategoryName = cat.ShihabName;
-            item.MehediSaveDirectory = cat.ShihabDefaultFolder;
+            item.ShihabCategoryName = !string.IsNullOrWhiteSpace(categoryName) ? categoryName.Trim() : cat.ShihabName;
+            item.MehediSaveDirectory = !string.IsNullOrWhiteSpace(saveDir) ? saveDir.Trim() : cat.ShihabDefaultFolder;
+            item.MehediQueueName = !string.IsNullOrWhiteSpace(queueName) ? queueName.Trim() : "Main Download Queue";
+            item.SetMehediStatusEnum(ShihabDownloadStatus.ShihabQueued, "Queued");
             items.Insert(0, item);
-            store.SaveShihabDownloads(items);
+            store.SaveShihabDownloads(items, cfg != null && cfg.ShihabKeepPrivateDownloads);
         }
 
         private static void WriteJsonRpcResult(string idRaw, string resultObjJson)
@@ -566,16 +701,62 @@ namespace ShihabMehediIDM
             }
             if (cmd == "status" || cmd == "list")
             {
+                string fId = "", fStatus = "", fSearch = "", fCat = "", fQueue = "";
+                int fLimit = 0;
+                for (int fi = 1; fi < cleaned.Count; fi++)
+                {
+                    string tok = cleaned[fi].ToLowerInvariant();
+                    if ((tok == "--id") && fi + 1 < cleaned.Count) fId = cleaned[++fi];
+                    else if ((tok == "--status") && fi + 1 < cleaned.Count) fStatus = cleaned[++fi];
+                    else if ((tok == "--search") && fi + 1 < cleaned.Count) fSearch = cleaned[++fi];
+                    else if ((tok == "--category" || tok == "-c") && fi + 1 < cleaned.Count) fCat = cleaned[++fi];
+                    else if ((tok == "--queue" || tok == "-q") && fi + 1 < cleaned.Count) fQueue = cleaned[++fi];
+                    else if ((tok == "--limit" || tok == "-n") && fi + 1 < cleaned.Count) int.TryParse(cleaned[++fi], out fLimit);
+                }
+
+                string statusPath = BuildStatusQueryString(fId, fStatus, fSearch, fCat, fQueue, fLimit);
                 string liveResp;
-                if (TryCallLiveBridge(store, cfg, "GET", "/shihab/api/status", null, out liveResp) && !string.IsNullOrWhiteSpace(liveResp))
+                if (TryCallLiveBridge(store, cfg, "GET", statusPath, null, out liveResp) && !string.IsNullOrWhiteSpace(liveResp))
                 {
                     if (outputJson)
                     {
                         Console.WriteLine(liveResp);
                         return 0;
                     }
+                    // Parse and render live bridge JSON instead of falling back to stale disk snapshot
+                    object parsedLive;
+                    if (ShihabJsonCodec.TryParse(liveResp, out parsedLive, 32) && parsedLive is List<object>)
+                    {
+                        List<object> liveRows = (List<object>)parsedLive;
+                        Console.WriteLine("ID        | Status       | Progress | Size       | File Name");
+                        Console.WriteLine("----------+--------------+----------+------------+------------------------------");
+                        for (int i = 0; i < liveRows.Count; i++)
+                        {
+                            Dictionary<string, object> r = liveRows[i] as Dictionary<string, object>;
+                            if (r == null) continue;
+                            string idStr = ShihabJsonCodec.GetString(r, "id", "");
+                            string shortId = idStr.Substring(0, Math.Min(8, idStr.Length));
+                            string stStr = ShihabJsonCodec.GetString(r, "status", "");
+                            string fnStr = ShihabJsonCodec.GetString(r, "fileName", "");
+                            long totBytes = ShihabJsonCodec.GetLong(r, "totalBytes", -1);
+                            double pct = 0.0;
+                            object pRaw;
+                            if (r.TryGetValue("percent", out pRaw) && pRaw != null)
+                            {
+                                double.TryParse(Convert.ToString(pRaw, CultureInfo.InvariantCulture), NumberStyles.Float, CultureInfo.InvariantCulture, out pct);
+                            }
+                            Console.WriteLine("{0,-9} | {1,-12} | {2,6:0.0}%  | {3,-10} | {4}",
+                                shortId,
+                                stStr.Length > 12 ? stStr.Substring(0, 12) : stStr,
+                                pct,
+                                ShihabFormatHelpers.FormatMehediBytes(totBytes),
+                                fnStr);
+                        }
+                        return 0;
+                    }
                 }
-                List<ShihabDownloadItem> items = store.LoadMehediDownloads();
+                List<ShihabDownloadItem> items = FilterOfflineItems(store.LoadMehediDownloads(), fId, fStatus, fSearch, fCat, fQueue, fLimit);
+                long freeBytes = TryGetFreeDiskBytesSafe(cfg != null && cfg.ShihabCategories != null && cfg.ShihabCategories.Count > 0 ? cfg.ShihabCategories[0].ShihabDefaultFolder : "");
                 if (outputJson)
                 {
                     List<object> arr = new List<object>(items.Count);
@@ -589,7 +770,11 @@ namespace ShihabMehediIDM
                         row["percent"] = Math.Round(it.GetMehediPercent(), 1);
                         row["totalBytes"] = it.ShihabTotalBytes;
                         row["downloadedBytes"] = it.MehediDownloadedBytes;
+                        row["category"] = it.ShihabCategoryName ?? "";
+                        row["queue"] = it.MehediQueueName ?? "";
                         row["url"] = it.MehediUrl ?? "";
+                        row["private"] = it.ShihabIsPrivateIncognito;
+                        row["freeSpaceBytes"] = freeBytes;
                         arr.Add(row);
                     }
                     Console.WriteLine(ShihabJsonCodec.Serialize(arr));
@@ -762,6 +947,24 @@ namespace ShihabMehediIDM
             {
                 string path = cleaned[1];
                 ShihabTorrentMetadata meta = ShihabTorrentManager.InspectTorrentOrMagnet(path, cfg);
+                if (meta == null || !meta.ParsedSuccessfully)
+                {
+                    string errText = (meta != null && !string.IsNullOrWhiteSpace(meta.ErrorMessage))
+                        ? meta.ErrorMessage
+                        : "Invalid or malformed torrent/magnet metadata.";
+                    if (outputJson)
+                    {
+                        Dictionary<string, object> errObj = new Dictionary<string, object>();
+                        errObj["ok"] = false;
+                        errObj["error"] = errText;
+                        Console.WriteLine(ShihabJsonCodec.Serialize(errObj));
+                    }
+                    else
+                    {
+                        Console.Error.WriteLine("Error: " + errText);
+                    }
+                    return 1;
+                }
                 if (outputJson)
                 {
                     Dictionary<string, object> torObj = new Dictionary<string, object>();
@@ -769,12 +972,16 @@ namespace ShihabMehediIDM
                     torObj["infoHash"] = meta.InfoHashHex ?? "";
                     torObj["totalBytes"] = meta.TotalSizeBytes;
                     torObj["fileCount"] = meta.Files.Count;
+                    torObj["isPrivate"] = meta.IsPrivate;
+                    torObj["trackerCount"] = meta.Trackers.Count;
                     Console.WriteLine(ShihabJsonCodec.Serialize(torObj));
                     return 0;
                 }
                 Console.WriteLine("Name      : {0}", meta.Name);
                 Console.WriteLine("InfoHash  : {0}", meta.InfoHashHex);
                 Console.WriteLine("TotalSize : {0}", ShihabFormatHelpers.FormatMehediBytes(meta.TotalSizeBytes));
+                Console.WriteLine("Private   : {0}", meta.IsPrivate ? "Yes (BEP-27)" : "No");
+                Console.WriteLine("Trackers  : {0}", meta.Trackers.Count);
                 Console.WriteLine("Files     : {0}", meta.Files.Count);
                 for (int i = 0; i < meta.Files.Count; i++)
                 {
@@ -798,25 +1005,101 @@ namespace ShihabMehediIDM
                     return 1;
                 }
             }
-            if (cmd == "install-ytdlp" || cmd == "install-ffmpeg" || cmd == "install-gallery-dl")
+            if (cmd == "install-ytdlp" || cmd == "install-ffmpeg" || cmd == "install-deno" || cmd == "install-gallery-dl")
             {
                 string tool = cmd.Substring("install-".Length);
                 string err;
-                bool ok = ShihabMediaHelpersManager.InstallOrUpdateTool(store.MehediBaseDirectory, tool, Console.WriteLine, out err);
+                bool ok = ShihabMediaHelpersManager.InstallOrUpdateTool(store.MehediBaseDirectory, tool, Console.WriteLine, out err, cfg);
                 if (!ok) { Console.Error.WriteLine(err); return 1; }
                 return 0;
             }
-            if ((cmd == "get" || cmd == "video-get" || cmd == "playlist-get" || cmd == "gallery-get" || cmd == "torrent-get") && cleaned.Count > 1)
+            if (cmd == "start-queue" || cmd == "stop-queue")
             {
-                string targetUrl = cleaned[1].Trim();
+                string qName = (cleaned.Count > 1 && !string.IsNullOrWhiteSpace(cleaned[1])) ? cleaned[1].Trim() : "Main Download Queue";
+                string liveResp;
+                Dictionary<string, object> qObj = new Dictionary<string, object>();
+                qObj["action"] = cmd == "start-queue" ? "start_queue" : "stop_queue";
+                qObj["id"] = "all";
+                qObj["queue"] = qName;
+                if (TryCallLiveBridge(store, cfg, "POST", "/shihab/api/action", ShihabJsonCodec.Serialize(qObj), out liveResp))
+                {
+                    Console.WriteLine("Completed live command '{0}' for queue '{1}'.", cmd, qName);
+                    return 0;
+                }
+                List<ShihabDownloadItem> qItems = store.LoadMehediDownloads();
+                for (int i = 0; i < qItems.Count; i++)
+                {
+                    if (qItems[i].GetShihabStatusEnum() == ShihabDownloadStatus.ShihabCompleted) continue;
+                    if (string.Equals(qName, "all", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(qItems[i].MehediQueueName ?? "", qName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (cmd == "stop-queue") qItems[i].SetMehediStatusEnum(ShihabDownloadStatus.ShihabPaused, "Paused");
+                        else qItems[i].SetMehediStatusEnum(ShihabDownloadStatus.ShihabQueued, "Queued");
+                    }
+                }
+                store.SaveShihabDownloads(qItems, cfg != null && cfg.ShihabKeepPrivateDownloads);
+                Console.WriteLine("Completed command '{0}' for queue '{1}'.", cmd, qName);
+                return 0;
+            }
+            if ((cmd == "get" || cmd == "add" || cmd == "video-get" || cmd == "playlist-get" || cmd == "gallery-get" || cmd == "torrent-get") && cleaned.Count > 1)
+            {
+                string targetUrl = "";
+                string outDir = "";
+                string outFileName = "";
+                string categoryName = "";
+                string queueName = "";
+                string checksum = "";
+                string cookie = "";
+                string referer = "";
+                string userAgent = "";
+                string ytQuality = "";
+                string deferredRename = "";
+                int limitKb = 0;
+                bool isPrivate = false;
+                bool audioOnly = false;
+                bool startNow = true;
+
+                for (int ci = 1; ci < cleaned.Count; ci++)
+                {
+                    string tok = cleaned[ci];
+                    string low = tok.ToLowerInvariant();
+                    if ((low == "-o" || low == "--output") && ci + 1 < cleaned.Count) outDir = cleaned[++ci];
+                    else if ((low == "-f" || low == "--filename") && ci + 1 < cleaned.Count) outFileName = cleaned[++ci];
+                    else if ((low == "-c" || low == "--category") && ci + 1 < cleaned.Count) categoryName = cleaned[++ci];
+                    else if ((low == "-q" || low == "--queue") && ci + 1 < cleaned.Count)
+                    {
+                        string qVal = cleaned[++ci];
+                        if (cmd == "video-get" || cmd == "playlist-get") ytQuality = qVal;
+                        else queueName = qVal;
+                    }
+                    else if (low == "--quality" && ci + 1 < cleaned.Count) ytQuality = cleaned[++ci];
+                    else if ((low == "-l" || low == "--limit") && ci + 1 < cleaned.Count) int.TryParse(cleaned[++ci], out limitKb);
+                    else if (low == "--checksum" && ci + 1 < cleaned.Count) checksum = cleaned[++ci];
+                    else if (low == "--cookie" && ci + 1 < cleaned.Count) cookie = cleaned[++ci];
+                    else if (low == "--referer" && ci + 1 < cleaned.Count) referer = cleaned[++ci];
+                    else if (low == "--user-agent" && ci + 1 < cleaned.Count) userAgent = cleaned[++ci];
+                    else if (low == "--deferred-rename" && ci + 1 < cleaned.Count) deferredRename = cleaned[++ci];
+                    else if (low == "--private" || low == "--incognito") isPrivate = true;
+                    else if (low == "--audio-only") audioOnly = true;
+                    else if (low == "-s" || low == "--start") startNow = true;
+                    else if (low == "--no-start" || low == "--queue-only") startNow = false;
+                    else if (string.IsNullOrEmpty(targetUrl) && !tok.StartsWith("-", StringComparison.Ordinal)) targetUrl = tok.Trim();
+                }
+
                 string kind = (cmd == "video-get" || cmd == "playlist-get") ? "ytdlp"
-                    : (cmd == "gallery-get" ? "gallery" : (cmd == "torrent-get" ? "torrent" : "http"));
+                    : (cmd == "gallery-get" ? "gallery" : (cmd == "torrent-get" || ShihabTorrentManager.IsMagnetOrTorrentInput(targetUrl) ? "torrent" : "http"));
                 if (!IsAllowedTargetForKind(targetUrl, kind, true))
                 {
                     Console.Error.WriteLine("Invalid or unsupported download target for " + cmd + ".");
                     return 1;
                 }
-                QueueOrDispatchItem(store, cfg, targetUrl, "", "", kind, "", false);
+                if (string.Equals(ytQuality, "compatible", StringComparison.OrdinalIgnoreCase))
+                {
+                    ytQuality = ShihabMediaHelpersManager.CompatibleFormatSelector;
+                }
+                QueueOrDispatchItem(
+                    store, cfg, targetUrl, outFileName, checksum, kind, ytQuality, audioOnly,
+                    isPrivate, queueName, categoryName, outDir, cookie, referer, userAgent, limitKb, startNow, deferredRename);
                 Console.WriteLine("Queued ({0}): {1}", kind, targetUrl);
                 return 0;
             }
@@ -863,10 +1146,13 @@ namespace ShihabMehediIDM
         private static void PrintCliHelp()
         {
             Console.WriteLine("MHS Download Manager CLI & Automation Commands:");
-            Console.WriteLine("  mdm.exe --cli status [--json]                 List all downloads and live progress");
-            Console.WriteLine("  mdm.exe --cli get <URL>                       Add a HTTP/HTTPS/FTP/Magnet download");
+            Console.WriteLine("  mdm.exe --cli status [--json] [--id X] [--status S] [--search Q] [--category C] [--queue Q] [--limit N]");
+            Console.WriteLine("  mdm.exe --cli add <URL> [-o dir] [-f name] [-c cat] [-q queue] [-l kbps] [--private] [--checksum spec] [--cookie c] [--referer r] [--user-agent ua] [--no-start]");
+            Console.WriteLine("  mdm.exe --cli get <URL> [options...]          Alias for 'add'");
             Console.WriteLine("  mdm.exe --cli pause <id|all>                  Pause download(s)");
             Console.WriteLine("  mdm.exe --cli start <id|all>                  Resume/start download(s)");
+            Console.WriteLine("  mdm.exe --cli start-queue [name]              Start a queue (default: Main Download Queue)");
+            Console.WriteLine("  mdm.exe --cli stop-queue [name|all]           Stop a queue (default: Main Download Queue)");
             Console.WriteLine("  mdm.exe --cli remove <id|all>                 Remove download(s) from list");
             Console.WriteLine("  mdm.exe --cli delete <id|all>                 Remove download(s) and delete local file");
             Console.WriteLine("  mdm.exe --cli check-update [--json]           Check GitHub Releases for new version");
@@ -875,14 +1161,16 @@ namespace ShihabMehediIDM
             Console.WriteLine("  mdm.exe --cli api <on|off>                    Enable or disable local automation API");
             Console.WriteLine("  mdm.exe --cli video-info <URL>                Query video formats via yt-dlp");
             Console.WriteLine("  mdm.exe --cli playlist-info <URL>             Query playlist entries via yt-dlp");
-            Console.WriteLine("  mdm.exe --cli video-get <URL>                 Download video via yt-dlp");
+            Console.WriteLine("  mdm.exe --cli video-get <URL> [-q compatible|fmt] [--audio-only]");
             Console.WriteLine("  mdm.exe --cli gallery-get <URL>               Download image gallery via gallery-dl");
+            Console.WriteLine("  mdm.exe --cli torrent-get <file|magnet|url>   Download a .torrent file or magnet link");
             Console.WriteLine("  mdm.exe --cli torrent-info <file|magnet|url>  Inspect .torrent or magnet metadata");
             Console.WriteLine("  mdm.exe --cli torrent-create <src> [out]      Create a .torrent file from file or folder");
             Console.WriteLine("  mdm.exe --cli install-ytdlp                   Install/update yt-dlp helper (SHA-256 verified)");
             Console.WriteLine("  mdm.exe --cli install-ffmpeg                  Install/update ffmpeg helper (SHA-256 verified)");
+            Console.WriteLine("  mdm.exe --cli install-deno                    Install/update Deno JS runtime (SHA-256 verified)");
             Console.WriteLine("  mdm.exe --cli install-gallery-dl              Install/update gallery-dl helper (SHA-256 verified)");
-            Console.WriteLine("  mdm.exe --mcp                                 Run Model Context Protocol stdio server");
+            Console.WriteLine("  mdm.exe --mcp                                 Run Model Context Protocol stdio server (16 tools)");
             Console.WriteLine("  mdm.exe --headless                            Run background download daemon without GUI");
             Console.WriteLine("  mdm.exe --forget-sign-ins                     Wipe all saved credentials & tokens");
         }

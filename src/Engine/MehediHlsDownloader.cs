@@ -296,65 +296,224 @@ namespace ShihabMehediIDM
             string outDir = Path.GetDirectoryName(mehediOutputFilePath);
             if (!string.IsNullOrEmpty(outDir)) Directory.CreateDirectory(outDir);
             string tempHlsOutPath = mehediOutputFilePath + ".assembling";
+            int hlsConcurrency = Math.Min(8, Math.Max(1, mehediItem.MehediMaxConnections));
+            if (hlsConcurrency > mehediSegmentUrls.Count) hlsConcurrency = mehediSegmentUrls.Count;
+
             long shihabAccumulatedBytes = 0;
             Stopwatch hlsThrottleWatch = Stopwatch.StartNew();
             long hlsWinStartMs = 0L;
             long hlsWinBytes = 0L;
+            object hlsThrottleLock = new object();
 
-            try
+            if (hlsConcurrency <= 1 || mehediSegmentUrls.Count <= 1)
             {
-                using (FileStream shihabOut = new FileStream(tempHlsOutPath, FileMode.Create, FileAccess.Write, FileShare.None, SegmentStreamBufferBytes))
+                try
                 {
-                    byte[] mehediBuf = new byte[65536];
-                    for (int mehediIdx = 0; mehediIdx < mehediSegmentUrls.Count; mehediIdx++)
+                    using (FileStream shihabOut = new FileStream(tempHlsOutPath, FileMode.Create, FileAccess.Write, FileShare.None, SegmentStreamBufferBytes))
                     {
-                        if (mehediToken.IsCancellationRequested) return;
-                        if (_mehediConfig.IsQuotaExceeded())
+                        byte[] mehediBuf = new byte[65536];
+                        for (int mehediIdx = 0; mehediIdx < mehediSegmentUrls.Count; mehediIdx++)
                         {
-                            throw new IOException("Bandwidth quota limit reached.");
-                        }
-                        HttpWebRequest shihabSegReq;
-                        using (HttpWebResponse mehediSegResp = GetResponseWithSafeRedirects(
-                            mehediSegmentUrls[mehediIdx],
-                            "GET",
-                            mehediItem,
-                            shihabSegStarts[mehediIdx],
-                            mehediSegEnds[mehediIdx],
-                            null,
-                            mehediToken,
-                            out shihabSegReq))
-                        using (Stream shihabSegStream = mehediSegResp.GetResponseStream())
-                        {
-                            int shihabRead;
-                            while (!mehediToken.IsCancellationRequested && (shihabRead = shihabSegStream.Read(mehediBuf, 0, mehediBuf.Length)) > 0)
+                            if (mehediToken.IsCancellationRequested) return;
+                            if (_mehediConfig.IsQuotaExceeded())
                             {
-                                shihabOut.Write(mehediBuf, 0, shihabRead);
-                                _mehediConfig.RecordQuotaBytes(shihabRead);
-                                shihabAccumulatedBytes += shihabRead;
-                                ApplyMehediSpeedLimiter(mehediItem, shihabRead, hlsThrottleWatch, ref hlsWinStartMs, ref hlsWinBytes, mehediToken);
+                                throw new IOException("Bandwidth quota limit reached.");
+                            }
+                            HttpWebRequest shihabSegReq;
+                            using (HttpWebResponse mehediSegResp = GetResponseWithSafeRedirects(
+                                mehediSegmentUrls[mehediIdx],
+                                "GET",
+                                mehediItem,
+                                shihabSegStarts[mehediIdx],
+                                mehediSegEnds[mehediIdx],
+                                null,
+                                mehediToken,
+                                out shihabSegReq))
+                            using (Stream shihabSegStream = mehediSegResp.GetResponseStream())
+                            {
+                                int shihabRead;
+                                while (!mehediToken.IsCancellationRequested && (shihabRead = shihabSegStream.Read(mehediBuf, 0, mehediBuf.Length)) > 0)
+                                {
+                                    shihabOut.Write(mehediBuf, 0, shihabRead);
+                                    _mehediConfig.RecordQuotaBytes(shihabRead);
+                                    shihabAccumulatedBytes += shihabRead;
+                                    ApplyMehediSpeedLimiter(mehediItem, shihabRead, hlsThrottleWatch, ref hlsWinStartMs, ref hlsWinBytes, mehediToken);
+                                }
+                            }
+                            if (mehediToken.IsCancellationRequested) return;
+                            if (shihabUpdateMainBytes)
+                            {
+                                mehediItem.MehediDownloadedBytes = shihabAccumulatedBytes;
+                                mehediItem.ShihabTotalBytes = (long)((shihabAccumulatedBytes / (double)(mehediIdx + 1)) * mehediSegmentUrls.Count);
+                            }
+                            mehediItem.ShihabStatusText = string.Format("{0} {1}/{2}", shihabLabelPrefix, mehediIdx + 1, mehediSegmentUrls.Count);
+                            NotifyShihabItemChanged(mehediItem);
+                        }
+                        shihabOut.Flush(true);
+                    }
+
+                    if (!mehediToken.IsCancellationRequested && !TryAtomicMoveReplace(tempHlsOutPath, mehediOutputFilePath))
+                    {
+                        throw new IOException("Unable to move assembled HLS media file to: " + mehediOutputFilePath);
+                    }
+                }
+                catch
+                {
+                    try { if (File.Exists(tempHlsOutPath)) File.Delete(tempHlsOutPath); } catch { }
+                    throw;
+                }
+                return;
+            }
+
+            // Bounded parallel HLS segment fetcher preserving exact media sequence order
+            string segWorkDir = mehediOutputFilePath + "_hlssegs_" + Guid.NewGuid().ToString("N").Substring(0, 8);
+            Directory.CreateDirectory(segWorkDir);
+            string[] segFiles = new string[mehediSegmentUrls.Count];
+            int nextIndex = -1;
+            int completedCount = 0;
+            Exception firstError = null;
+            object errLock = new object();
+
+            using (CancellationTokenSource linkedCts = CancellationTokenSource.CreateLinkedTokenSource(mehediToken))
+            {
+                CancellationToken workerToken = linkedCts.Token;
+                try
+                {
+                    System.Threading.Tasks.Task[] workers = new System.Threading.Tasks.Task[hlsConcurrency];
+                    for (int w = 0; w < hlsConcurrency; w++)
+                    {
+                        workers[w] = System.Threading.Tasks.Task.Run(delegate
+                        {
+                            byte[] localBuf = new byte[65536];
+                            while (!workerToken.IsCancellationRequested)
+                            {
+                                int segIdx = Interlocked.Increment(ref nextIndex);
+                                if (segIdx >= mehediSegmentUrls.Count) break;
+                                if (_mehediConfig.IsQuotaExceeded())
+                                {
+                                    lock (errLock)
+                                    {
+                                        if (firstError == null) firstError = new IOException("Bandwidth quota limit reached.");
+                                    }
+                                    try { linkedCts.Cancel(); } catch { }
+                                    break;
+                                }
+
+                                string segPath = Path.Combine(segWorkDir, string.Format("seg_{0:D6}.bin", segIdx));
+                                Exception segEx = null;
+                                for (int attempt = 0; attempt < 3 && !workerToken.IsCancellationRequested; attempt++)
+                                {
+                                    segEx = null;
+                                    try
+                                    {
+                                        HttpWebRequest segReq;
+                                        using (HttpWebResponse segResp = GetResponseWithSafeRedirects(
+                                            mehediSegmentUrls[segIdx],
+                                            "GET",
+                                            mehediItem,
+                                            shihabSegStarts[segIdx],
+                                            mehediSegEnds[segIdx],
+                                            null,
+                                            workerToken,
+                                            out segReq))
+                                        using (Stream segStream = segResp.GetResponseStream())
+                                        using (FileStream segFs = new FileStream(segPath, FileMode.Create, FileAccess.Write, FileShare.None, 65536))
+                                        {
+                                            int r;
+                                            while (!workerToken.IsCancellationRequested && (r = segStream.Read(localBuf, 0, localBuf.Length)) > 0)
+                                            {
+                                                segFs.Write(localBuf, 0, r);
+                                                _mehediConfig.RecordQuotaBytes(r);
+                                                long curAcc = Interlocked.Add(ref shihabAccumulatedBytes, r);
+                                                if (shihabUpdateMainBytes) mehediItem.MehediDownloadedBytes = curAcc;
+                                                lock (hlsThrottleLock)
+                                                {
+                                                    ApplyMehediSpeedLimiter(mehediItem, r, hlsThrottleWatch, ref hlsWinStartMs, ref hlsWinBytes, workerToken);
+                                                }
+                                            }
+                                            segFs.Flush();
+                                        }
+                                        break;
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        segEx = ex;
+                                        try { if (File.Exists(segPath)) File.Delete(segPath); } catch { }
+                                        if (workerToken.IsCancellationRequested || attempt >= 2) break;
+                                        WaitSleepOrCancel(300 * (attempt + 1), workerToken);
+                                    }
+                                }
+
+                                if (segEx != null)
+                                {
+                                    lock (errLock)
+                                    {
+                                        if (firstError == null) firstError = segEx;
+                                    }
+                                    try { linkedCts.Cancel(); } catch { }
+                                    break;
+                                }
+
+                                segFiles[segIdx] = segPath;
+                                int doneNow = Interlocked.Increment(ref completedCount);
+                                long accNow = Interlocked.Read(ref shihabAccumulatedBytes);
+                                if (shihabUpdateMainBytes)
+                                {
+                                    mehediItem.MehediDownloadedBytes = accNow;
+                                    mehediItem.ShihabTotalBytes = (long)((accNow / (double)doneNow) * mehediSegmentUrls.Count);
+                                }
+                                double elapsedSec = Math.Max(0.2, hlsThrottleWatch.Elapsed.TotalSeconds);
+                                mehediItem.ShihabCurrentSpeedBps = accNow / elapsedSec;
+                                mehediItem.ShihabStatusText = string.Format("{0} {1}/{2} ({3}x)", shihabLabelPrefix, doneNow, mehediSegmentUrls.Count, hlsConcurrency);
+                                NotifyShihabItemChanged(mehediItem);
+                            }
+                        });
+                    }
+
+                    System.Threading.Tasks.Task.WaitAll(workers);
+
+                    if (mehediToken.IsCancellationRequested) return;
+                    if (firstError != null) throw firstError;
+
+                    mehediItem.SetMehediStatusEnum(ShihabDownloadStatus.ShihabRebuilding, string.Format("Assembling {0} segments...", mehediSegmentUrls.Count));
+                    NotifyShihabItemChanged(mehediItem);
+
+                    using (FileStream shihabOut = new FileStream(tempHlsOutPath, FileMode.Create, FileAccess.Write, FileShare.None, SegmentStreamBufferBytes))
+                    {
+                        byte[] copyBuf = new byte[131072];
+                        for (int i = 0; i < segFiles.Length; i++)
+                        {
+                            if (mehediToken.IsCancellationRequested) return;
+                            if (string.IsNullOrEmpty(segFiles[i]) || !File.Exists(segFiles[i]))
+                            {
+                                throw new IOException("Missing HLS segment #" + i + " during assembly.");
+                            }
+                            using (FileStream inSeg = new FileStream(segFiles[i], FileMode.Open, FileAccess.Read, FileShare.Read, 131072))
+                            {
+                                int r;
+                                while ((r = inSeg.Read(copyBuf, 0, copyBuf.Length)) > 0)
+                                {
+                                    shihabOut.Write(copyBuf, 0, r);
+                                }
                             }
                         }
-                        if (mehediToken.IsCancellationRequested) return;
-                        if (shihabUpdateMainBytes)
-                        {
-                            mehediItem.MehediDownloadedBytes = shihabAccumulatedBytes;
-                            mehediItem.ShihabTotalBytes = (long)((shihabAccumulatedBytes / (double)(mehediIdx + 1)) * mehediSegmentUrls.Count);
-                        }
-                        mehediItem.ShihabStatusText = string.Format("{0} {1}/{2}", shihabLabelPrefix, mehediIdx + 1, mehediSegmentUrls.Count);
-                        NotifyShihabItemChanged(mehediItem);
+                        shihabOut.Flush(true);
                     }
-                    shihabOut.Flush(true);
-                }
 
-                if (!mehediToken.IsCancellationRequested && !TryAtomicMoveReplace(tempHlsOutPath, mehediOutputFilePath))
-                {
-                    throw new IOException("Unable to move assembled HLS media file to: " + mehediOutputFilePath);
+                    if (!mehediToken.IsCancellationRequested && !TryAtomicMoveReplace(tempHlsOutPath, mehediOutputFilePath))
+                    {
+                        throw new IOException("Unable to move assembled HLS media file to: " + mehediOutputFilePath);
+                    }
                 }
-            }
-            catch
-            {
-                try { if (File.Exists(tempHlsOutPath)) File.Delete(tempHlsOutPath); } catch { }
-                throw;
+                catch
+                {
+                    try { if (File.Exists(tempHlsOutPath)) File.Delete(tempHlsOutPath); } catch { }
+                    throw;
+                }
+                finally
+                {
+                    try { if (Directory.Exists(segWorkDir)) Directory.Delete(segWorkDir, true); } catch { }
+                }
             }
         }
 

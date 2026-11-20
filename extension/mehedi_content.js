@@ -54,6 +54,7 @@
   let shihabTabStreamsCache = [];
   let mehediShowFloatingBar = true;
   let mehediPanelMiniMode = false;
+  let shihabHideVideoInFullscreen = false;
   let shihabConfiguredPreventKey = "Alt";
   let mehediConfiguredForceKey = "Ins";
   let shihabPanelDismissedUrl = "";
@@ -1032,6 +1033,9 @@
           if (!shihabRawHref || shihabRawHref.startsWith("javascript:") || shihabRawHref.startsWith("#")) {
             continue;
           }
+          if (/^magnet:\?/i.test(shihabRawHref.trim())) {
+            return shihabRawHref.trim();
+          }
           const mehediResolved = new URL(shihabRawHref, location.href).href;
           if (mehediResolved.startsWith("http://") || mehediResolved.startsWith("https://")) {
             return mehediResolved;
@@ -1078,6 +1082,26 @@
     }
 
     const mehediClickedHref = mehediIsDownloadGesture ? mehediExtractClickedAnchorHref(shihabEvent) : "";
+    // Intercept direct left-clicks on magnet:? links when Prevent key (Alt) is not held
+    if (
+      shihabEvtType === "click" &&
+      shihabEvent.button === 0 &&
+      !shihabPreventHit &&
+      mehediClickedHref &&
+      /^magnet:\?/i.test(mehediClickedHref)
+    ) {
+      try {
+        shihabEvent.preventDefault();
+        shihabEvent.stopPropagation();
+        chrome.runtime.sendMessage({
+          shihabCmd: "mehedi_send_download_now",
+          shihabUrl: mehediClickedHref,
+          mehediReferrer: location.href,
+          mehediTabTitle: document.title || ""
+        }).catch(() => {});
+      } catch (_) {}
+      return;
+    }
     const shihabNow = Date.now();
     if (
       shihabNow - mehediLastSentGestureMs < 160 &&
@@ -2232,6 +2256,11 @@
       return;
     }
 
+    if (shihabHideVideoInFullscreen && (document.fullscreenElement || document.webkitFullscreenElement)) {
+      if (mehediShadowHost) mehediShadowHost.style.display = "none";
+      return;
+    }
+
     const shihabTargetVideo = mehediFindPrimaryVisibleVideo();
     if (!shihabTargetVideo) {
       if (mehediShadowHost) mehediShadowHost.style.display = "none";
@@ -2254,6 +2283,7 @@
     if (!mehediHost || !shihabRefs) return;
 
     const shihabStreams = shihabCollectMediaFromDomAndSniffer(shihabTargetVideo);
+    mehediAppendGoogleDriveSharedVideoStreamIfApplicable(shihabStreams, shihabTargetVideo);
     const mehediSnifferRows = shihabBuildStreamSnifferEntries(shihabStreams);
     const shihabNextCountStr = String(mehediSnifferRows.length);
     if (shihabRefs.mehediCountPill.textContent !== shihabNextCountStr) {
@@ -3100,8 +3130,70 @@
     // Ignore invalidated context
   }
 
+  function mehediAppendGoogleDriveSharedVideoStreamIfApplicable(shihabStreams, shihabVideoEl) {
+    try {
+      const host = (location.hostname || "").toLowerCase();
+      if (host !== "drive.google.com" && !host.endsWith(".drive.google.com")) return;
+      let fileId = "";
+      const pathM = (location.pathname || "").match(/\/file\/d\/([A-Za-z0-9_-]{10,})/i);
+      if (pathM && pathM[1]) fileId = pathM[1];
+      if (!fileId) {
+        const sp = new URLSearchParams(location.search || "");
+        fileId = sp.get("id") || sp.get("docid") || "";
+      }
+      if (!fileId && shihabVideoEl) {
+        const srcUrl = shihabVideoEl.currentSrc || shihabVideoEl.src || "";
+        const docM = srcUrl.match(/[?&](?:docid|id)=([A-Za-z0-9_-]{10,})/i);
+        if (docM && docM[1]) fileId = docM[1];
+      }
+      if (!fileId) {
+        const viewerNode = document.querySelector("[data-id][aria-label], [data-target='doc'][data-id], iframe[src*='drive.google.com/file/d/']");
+        if (viewerNode) {
+          const dataId = viewerNode.getAttribute("data-id") || "";
+          if (/^[A-Za-z0-9_-]{15,}$/.test(dataId)) fileId = dataId;
+          if (!fileId && viewerNode.tagName === "IFRAME") {
+            const fm = String(viewerNode.getAttribute("src") || "").match(/\/file\/d\/([A-Za-z0-9_-]{10,})/i);
+            if (fm && fm[1]) fileId = fm[1];
+          }
+        }
+      }
+      if (!fileId) return;
+      const directUrl = `https://drive.usercontent.google.com/download?id=${encodeURIComponent(fileId)}&export=download&confirm=t`;
+      const exists = Array.isArray(shihabStreams) && shihabStreams.some((s) => s && s.shihabStreamUrl === directUrl);
+      if (!exists && Array.isArray(shihabStreams)) {
+        const titleClean = (document.title || "Google_Drive_Video").replace(/\s*-\s*Google Drive$/i, "").trim() || "Google_Drive_Video";
+        shihabStreams.unshift({
+          shihabStreamUrl: directUrl,
+          mehediMimeType: "video/mp4",
+          shihabExt: "mp4",
+          shihabSizeBytes: -1,
+          shihabResolution: "Original",
+          shihabQualityLabel: "Google Drive Original",
+          shihabDisplayName: titleClean,
+          mehediResolvedFileName: titleClean.endsWith(".mp4") ? titleClean : `${titleClean}.mp4`,
+          mehediCapturedReferer: location.href,
+          mehediOmitCookies: false
+        });
+      }
+    } catch (_) {}
+  }
+
   function mehediInitDomObservers() {
     if (!shihabVerifyActiveSingletonOwnership()) return;
+
+    try {
+      chrome.storage.local.get(["shihabHideVideoInFullscreen"], (res) => {
+        if (res && typeof res.shihabHideVideoInFullscreen === "boolean") {
+          shihabHideVideoInFullscreen = res.shihabHideVideoInFullscreen;
+        }
+      });
+      chrome.storage.onChanged.addListener((changes, area) => {
+        if (area === "local" && changes && changes.shihabHideVideoInFullscreen) {
+          shihabHideVideoInFullscreen = Boolean(changes.shihabHideVideoInFullscreen.newValue);
+          shihabScheduleFloatingPanelRender();
+        }
+      });
+    } catch (_) {}
 
     try {
       window.postMessage({ __shihabMehediContentPing: true }, "*");

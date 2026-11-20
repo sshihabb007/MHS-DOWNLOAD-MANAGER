@@ -24,9 +24,10 @@ namespace ShihabMehediIDM
         private static readonly TimeSpan TransportRegexTimeout = TimeSpan.FromMilliseconds(250);
         private static readonly Regex GdriveAnchorTitleRegex = new Regex(@"<a[^>]+href=""[^""]*""[^>]*>([^<]{2,180})</a>", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant, TransportRegexTimeout);
         private static readonly Regex ContentRangeTotalRegex = new Regex(@"/(\d+)", RegexOptions.Compiled | RegexOptions.CultureInvariant, TransportRegexTimeout);
-        private static readonly Regex CdUtf8Regex = new Regex(@"filename\*\s*=\s*UTF-8''([^;]+)", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant, TransportRegexTimeout);
-        private static readonly Regex CdQuotedRegex = new Regex(@"filename\s*=\s*""([^""]+)""", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant, TransportRegexTimeout);
-        private static readonly Regex CdUnquotedRegex = new Regex(@"filename\s*=\s*([^;]+)", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant, TransportRegexTimeout);
+        private static readonly Regex CdExtParamRegex = new Regex(@"filename\*\s*=\s*(?:""([^""]+)""|([^;\r\n]+))", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant, TransportRegexTimeout);
+        private static readonly Regex CdQuotedRegex = new Regex(@"filename\s*=\s*""((?:\\.|[^""])+)""", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant, TransportRegexTimeout);
+        private static readonly Regex CdUnquotedRegex = new Regex(@"filename\s*=\s*([^;\r\n]+)", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant, TransportRegexTimeout);
+        private static readonly Regex Rfc2047WordRegex = new Regex(@"=\?([^?\r\n]+)\?([BbQq])\?([^?\r\n]+)\?=", RegexOptions.Compiled | RegexOptions.CultureInvariant, TransportRegexTimeout);
 
         private int GetAdaptiveEffectiveConnections(string hostName, ShihabDownloadItem item)
         {
@@ -349,6 +350,102 @@ namespace ShihabMehediIDM
                    a.Port == b.Port;
         }
 
+        private static bool IsTrustedSameClusterCookieRedirect(Uri initialUri, Uri nextUri)
+        {
+            if (IsSameHttpOrigin(initialUri, nextUri)) return true;
+            if (initialUri == null || nextUri == null) return false;
+            if (!string.Equals(initialUri.Scheme, "https", StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(nextUri.Scheme, "https", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+            string h1 = (initialUri.Host ?? "").TrimEnd('.').ToLowerInvariant();
+            string h2 = (nextUri.Host ?? "").TrimEnd('.').ToLowerInvariant();
+            bool h1Archive = h1 == "archive.org" || h1.EndsWith(".archive.org", StringComparison.Ordinal);
+            bool h2Archive = h2 == "archive.org" || h2.EndsWith(".archive.org", StringComparison.Ordinal);
+            if (h1Archive && h2Archive) return true;
+            return false;
+        }
+
+        private static string MergeCookieHeaders(string existingCookieHeader, WebHeaderCollection responseHeaders)
+        {
+            if (responseHeaders == null) return existingCookieHeader ?? "";
+            string[] setCookies = responseHeaders.GetValues("Set-Cookie");
+            if (setCookies == null || setCookies.Length == 0) return existingCookieHeader ?? "";
+
+            Dictionary<string, string> jar = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            List<string> order = new List<string>();
+            if (!string.IsNullOrWhiteSpace(existingCookieHeader))
+            {
+                string[] existingParts = existingCookieHeader.Split(';');
+                for (int i = 0; i < existingParts.Length; i++)
+                {
+                    string part = existingParts[i].Trim();
+                    int eq = part.IndexOf('=');
+                    if (eq <= 0) continue;
+                    string k = part.Substring(0, eq).Trim();
+                    string v = part.Substring(eq + 1).Trim();
+                    if (!jar.ContainsKey(k)) order.Add(k);
+                    jar[k] = v;
+                }
+            }
+            for (int i = 0; i < setCookies.Length; i++)
+            {
+                string raw = setCookies[i];
+                if (string.IsNullOrWhiteSpace(raw)) continue;
+                int semi = raw.IndexOf(';');
+                string kv = (semi >= 0 ? raw.Substring(0, semi) : raw).Trim();
+                int eq = kv.IndexOf('=');
+                if (eq <= 0) continue;
+                string k = kv.Substring(0, eq).Trim();
+                string v = kv.Substring(eq + 1).Trim();
+                if (string.IsNullOrEmpty(k)) continue;
+                if (!jar.ContainsKey(k)) order.Add(k);
+                jar[k] = v;
+            }
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < order.Count; i++)
+            {
+                if (i > 0) sb.Append("; ");
+                sb.Append(order[i]).Append('=').Append(jar[order[i]]);
+            }
+            return sb.ToString();
+        }
+
+        internal static bool IsUnexpectedHtmlErrorPayload(string fileName, string contentType, long contentLength, byte[] sniffBytes, int sniffLen)
+        {
+            string ext = !string.IsNullOrWhiteSpace(fileName) ? (Path.GetExtension(fileName) ?? "").ToLowerInvariant() : "";
+            if (ext == ".html" || ext == ".htm" || ext == ".xhtml" || ext == ".mhtml" || ext == ".svg" || ext == ".xml" || ext == ".txt" || ext == ".php" || ext == ".asp" || ext == ".aspx" || ext == ".jsp" || string.IsNullOrEmpty(ext))
+            {
+                return false;
+            }
+            bool ctHtml = !string.IsNullOrWhiteSpace(contentType) &&
+                          (contentType.IndexOf("text/html", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                           contentType.IndexOf("application/xhtml", StringComparison.OrdinalIgnoreCase) >= 0);
+            bool bodyLooksHtml = false;
+            if (sniffBytes != null && sniffLen > 5)
+            {
+                int start = 0;
+                while (start < sniffLen && (sniffBytes[start] == 0x20 || sniffBytes[start] == 0x09 || sniffBytes[start] == 0x0A || sniffBytes[start] == 0x0D || sniffBytes[start] == 0xEF || sniffBytes[start] == 0xBB || sniffBytes[start] == 0xBF))
+                {
+                    start++;
+                }
+                int take = Math.Min(128, sniffLen - start);
+                if (take >= 5)
+                {
+                    string head = Encoding.ASCII.GetString(sniffBytes, start, take).ToLowerInvariant();
+                    bodyLooksHtml = head.StartsWith("<!doctype html", StringComparison.Ordinal) ||
+                                    head.StartsWith("<html", StringComparison.Ordinal) ||
+                                    head.StartsWith("<head", StringComparison.Ordinal) ||
+                                    head.IndexOf("<title>", StringComparison.Ordinal) >= 0;
+                }
+            }
+            if (!ctHtml && !bodyLooksHtml) return false;
+            // Reject small/medium HTML error or login interstitials (< 512 KB) returned where a binary/archive/media file was requested
+            if (contentLength <= 0 || contentLength <= 512L * 1024L) return true;
+            return false;
+        }
+
         private static bool IsAlwaysBlockedMetadataOrInternalHost(Uri targetUri)
         {
             if (targetUri == null) return true;
@@ -399,6 +496,29 @@ namespace ShihabMehediIDM
             bool stripCrossOriginCredentials,
             string ifRangeValidator)
         {
+            return CreateShihabHttpRequestCore(
+                mehediUrl,
+                shihabMethod,
+                mehediContextItem,
+                shihabRangeStart,
+                mehediRangeEnd,
+                stripCrossOriginCredentials,
+                ifRangeValidator,
+                null,
+                null);
+        }
+
+        private HttpWebRequest CreateShihabHttpRequestCore(
+            string mehediUrl,
+            string shihabMethod,
+            ShihabDownloadItem mehediContextItem,
+            long shihabRangeStart,
+            long mehediRangeEnd,
+            bool stripCrossOriginCredentials,
+            string ifRangeValidator,
+            string cookieOverride,
+            string userAgentOverride)
+        {
             Uri validatedUri;
             if (!ShihabProcessAndPathSafety.TryValidateHttpUrl(mehediUrl, false, out validatedUri))
             {
@@ -424,9 +544,11 @@ namespace ShihabMehediIDM
                 string.Equals(shihabGvClient, "ANDROID", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(shihabGvClient, "IOS", StringComparison.OrdinalIgnoreCase);
 
-            string mehediUa = (mehediContextItem != null && !string.IsNullOrWhiteSpace(mehediContextItem.MehediUserAgent))
-                ? mehediContextItem.MehediUserAgent
-                : _mehediConfig.ShihabDefaultUserAgent;
+            string mehediUa = !string.IsNullOrWhiteSpace(userAgentOverride)
+                ? userAgentOverride
+                : ((mehediContextItem != null && !string.IsNullOrWhiteSpace(mehediContextItem.MehediUserAgent))
+                    ? mehediContextItem.MehediUserAgent
+                    : _mehediConfig.GetEffectiveDefaultUserAgent());
             if (mehediIsDirectInnerTubeGv)
             {
                 if (string.Equals(shihabGvClient, "VISIONOS", StringComparison.OrdinalIgnoreCase))
@@ -454,13 +576,15 @@ namespace ShihabMehediIDM
             {
                 try { shihabReq.Headers["Origin"] = mehediContextItem.MehediOriginHeader; } catch { }
             }
+            string effectiveCookies = cookieOverride != null
+                ? cookieOverride
+                : (mehediContextItem != null ? mehediContextItem.ShihabCookies : "");
             if (!stripCrossOriginCredentials &&
                 !mehediIsDirectInnerTubeGv &&
-                mehediContextItem != null &&
-                !mehediContextItem.MehediOmitCookies &&
-                !string.IsNullOrWhiteSpace(mehediContextItem.ShihabCookies))
+                (mehediContextItem == null || !mehediContextItem.MehediOmitCookies) &&
+                !string.IsNullOrWhiteSpace(effectiveCookies))
             {
-                shihabReq.Headers[HttpRequestHeader.Cookie] = mehediContextItem.ShihabCookies;
+                shihabReq.Headers[HttpRequestHeader.Cookie] = effectiveCookies;
             }
 
             if (!stripCrossOriginCredentials)
@@ -551,6 +675,9 @@ namespace ShihabMehediIDM
             string currentUrl = initialUri.AbsoluteUri;
             string currentMethod = httpMethod;
             bool stripCreds = false;
+            string activeCookies = (ctxItem != null && !ctxItem.MehediOmitCookies) ? (ctxItem.ShihabCookies ?? "") : "";
+            string activeUaOverride = null;
+            bool triedOwnUaFallback = false;
 
             for (int hop = 0; hop <= MaxHttpRedirects; hop++)
             {
@@ -570,7 +697,9 @@ namespace ShihabMehediIDM
                     rangeStart,
                     rangeEnd,
                     stripCreds,
-                    ifRangeValidator);
+                    ifRangeValidator,
+                    stripCreds ? "" : activeCookies,
+                    activeUaOverride);
                 finalActiveRequest = req;
 
                 HttpWebResponse resp = null;
@@ -584,11 +713,12 @@ namespace ShihabMehediIDM
                 catch (WebException wex)
                 {
                     HttpWebResponse errResp = wex.Response as HttpWebResponse;
+                    int errCode = 0;
                     if (errResp != null)
                     {
                         try
                         {
-                            int errCode = (int)errResp.StatusCode;
+                            errCode = (int)errResp.StatusCode;
                             if (errCode == 429 || errCode == 503)
                             {
                                 RecordHostThrottleSignal(hopHost, errResp, GetAdaptiveEffectiveConnections(hopHost, ctxItem));
@@ -603,6 +733,15 @@ namespace ShihabMehediIDM
                     {
                         try { wex.Response.Close(); } catch { }
                     }
+
+                    // Own-UA fallback when a server blocks default browser UA with HTTP 403/412 bot-check
+                    if (!triedOwnUaFallback && (errCode == 403 || errCode == 412) && !IsRealShihabGoogleVideoDomain(currentUrl))
+                    {
+                        triedOwnUaFallback = true;
+                        activeUaOverride = "MHS-Download-Manager/" + ShihabAutoUpdater.GetCurrentAppVersion();
+                        hop--;
+                        continue;
+                    }
                     throw;
                 }
 
@@ -610,6 +749,11 @@ namespace ShihabMehediIDM
                 if (code == 301 || code == 302 || code == 303 || code == 307 || code == 308)
                 {
                     string loc = resp.Headers["Location"];
+                    WebHeaderCollection respHdrs = resp.Headers;
+                    if (!stripCreds && (ctxItem == null || !ctxItem.MehediOmitCookies))
+                    {
+                        activeCookies = MergeCookieHeaders(activeCookies, respHdrs);
+                    }
                     resp.Close();
                     if (string.IsNullOrWhiteSpace(loc))
                     {
@@ -625,16 +769,22 @@ namespace ShihabMehediIDM
                     {
                         throw new SecurityException("Blocked redirect to internal or cloud metadata address.");
                     }
-                    bool sameOriginWithInitial = IsSameHttpOrigin(initialUri, nextUri);
-                    if (!sameOriginWithInitial)
+                    bool sameClusterCookieSafe = IsTrustedSameClusterCookieRedirect(initialUri, nextUri);
+                    if (!sameClusterCookieSafe)
                     {
                         stripCreds = true;
+                        activeCookies = "";
                         nextUri = new Uri(StripUserInfoFromUri(nextUri));
                         // Public/external targets must never redirect into loopback or LAN internal hosts.
                         if (!initialWasLocalOrPrivate && ShihabProcessAndPathSafety.IsHostDisallowedForOutboundSsrf(nextUri.Host, true))
                         {
                             throw new SecurityException("Blocked cross-origin redirect to internal/private network address.");
                         }
+                    }
+                    else if (!IsSameHttpOrigin(initialUri, nextUri))
+                    {
+                        // Trusted subdomain cluster (e.g. archive.org -> *.archive.org): strip userinfo but keep session cookies
+                        nextUri = new Uri(StripUserInfoFromUri(nextUri));
                     }
                     if ((code == 301 || code == 302 || code == 303) && string.Equals(currentMethod, "POST", StringComparison.OrdinalIgnoreCase))
                     {
@@ -969,6 +1119,7 @@ namespace ShihabMehediIDM
                 req.UsePassive = _mehediConfig.ShihabFtpUsePassiveMode;
                 req.EnableSsl = useTls;
                 req.Timeout = 15000;
+                ShihabDnsAndNetworkManager.ApplyFtpNetworkBindingAndProxy(req, _mehediConfig, normUrl);
                 ApplyFtpCredentials(req, normUrl, ctxItem);
                 using (FtpWebResponse resp = (FtpWebResponse)req.GetResponse())
                 {
@@ -987,6 +1138,7 @@ namespace ShihabMehediIDM
                     mdtmReq.UsePassive = _mehediConfig.ShihabFtpUsePassiveMode;
                     mdtmReq.EnableSsl = useTls;
                     mdtmReq.Timeout = 10000;
+                    ShihabDnsAndNetworkManager.ApplyFtpNetworkBindingAndProxy(mdtmReq, _mehediConfig, normUrl);
                     ApplyFtpCredentials(mdtmReq, normUrl, ctxItem);
                     using (FtpWebResponse mdtmResp = (FtpWebResponse)mdtmReq.GetResponse())
                     {
@@ -1089,7 +1241,7 @@ namespace ShihabMehediIDM
             }
         }
 
-        private static string ParseShihabContentDispositionName(string mehediHeader)
+        public static string ParseShihabContentDispositionName(string mehediHeader)
         {
             if (string.IsNullOrWhiteSpace(mehediHeader))
             {
@@ -1097,24 +1249,168 @@ namespace ShihabMehediIDM
             }
             try
             {
-                Match shihabUtf8Match = CdUtf8Regex.Match(mehediHeader);
-                if (shihabUtf8Match.Success)
+                // 1. RFC 5987 / RFC 8187 extended parameter: filename*=charset'lang'value (quoted or unquoted)
+                Match extMatch = CdExtParamRegex.Match(mehediHeader);
+                if (extMatch.Success)
                 {
-                    return Uri.UnescapeDataString(shihabUtf8Match.Groups[1].Value.Trim().Trim('"'));
+                    string rawExt = !string.IsNullOrEmpty(extMatch.Groups[1].Value)
+                        ? extMatch.Groups[1].Value.Trim()
+                        : extMatch.Groups[2].Value.Trim().Trim('"');
+                    int q1 = rawExt.IndexOf('\'');
+                    int q2 = q1 >= 0 ? rawExt.IndexOf('\'', q1 + 1) : -1;
+                    if (q1 >= 0 && q2 > q1)
+                    {
+                        string charsetName = rawExt.Substring(0, q1).Trim();
+                        string encodedVal = rawExt.Substring(q2 + 1).Trim();
+                        string decodedExt = DecodePercentEncodedBytes(encodedVal, charsetName);
+                        if (!string.IsNullOrWhiteSpace(decodedExt)) return decodedExt;
+                    }
+                    else if (!string.IsNullOrWhiteSpace(rawExt))
+                    {
+                        return DecodePercentEncodedBytes(rawExt, "utf-8");
+                    }
                 }
+
+                // 2. Quoted filename="..." (with RFC 2047 and percent-decoding support)
                 Match mehediSimpleMatch = CdQuotedRegex.Match(mehediHeader);
                 if (mehediSimpleMatch.Success)
                 {
-                    return mehediSimpleMatch.Groups[1].Value.Trim();
+                    string rawQuoted = mehediSimpleMatch.Groups[1].Value.Replace("\\\"", "\"").Replace("\\\\", "\\").Trim();
+                    return DecodeContentDispositionFilenameToken(rawQuoted);
                 }
+
+                // 3. Unquoted filename=...
                 Match shihabUnquoted = CdUnquotedRegex.Match(mehediHeader);
                 if (shihabUnquoted.Success)
                 {
-                    return shihabUnquoted.Groups[1].Value.Trim().Trim('"');
+                    string rawUnq = shihabUnquoted.Groups[1].Value.Trim().Trim('"');
+                    return DecodeContentDispositionFilenameToken(rawUnq);
                 }
             }
             catch { }
             return "";
+        }
+
+        private static string DecodeContentDispositionFilenameToken(string raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) return "";
+            string cur = raw;
+            if (cur.IndexOf("=?", StringComparison.Ordinal) >= 0)
+            {
+                cur = DecodeRfc2047EncodedWords(cur);
+            }
+            if (cur.IndexOf('%') >= 0)
+            {
+                string pctDecoded = DecodePercentEncodedBytes(cur, "utf-8");
+                if (!string.IsNullOrWhiteSpace(pctDecoded)) cur = pctDecoded;
+            }
+            return cur.Trim();
+        }
+
+        private static string DecodeRfc2047EncodedWords(string input)
+        {
+            if (string.IsNullOrEmpty(input)) return "";
+            try
+            {
+                return Rfc2047WordRegex.Replace(input, delegate(Match m)
+                {
+                    string charset = m.Groups[1].Value.Trim();
+                    string encKind = m.Groups[2].Value.ToUpperInvariant();
+                    string data = m.Groups[3].Value;
+                    Encoding enc = ResolveSafeEncoding(charset);
+                    try
+                    {
+                        if (encKind == "B")
+                        {
+                            byte[] rawBytes = Convert.FromBase64String(data);
+                            return enc.GetString(rawBytes);
+                        }
+                        using (MemoryStream ms = new MemoryStream())
+                        {
+                            for (int i = 0; i < data.Length; i++)
+                            {
+                                char ch = data[i];
+                                if (ch == '_')
+                                {
+                                    ms.WriteByte((byte)' ');
+                                }
+                                else if (ch == '=' && i + 2 < data.Length)
+                                {
+                                    int hi = HexNibble(data[i + 1]);
+                                    int lo = HexNibble(data[i + 2]);
+                                    if (hi >= 0 && lo >= 0)
+                                    {
+                                        ms.WriteByte((byte)((hi << 4) | lo));
+                                        i += 2;
+                                        continue;
+                                    }
+                                    ms.WriteByte((byte)ch);
+                                }
+                                else
+                                {
+                                    ms.WriteByte((byte)(ch & 0xFF));
+                                }
+                            }
+                            return enc.GetString(ms.ToArray());
+                        }
+                    }
+                    catch
+                    {
+                        return m.Value;
+                    }
+                });
+            }
+            catch
+            {
+                return input;
+            }
+        }
+
+        private static string DecodePercentEncodedBytes(string input, string charsetName)
+        {
+            if (string.IsNullOrEmpty(input)) return "";
+            Encoding enc = ResolveSafeEncoding(charsetName);
+            using (MemoryStream ms = new MemoryStream(input.Length))
+            {
+                for (int i = 0; i < input.Length; i++)
+                {
+                    char ch = input[i];
+                    if (ch == '%' && i + 2 < input.Length)
+                    {
+                        int hi = HexNibble(input[i + 1]);
+                        int lo = HexNibble(input[i + 2]);
+                        if (hi >= 0 && lo >= 0)
+                        {
+                            ms.WriteByte((byte)((hi << 4) | lo));
+                            i += 2;
+                            continue;
+                        }
+                    }
+                    byte[] charBytes = enc.GetBytes(new char[] { ch });
+                    ms.Write(charBytes, 0, charBytes.Length);
+                }
+                return enc.GetString(ms.ToArray());
+            }
+        }
+
+        private static Encoding ResolveSafeEncoding(string charsetName)
+        {
+            if (string.IsNullOrWhiteSpace(charsetName) ||
+                string.Equals(charsetName, "utf-8", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(charsetName, "utf8", StringComparison.OrdinalIgnoreCase))
+            {
+                return Encoding.UTF8;
+            }
+            try { return Encoding.GetEncoding(charsetName.Trim()); }
+            catch { return Encoding.UTF8; }
+        }
+
+        private static int HexNibble(char c)
+        {
+            if (c >= '0' && c <= '9') return c - '0';
+            if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+            if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+            return -1;
         }
     }
 }

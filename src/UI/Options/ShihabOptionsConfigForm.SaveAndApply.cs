@@ -38,6 +38,7 @@ namespace ShihabMehediIDM
                 }
 
                 _shihabConfig.ShihabMonitorClipboard = _shihabClipChk.Checked;
+                _shihabConfig.ShihabGlobalHotkeySpec = (_shihabGlobalHotkeyBox != null ? _shihabGlobalHotkeyBox.Text : "").Trim();
                 List<string> shihabCheckedBrowsers = new List<string>();
                 for (int mehediBi = 0; mehediBi < _shihabBrowsersClb.CheckedItems.Count; mehediBi++)
                 {
@@ -69,6 +70,10 @@ namespace ShihabMehediIDM
                 _shihabConfig.ShihabShowStartDownloadDialog = _mehediStartDlgChk.Checked;
                 _shihabConfig.MehediShowDownloadProgressDialog = _shihabProgDlgChk.Checked;
                 _shihabConfig.ShihabShowDownloadCompleteDialog = _mehediCompDlgChk.Checked;
+                _shihabConfig.ShihabKeepPrivateDownloads = _shihabKeepPrivChk != null && _shihabKeepPrivChk.Checked;
+                _shihabConfig.ShihabEnableClickNLoad = _shihabCnlChk != null && _shihabCnlChk.Checked;
+                _shihabConfig.ShihabUseUserYtDlpConfig = _shihabUserYtCfgChk != null && _shihabUserYtCfgChk.Checked;
+                _shihabConfig.ShihabUseHatchZipInPlace = _shihabHatchZipChk != null && _shihabHatchZipChk.Checked;
                 _shihabConfig.ShihabDarkMode = _shihabDarkChk.Checked;
                 if (_shihabThemePresetCombo.SelectedItem != null)
                 {
@@ -175,7 +180,7 @@ namespace ShihabMehediIDM
             {
                 MessageBox.Show(
                     this,
-                    "MHS Download Manager 1.0.7 Configuration\nDeveloper: Mehedi Hasan Shihab (https://sshihabb007.github.io/)\n\n" +
+                    "MHS Download Manager " + ShihabAutoUpdater.GetCurrentAppVersion() + " Configuration\nDeveloper: Mehedi Hasan Shihab (https://sshihabb007.github.io/)\n\n" +
                     "• General: Browser integration, startup launch, shortcut keys & web player panels\n" +
                     "• File types: Auto-captured extensions (wildcards like R0* supported), site & URL exclusions\n" +
                     "• Save to: Category folders, extensions, server creation/modification dates & temp directory\n" +
@@ -188,6 +193,62 @@ namespace ShihabMehediIDM
             AcceptButton = shihabSaveOk;
             CancelButton = mehediCancel;
             Controls.AddRange(new Control[] { mehediTabs, shihabSaveOk, mehediCancel, shihabHelpBtn });
+        }
+
+        private void ShowArchivePasswordsModal(bool shihabDark)
+        {
+            using (Form dlg = CreateMehediSubModal("Saved Archive Passwords (DPAPI Vault) — MHS Download Manager", new Size(460, 260), shihabDark))
+            {
+                Color surf = ShihabThemePalette.GetShihabSurfaceBg(shihabDark);
+                if (_shihabConfig.ShihabSavedArchivePasswords == null)
+                {
+                    _shihabConfig.ShihabSavedArchivePasswords = new List<string>();
+                }
+                Label countLbl = new Label
+                {
+                    Location = new Point(16, 16),
+                    Size = new Size(412, 36),
+                    Text = string.Format("Stored archive passwords (encrypted via Windows DPAPI): {0}\r\nPasswords are tried in MRU order when auto-extracting protected archives.",
+                        _shihabConfig.ShihabSavedArchivePasswords.Count)
+                };
+                Label addLbl = new Label { Text = "Add password:", Location = new Point(16, 66), AutoSize = true };
+                TextBox pwdBox = new TextBox
+                {
+                    Location = new Point(16, 88),
+                    Width = 310,
+                    UseSystemPasswordChar = true,
+                    BackColor = surf,
+                    ForeColor = dlg.ForeColor
+                };
+                Button addBtn = ShihabThemePalette.CreateMehediStyledButton("Add", ShihabThemePalette.GetShihabAccentBlue(), Color.White, 92);
+                addBtn.Height = 25;
+                addBtn.Location = new Point(334, 86);
+                addBtn.Click += delegate
+                {
+                    string raw = pwdBox.Text ?? "";
+                    if (raw.Length == 0) return;
+                    ShihabSafeArchiveExtractor.PromoteSavedArchivePasswordMru(_shihabConfig, null, raw);
+                    pwdBox.Text = "";
+                    countLbl.Text = string.Format("Stored archive passwords (encrypted via Windows DPAPI): {0}\r\nPasswords are tried in MRU order when auto-extracting protected archives.",
+                        _shihabConfig.ShihabSavedArchivePasswords.Count);
+                };
+
+                Button clearBtn = ShihabThemePalette.CreateMehediStyledButton("Clear All Saved Passwords", ShihabThemePalette.GetMehediAccentRed(), Color.White, 210);
+                clearBtn.Location = new Point(16, 134);
+                clearBtn.Click += delegate
+                {
+                    _shihabConfig.ShihabSavedArchivePasswords.Clear();
+                    countLbl.Text = "Stored archive passwords (encrypted via Windows DPAPI): 0\r\nAll saved archive passwords have been cleared.";
+                };
+
+                Button doneBtn = ShihabThemePalette.CreateMehediStyledButton("Close", surf, dlg.ForeColor, 96);
+                doneBtn.Location = new Point(330, 176);
+                doneBtn.DialogResult = DialogResult.OK;
+
+                dlg.Controls.AddRange(new Control[] { countLbl, addLbl, pwdBox, addBtn, clearBtn, doneBtn });
+                dlg.AcceptButton = doneBtn;
+                dlg.ShowDialog(this);
+            }
         }
 
         private static void PreviewShihabSoundFile(string mehediWavPath, bool shihabIsError)

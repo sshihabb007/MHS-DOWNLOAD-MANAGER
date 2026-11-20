@@ -94,6 +94,7 @@ namespace ShihabMehediIDM
             string currentYyyyMmDd = shihabNow.ToString("yyyy-MM-dd");
             string shihabDayShort = shihabNow.ToString("ddd", CultureInfo.InvariantCulture);
             bool configMutated = false;
+            bool anyScheduledStartFired = false;
 
             for (int mehediQ = 0; mehediQ < _mehediConfig.MehediQueues.Count; mehediQ++)
             {
@@ -112,6 +113,7 @@ namespace ShihabMehediIDM
                     shihabQueue.ShihabLastAutoStartMinute != mehediCurrentHhMm)
                 {
                     shihabQueue.ShihabLastAutoStartMinute = mehediCurrentHhMm;
+                    anyScheduledStartFired = true;
                     if (onceDateMatches)
                     {
                         shihabQueue.MehediEnableScheduledStart = false;
@@ -121,7 +123,7 @@ namespace ShihabMehediIDM
                     StartShihabQueue(shihabQueue.ShihabQueueName);
                 }
 
-                if (shihabQueue.MehediEnableScheduledStop &&
+                if (shihabQueue.MehediEnableScheduledStop && mehediDayMatches &&
                     string.Equals((shihabQueue.ShihabStopTimeHhMm ?? "").Trim(), mehediCurrentHhMm, StringComparison.Ordinal) &&
                     shihabQueue.MehediLastAutoStopMinute != mehediCurrentHhMm)
                 {
@@ -148,6 +150,9 @@ namespace ShihabMehediIDM
             if (configMutated)
             {
                 try { _shihabStore.SaveMehediConfig(_mehediConfig); } catch { }
+            }
+            if (configMutated || anyScheduledStartFired)
+            {
                 SyncNextScheduledWakeTimer();
             }
         }
@@ -193,6 +198,7 @@ namespace ShihabMehediIDM
                 {
                     mehediQ.MehediIsRunningNow = true;
                     mehediQ.MehediHadWorkInCurrentRun = false;
+                    mehediQ.MehediQueueRunBaselineBytes = SumQueueDownloadedBytes(canonical);
                     if (mehediQ.MehediEnablePeriodicSync ||
                         string.Equals(mehediQ.ShihabQueueName, "Synchronization Queue", StringComparison.OrdinalIgnoreCase))
                     {
@@ -202,6 +208,22 @@ namespace ShihabMehediIDM
                     PumpRunningMehediQueue(mehediQ);
                 }
             }
+        }
+
+        private long SumQueueDownloadedBytes(string canonicalQueueName)
+        {
+            long sum = 0L;
+            List<ShihabDownloadItem> snap = GetShihabDownloadsSnapshot();
+            for (int i = 0; i < snap.Count; i++)
+            {
+                ShihabDownloadItem it = snap[i];
+                if (it == null || string.IsNullOrWhiteSpace(it.MehediQueueName)) continue;
+                if (string.Equals(ResolveCanonicalQueueName(it.MehediQueueName), canonicalQueueName, StringComparison.OrdinalIgnoreCase))
+                {
+                    sum += Math.Max(0L, it.MehediDownloadedBytes);
+                }
+            }
+            return sum;
         }
 
         public void StopShihabQueue(string mehediQueueName)
@@ -304,6 +326,18 @@ namespace ShihabMehediIDM
 
         private void PumpRunningMehediQueue(MehediQueueConfig shihabQueue)
         {
+            if (shihabQueue.ShihabQuotaMegabytes > 0)
+            {
+                long quotaLimitBytes = (long)shihabQueue.ShihabQuotaMegabytes * 1024L * 1024L;
+                long usedInRun = SumQueueDownloadedBytes(shihabQueue.ShihabQueueName) - shihabQueue.MehediQueueRunBaselineBytes;
+                if (usedInRun >= quotaLimitBytes)
+                {
+                    EmitShihabLog(string.Format("[Scheduler] Queue '{0}' reached per-queue quota ({1} MB); pausing queue.", shihabQueue.ShihabQueueName, shihabQueue.ShihabQuotaMegabytes));
+                    StopShihabQueue(shihabQueue.ShihabQueueName);
+                    return;
+                }
+            }
+
             List<ShihabDownloadItem> mehediSnap = GetShihabDownloadsSnapshot();
             int shihabActiveInQueue = 0;
             List<ShihabDownloadItem> mehediWaiting = new List<ShihabDownloadItem>();

@@ -177,6 +177,28 @@ namespace ShihabMehediIDM
             {
                 shihabLoaded.ShihabDebridAccounts = MehediAppConfiguration.CreateShihabDefault(MehediBaseDirectory).ShihabDebridAccounts;
             }
+            else
+            {
+                string[] allProviders = new string[] { "Real-Debrid", "AllDebrid", "Premiumize", "TorBox", "Mega-Debrid" };
+                for (int pi = 0; pi < allProviders.Length; pi++)
+                {
+                    bool found = false;
+                    for (int ai = 0; ai < shihabLoaded.ShihabDebridAccounts.Count; ai++)
+                    {
+                        if (shihabLoaded.ShihabDebridAccounts[ai] != null &&
+                            string.Equals(shihabLoaded.ShihabDebridAccounts[ai].ShihabProvider, allProviders[pi], StringComparison.OrdinalIgnoreCase))
+                        {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found)
+                    {
+                        shihabLoaded.ShihabDebridAccounts.Add(new ShihabDebridAccount { ShihabProvider = allProviders[pi], MehediEnabled = false });
+                    }
+                }
+            }
+            if (shihabLoaded.ShihabSavedArchivePasswords == null) shihabLoaded.ShihabSavedArchivePasswords = new List<string>();
             if (shihabLoaded.ShihabRssFeeds == null) shihabLoaded.ShihabRssFeeds = new List<ShihabRssFeedConfig>();
             if (shihabLoaded.ShihabPairedRemoteDevices == null) shihabLoaded.ShihabPairedRemoteDevices = new List<ShihabPairedRemoteDevice>();
             if (shihabLoaded.ShihabQuotaHistory == null) shihabLoaded.ShihabQuotaHistory = new List<ShihabQuotaBucketEntry>();
@@ -187,6 +209,14 @@ namespace ShihabMehediIDM
             if (string.IsNullOrWhiteSpace(shihabLoaded.MehediAutoCaptureExtensions)) shihabLoaded.MehediAutoCaptureExtensions = MehediAppConfiguration.DefaultShihabAutoCaptureExtensions;
             if (string.IsNullOrWhiteSpace(shihabLoaded.ShihabExcludedSitesSpaceSeparated)) shihabLoaded.ShihabExcludedSitesSpaceSeparated = MehediAppConfiguration.DefaultMehediExcludedSites;
             if (shihabLoaded.MehediLocalBridgePort <= 0) shihabLoaded.MehediLocalBridgePort = 45779;
+            if (string.IsNullOrWhiteSpace(shihabLoaded.ShihabLocalBridgeToken))
+            {
+                string existingTok = TryReadExistingBridgeTokenFile();
+                if (!string.IsNullOrWhiteSpace(existingTok))
+                {
+                    shihabLoaded.ShihabLocalBridgeToken = existingTok;
+                }
+            }
             if (shihabLoaded.ShihabRemoteWebPort <= 0) shihabLoaded.ShihabRemoteWebPort = 8463;
             if (string.IsNullOrWhiteSpace(shihabLoaded.ShihabRemotePairingCode) ||
                 string.Equals(shihabLoaded.ShihabRemotePairingCode.Trim(), "48291037", StringComparison.Ordinal))
@@ -277,6 +307,21 @@ namespace ShihabMehediIDM
             }
         }
 
+        private string TryReadExistingBridgeTokenFile()
+        {
+            try
+            {
+                string tokPath = Path.Combine(MehediBaseDirectory, "bridge.token");
+                if (File.Exists(tokPath))
+                {
+                    string existing = File.ReadAllText(tokPath, Encoding.UTF8).Trim();
+                    if (!string.IsNullOrWhiteSpace(existing)) return existing;
+                }
+            }
+            catch { }
+            return "";
+        }
+
         public void SaveMehediConfig(MehediAppConfiguration shihabCfg)
         {
             if (shihabCfg == null) return;
@@ -287,7 +332,10 @@ namespace ShihabMehediIDM
                 {
                     if (string.IsNullOrWhiteSpace(shihabCfg.ShihabLocalBridgeToken))
                     {
-                        shihabCfg.ShihabLocalBridgeToken = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
+                        string existingTok = TryReadExistingBridgeTokenFile();
+                        shihabCfg.ShihabLocalBridgeToken = !string.IsNullOrWhiteSpace(existingTok)
+                            ? existingTok
+                            : (Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N"));
                     }
                     ShihabSecretsVault.SealConfigurationSecrets(shihabCfg);
                     Directory.CreateDirectory(MehediBaseDirectory);
@@ -369,6 +417,11 @@ namespace ShihabMehediIDM
 
         public void SaveShihabDownloads(List<ShihabDownloadItem> mehediItems)
         {
+            SaveShihabDownloads(mehediItems, false);
+        }
+
+        public void SaveShihabDownloads(List<ShihabDownloadItem> mehediItems, bool keepPrivateDownloads)
+        {
             lock (_shihabSyncLock)
             {
                 string mehediTmp = MehediDownloadsFilePath + "." + Path.GetRandomFileName() + ".tmp";
@@ -382,7 +435,18 @@ namespace ShihabMehediIDM
                         for (int i = 0; i < mehediItems.Count; i++)
                         {
                             ShihabDownloadItem item = mehediItems[i];
-                            if (item == null || item.ShihabIsPrivateIncognito) continue;
+                            if (item == null) continue;
+                            if (item.ShihabIsPrivateIncognito)
+                            {
+                                if (!keepPrivateDownloads) continue;
+                                ShihabDownloadItem copy = item.CreatePersistenceCopyWithProtectedSecrets();
+                                copy.ShihabCookies = "";
+                                copy.MehediAuthPassword = "";
+                                copy.ShihabAuthUser = "";
+                                copy.ShihabPostBody = "";
+                                shihabDb.ShihabItems.Add(copy);
+                                continue;
+                            }
                             shihabDb.ShihabItems.Add(item.CreatePersistenceCopyWithProtectedSecrets());
                         }
                     }

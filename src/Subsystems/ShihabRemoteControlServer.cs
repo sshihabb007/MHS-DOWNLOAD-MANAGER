@@ -46,7 +46,8 @@ namespace ShihabMehediIDM
                 {
                     if (engine != null && config != null && !string.IsNullOrWhiteSpace(u))
                     {
-                        MehediBrowserBridgeServer.SendUrlToExistingShihabInstance(config.MehediLocalBridgePort, u, "", n);
+                        string customDir = store != null ? store.MehediBaseDirectory : null;
+                        MehediBrowserBridgeServer.SendUrlToExistingShihabInstance(config.MehediLocalBridgePort, u, "", n, customDir);
                     }
                 },
                 delegate(string act, string id)
@@ -458,7 +459,7 @@ namespace ShihabMehediIDM
                             for (int i = 0; i < items.Count; i++)
                             {
                                 ShihabDownloadItem it = items[i];
-                                if (it == null) continue;
+                                if (it == null || it.ShihabIsPrivateIncognito) continue;
                                 Dictionary<string, object> row = new Dictionary<string, object>();
                                 row["id"] = it.ShihabId ?? "";
                                 row["name"] = it.ShihabFileName ?? "";
@@ -471,7 +472,37 @@ namespace ShihabMehediIDM
                             Dictionary<string, object> payload = new Dictionary<string, object>();
                             payload["ok"] = true;
                             payload["items"] = arr;
+                            payload["speedLimitEnabled"] = cfg.MehediGlobalSpeedLimiterEnabled;
+                            payload["speedLimitKb"] = cfg.ShihabGlobalSpeedLimitKb;
                             WriteHttpResponse(ns, 200, "application/json; charset=utf-8", ShihabJsonCodec.Serialize(payload), null);
+                            return;
+                        }
+
+                        if (path == "/api/speedlimit" && method == "POST")
+                        {
+                            if (reqJson != null)
+                            {
+                                if (reqJson.ContainsKey("enabled"))
+                                {
+                                    cfg.MehediGlobalSpeedLimiterEnabled = ShihabJsonCodec.GetBool(reqJson, "enabled", cfg.MehediGlobalSpeedLimiterEnabled);
+                                }
+                                else
+                                {
+                                    cfg.MehediGlobalSpeedLimiterEnabled = !cfg.MehediGlobalSpeedLimiterEnabled;
+                                }
+                                int reqKb = ShihabJsonCodec.GetInt(reqJson, "limitKb", 0);
+                                if (reqKb > 0) cfg.ShihabGlobalSpeedLimitKb = Math.Max(10, Math.Min(1000000, reqKb));
+                            }
+                            else
+                            {
+                                cfg.MehediGlobalSpeedLimiterEnabled = !cfg.MehediGlobalSpeedLimiterEnabled;
+                            }
+                            if (_saveConfig != null) _saveConfig();
+                            Dictionary<string, object> respObj = new Dictionary<string, object>();
+                            respObj["ok"] = true;
+                            respObj["speedLimitEnabled"] = cfg.MehediGlobalSpeedLimiterEnabled;
+                            respObj["speedLimitKb"] = cfg.ShihabGlobalSpeedLimitKb;
+                            WriteHttpResponse(ns, 200, "application/json; charset=utf-8", ShihabJsonCodec.Serialize(respObj), null);
                             return;
                         }
 
@@ -851,8 +882,11 @@ button.danger{background:#be123c}
   <div class='card' style='display:flex;gap:8px;flex-wrap:wrap;align-items:center'>
     <input id='urlInp' placeholder='https://... or magnet:?xt=...' style='flex:1;min-width:200px'>
     <button id='addBtn'>+ Add URL</button>
+    <input id='torInp' type='file' accept='.torrent' style='display:none'>
+    <button class='sec' id='torBtn'>+ .torrent</button>
     <button class='sec' id='qStartBtn'>Start Queue</button>
     <button class='sec' id='qStopBtn'>Stop Queue</button>
+    <button class='sec' id='spdBtn'>Speed Limit: Off</button>
     <button class='danger' id='forgetBtn'>Unpair</button>
   </div>
   <div id='list'></div>
@@ -863,11 +897,17 @@ button.danger{background:#be123c}
 var tok = localStorage.getItem('mhs_remote_token') || '';
 if (location.hash.indexOf('#pair=') === 0) {
   document.getElementById('codeInp').value = decodeURIComponent(location.hash.substring(6));
+} else if (location.search.indexOf('code=') >= 0) {
+  var m = /[?&]code=([0-9]{8})/.exec(location.search);
+  if (m) document.getElementById('codeInp').value = m[1];
 }
 document.getElementById('pairBtn').addEventListener('click', pairNow);
 document.getElementById('addBtn').addEventListener('click', addUrl);
+document.getElementById('torBtn').addEventListener('click', function(){ document.getElementById('torInp').click(); });
+document.getElementById('torInp').addEventListener('change', uploadTorrentFile);
 document.getElementById('qStartBtn').addEventListener('click', function(){ qAct('start'); });
 document.getElementById('qStopBtn').addEventListener('click', function(){ qAct('stop'); });
+document.getElementById('spdBtn').addEventListener('click', toggleSpeedLimit);
 document.getElementById('forgetBtn').addEventListener('click', forgetDev);
 document.getElementById('list').addEventListener('click', function(e) {
   var btn = e.target;
@@ -903,6 +943,23 @@ function addUrl() {
   fetch('/api/add', { method: 'POST', headers: { Authorization: 'Bearer ' + tok }, body: JSON.stringify({ url: u }) })
     .then(function() { document.getElementById('urlInp').value = ''; refresh(); });
 }
+function uploadTorrentFile(ev) {
+  var f = ev.target.files && ev.target.files[0];
+  if (!f) return;
+  var rd = new FileReader();
+  rd.onload = function() {
+    var dataUrl = String(rd.result || '');
+    var comma = dataUrl.indexOf(',');
+    var b64 = comma >= 0 ? dataUrl.substring(comma + 1) : dataUrl;
+    fetch('/api/torrent', { method: 'POST', headers: { Authorization: 'Bearer ' + tok }, body: JSON.stringify({ name: f.name, torrentBase64: b64 }) })
+      .then(function() { ev.target.value = ''; refresh(); });
+  };
+  rd.readAsDataURL(f);
+}
+function toggleSpeedLimit() {
+  fetch('/api/speedlimit', { method: 'POST', headers: { Authorization: 'Bearer ' + tok }, body: '{}' })
+    .then(function() { refresh(); });
+}
 function act(a, id) {
   fetch('/api/action', { method: 'POST', headers: { Authorization: 'Bearer ' + tok }, body: JSON.stringify({ action: a, id: id }) })
     .then(function() { refresh(); });
@@ -931,6 +988,10 @@ function refresh() {
     })
     .then(function(d) {
       if (!d || !d.items) return;
+      var spdBtn = document.getElementById('spdBtn');
+      if (spdBtn) {
+        spdBtn.textContent = d.speedLimitEnabled ? ('Speed Limit: ' + (d.speedLimitKb || 1024) + ' KB/s') : 'Speed Limit: Off';
+      }
       var listEl = document.getElementById('list');
       listEl.textContent = '';
       if (d.items.length === 0) {

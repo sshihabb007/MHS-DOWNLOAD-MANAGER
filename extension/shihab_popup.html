@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>MHS Download Manager 1.0.7 (Mehedi Hasan Shihab)</title>
+  <title>MHS Download Manager 1.1.0 (Mehedi Hasan Shihab)</title>
   <link rel="stylesheet" href="shihab_popup.css" />
   <script src="mehedi_popup.js" defer></script>
 </head>
@@ -13,7 +13,7 @@
       <div>
         <div class="shihab-title-row">
           <span class="shihab-dot" id="shihabStatusDot"></span>
-          <span class="shihab-title">MHS Download Manager 1.0.7 (Mehedi Hasan Shihab)</span>
+          <span class="shihab-title">MHS Download Manager 1.1.0 (Mehedi Hasan Shihab)</span>
         </div>
         <div class="mehedi-sub" id="mehediConnectionSub">Checking mdm.exe bridge...</div>
       </div>
@@ -25,6 +25,31 @@
     <span id="shihabUpdateBannerText">Update Available!</span>
     <button class="shihab-update-open-btn" id="shihabUpdateBannerBtn">Update</button>
   </div>
+
+  <section class="mehedi-section">
+    <div class="shihab-sec-head">
+      <span class="shihab-label">Target Server</span>
+      <button class="shihab-mini-link-btn" id="shihabTogglePairBtn" type="button">+ Pair Remote</button>
+    </div>
+    <div class="mehedi-row">
+      <select id="shihabServerSelect" class="shihab-server-select">
+        <option value="local">This computer (127.0.0.1)</option>
+      </select>
+      <button class="shihab-secondary-btn shihab-unpair-btn" id="shihabUnpairServerBtn" title="Unpair selected remote server" style="display:none;">×</button>
+    </div>
+    <div id="shihabPairRemoteBox" class="shihab-pair-box" style="display:none;">
+      <input type="text" id="shihabRemoteUrlInput" placeholder="http://192.168.1.50:8463" />
+      <div class="mehedi-row">
+        <input type="text" id="shihabRemoteCodeInput" placeholder="8-digit pairing code" />
+        <button class="mehedi-primary-btn" id="shihabPairSubmitBtn" type="button">Pair</button>
+      </div>
+      <div id="shihabPairStatusMsg" class="shihab-pair-status"></div>
+    </div>
+    <label class="shihab-fullscreen-toggle">
+      <input type="checkbox" id="shihabHideFullscreenChk" />
+      <span>Hide floating video button in fullscreen</span>
+    </label>
+  </section>
 
   <section class="mehedi-section">
     <label class="shihab-label">Quick Send URL / Magnet to MHS Download Manager</label>

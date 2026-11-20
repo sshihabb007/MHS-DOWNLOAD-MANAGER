@@ -27,8 +27,12 @@ namespace ShihabMehediIDM
             @"/file/d/([a-zA-Z0-9_\-]+)",
             RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant,
             DebridRegexTimeout);
+        private static readonly Regex DriveFolderPathRegex = new Regex(
+            @"/drive/(?:u/\d+/)?folders/([a-zA-Z0-9_\-]+)",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant,
+            DebridRegexTimeout);
         private static readonly Regex DriveQueryIdRegex = new Regex(
-            @"[?&]id=([a-zA-Z0-9_\-]+)",
+            @"[?&](?:id|docid)=([a-zA-Z0-9_\-]+)",
             RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant,
             DebridRegexTimeout);
         private static readonly Regex GdriveFormRegex = new Regex(
@@ -127,16 +131,18 @@ namespace ShihabMehediIDM
 
             try
             {
-                bool hasEnabled = false;
+                bool hasRealDebridEnabled = false;
                 for (int i = 0; i < cfg.ShihabDebridAccounts.Count; i++)
                 {
-                    if (cfg.ShihabDebridAccounts[i] != null && cfg.ShihabDebridAccounts[i].MehediEnabled)
+                    if (cfg.ShihabDebridAccounts[i] != null &&
+                        cfg.ShihabDebridAccounts[i].MehediEnabled &&
+                        string.Equals(cfg.ShihabDebridAccounts[i].ShihabProvider, "Real-Debrid", StringComparison.OrdinalIgnoreCase))
                     {
-                        hasEnabled = true;
+                        hasRealDebridEnabled = true;
                         break;
                     }
                 }
-                if (!hasEnabled) return;
+                if (!hasRealDebridEnabled) return;
 
                 ShihabAutoUpdater.EnforceModernTls();
                 HttpWebRequest req = (HttpWebRequest)WebRequest.Create("https://api.real-debrid.com/rest/1.0/hosts/domains");
@@ -198,10 +204,34 @@ namespace ShihabMehediIDM
                     Match mQuery = DriveQueryIdRegex.Match(u.Query);
                     if (mQuery.Success) fileId = mQuery.Groups[1].Value;
                 }
+                if (string.IsNullOrEmpty(fileId) && !string.IsNullOrEmpty(u.Fragment))
+                {
+                    Match mFrag = DrivePathIdRegex.Match(u.Fragment);
+                    if (mFrag.Success) fileId = mFrag.Groups[1].Value;
+                    if (string.IsNullOrEmpty(fileId))
+                    {
+                        Match mFragQ = DriveQueryIdRegex.Match(u.Fragment);
+                        if (mFragQ.Success) fileId = mFragQ.Groups[1].Value;
+                    }
+                }
                 if (!string.IsNullOrEmpty(fileId))
                 {
                     directUrl = "https://drive.usercontent.google.com/download?id=" + Uri.EscapeDataString(fileId) + "&export=download&confirm=t";
                     return true;
+                }
+                // Shared folder preview URLs carrying an embedded file segment (e.g. /drive/folders/<folderId>?... or /folders/<folderId>/file/<fileId>)
+                Match mFolder = DriveFolderPathRegex.Match(u.AbsolutePath);
+                if (mFolder.Success && u.AbsolutePath.IndexOf("/file/", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    int idx = u.AbsolutePath.IndexOf("/file/", StringComparison.OrdinalIgnoreCase) + 6;
+                    string tail = u.AbsolutePath.Substring(idx).Trim('/');
+                    int slash = tail.IndexOf('/');
+                    string candidateId = slash > 0 ? tail.Substring(0, slash) : tail;
+                    if (candidateId.Length >= 10)
+                    {
+                        directUrl = "https://drive.usercontent.google.com/download?id=" + Uri.EscapeDataString(candidateId) + "&export=download&confirm=t";
+                        return true;
+                    }
                 }
             }
             return false;
@@ -371,6 +401,26 @@ namespace ShihabMehediIDM
                             return true;
                         }
                     }
+                    else if (string.Equals(acct.ShihabProvider, "TorBox", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (UnrestrictWithTorBox(originalUrl, linkPassword, apiKey, cfg, out candUrl, out candName) &&
+                            IsSafeResolvedExternalUrl(null, candUrl, out unrestrictedUrl))
+                        {
+                            unlockedFileName = candName;
+                            providerUsed = "TorBox";
+                            return true;
+                        }
+                    }
+                    else if (string.Equals(acct.ShihabProvider, "Mega-Debrid", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (UnrestrictWithMegaDebrid(originalUrl, linkPassword, apiKey, cfg, out candUrl, out candName) &&
+                            IsSafeResolvedExternalUrl(null, candUrl, out unrestrictedUrl))
+                        {
+                            unlockedFileName = candName;
+                            providerUsed = "Mega-Debrid";
+                            return true;
+                        }
+                    }
                 }
                 catch
                 {
@@ -436,31 +486,66 @@ namespace ShihabMehediIDM
                             using (Stream s2 = selReq.GetRequestStream()) s2.Write(selBody, 0, selBody.Length);
                             using (HttpWebResponse r2 = (HttpWebResponse)selReq.GetResponse()) { }
 
-                            HttpWebRequest infoReq = (HttpWebRequest)WebRequest.Create("https://api.real-debrid.com/rest/1.0/torrents/info/" + Uri.EscapeDataString(torrentId));
-                            infoReq.AllowAutoRedirect = false;
-                            infoReq.Headers["Authorization"] = "Bearer " + token.Trim();
-                            infoReq.Timeout = 10000;
-                            infoReq.ReadWriteTimeout = 10000;
-                            ShihabDnsAndNetworkManager.ApplyNetworkBindingAndProxy(infoReq, cfg, infoReq.RequestUri.AbsoluteUri);
-                            using (HttpWebResponse r3 = (HttpWebResponse)infoReq.GetResponse())
+                            for (int rdPoll = 0; rdPoll < 5; rdPoll++)
                             {
-                                string infoJson = ReadBoundedResponseUtf8(r3);
-                                Match linkM = RdLinksRegex.Match(infoJson);
-                                if (linkM.Success)
+                                if (rdPoll > 0) Thread.Sleep(1500);
+                                HttpWebRequest infoReq = (HttpWebRequest)WebRequest.Create("https://api.real-debrid.com/rest/1.0/torrents/info/" + Uri.EscapeDataString(torrentId));
+                                infoReq.AllowAutoRedirect = false;
+                                infoReq.Headers["Authorization"] = "Bearer " + token.Trim();
+                                infoReq.Timeout = 10000;
+                                infoReq.ReadWriteTimeout = 10000;
+                                ShihabDnsAndNetworkManager.ApplyNetworkBindingAndProxy(infoReq, cfg, infoReq.RequestUri.AbsoluteUri);
+                                using (HttpWebResponse r3 = (HttpWebResponse)infoReq.GetResponse())
                                 {
-                                    string hostLink = UnescapeJsonStringFragment(linkM.Groups[1].Value);
-                                    int chunks;
-                                    string candUrl;
-                                    string candName;
-                                    if (UnrestrictWithRealDebrid(hostLink, "", token, cfg, out candUrl, out candName, out chunks) &&
-                                        IsSafeResolvedExternalUrl(null, candUrl, out unlockedDirectUrl))
+                                    string infoJson = ReadBoundedResponseUtf8(r3);
+                                    Match linkM = RdLinksRegex.Match(infoJson);
+                                    if (linkM.Success)
                                     {
-                                        unlockedFileName = candName;
-                                        providerUsed = "Real-Debrid Cloud";
-                                        return true;
+                                        string hostLink = UnescapeJsonStringFragment(linkM.Groups[1].Value);
+                                        int chunks;
+                                        string candUrl;
+                                        string candName;
+                                        if (UnrestrictWithRealDebrid(hostLink, "", token, cfg, out candUrl, out candName, out chunks) &&
+                                            IsSafeResolvedExternalUrl(null, candUrl, out unlockedDirectUrl))
+                                        {
+                                            unlockedFileName = candName;
+                                            providerUsed = "Real-Debrid Cloud";
+                                            return true;
+                                        }
+                                    }
+                                    string statusStr = ExtractJsonStringField(infoJson, "status");
+                                    if (string.Equals(statusStr, "error", StringComparison.OrdinalIgnoreCase) ||
+                                        string.Equals(statusStr, "dead", StringComparison.OrdinalIgnoreCase) ||
+                                        string.Equals(statusStr, "magnet_error", StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        break;
                                     }
                                 }
                             }
+                        }
+                    }
+                    else if (string.Equals(acct.ShihabProvider, "AllDebrid", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string candUrl;
+                        string candName;
+                        if (UnlockMagnetWithAllDebrid(magnetOrTorrent, token, cfg, out candUrl, out candName) &&
+                            IsSafeResolvedExternalUrl(null, candUrl, out unlockedDirectUrl))
+                        {
+                            unlockedFileName = candName;
+                            providerUsed = "AllDebrid Cloud";
+                            return true;
+                        }
+                    }
+                    else if (string.Equals(acct.ShihabProvider, "TorBox", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string candUrl;
+                        string candName;
+                        if (UnlockMagnetWithTorBox(magnetOrTorrent, token, cfg, out candUrl, out candName) &&
+                            IsSafeResolvedExternalUrl(null, candUrl, out unlockedDirectUrl))
+                        {
+                            unlockedFileName = candName;
+                            providerUsed = "TorBox Cloud";
+                            return true;
                         }
                     }
                     else if (string.Equals(acct.ShihabProvider, "Premiumize", StringComparison.OrdinalIgnoreCase))
@@ -610,6 +695,213 @@ namespace ShihabMehediIDM
             }
         }
 
+        private static bool UnrestrictWithTorBox(
+            string link,
+            string password,
+            string apiKey,
+            MehediAppConfiguration cfg,
+            out string directUrl,
+            out string fileName)
+        {
+            directUrl = "";
+            fileName = "";
+            ShihabAutoUpdater.EnforceModernTls();
+            string createEp = "https://api.torbox.app/v1/api/webdl/createwebdownload";
+            HttpWebRequest req = (HttpWebRequest)WebRequest.Create(createEp);
+            req.Method = "POST";
+            req.AllowAutoRedirect = false;
+            req.Headers["Authorization"] = "Bearer " + apiKey.Trim();
+            req.ContentType = "application/x-www-form-urlencoded";
+            req.Timeout = 12000;
+            req.ReadWriteTimeout = 12000;
+            ShihabDnsAndNetworkManager.ApplyNetworkBindingAndProxy(req, cfg, createEp);
+            string form = "link=" + Uri.EscapeDataString(link);
+            if (!string.IsNullOrEmpty(password)) form += "&password=" + Uri.EscapeDataString(password);
+            byte[] body = Encoding.UTF8.GetBytes(form);
+            req.ContentLength = body.Length;
+            using (Stream s = req.GetRequestStream()) s.Write(body, 0, body.Length);
+            long webId = 0;
+            using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
+            {
+                string json = ReadBoundedResponseUtf8(resp);
+                webId = ExtractJsonLongField(json, "webdownload_id");
+                if (webId <= 0) webId = ExtractJsonLongField(json, "id");
+                fileName = ExtractJsonStringField(json, "name");
+            }
+            if (webId <= 0) return false;
+
+            string dlEp = "https://api.torbox.app/v1/api/webdl/requestdl?token=" + Uri.EscapeDataString(apiKey.Trim()) +
+                "&web_id=" + webId.ToString(CultureInfo.InvariantCulture) + "&zip_link=false";
+            HttpWebRequest dlReq = (HttpWebRequest)WebRequest.Create(dlEp);
+            dlReq.Method = "GET";
+            dlReq.AllowAutoRedirect = false;
+            dlReq.Headers["Authorization"] = "Bearer " + apiKey.Trim();
+            dlReq.Timeout = 12000;
+            dlReq.ReadWriteTimeout = 12000;
+            ShihabDnsAndNetworkManager.ApplyNetworkBindingAndProxy(dlReq, cfg, dlEp);
+            using (HttpWebResponse dlResp = (HttpWebResponse)dlReq.GetResponse())
+            {
+                string dlJson = ReadBoundedResponseUtf8(dlResp);
+                directUrl = ExtractJsonStringField(dlJson, "data");
+                if (string.IsNullOrWhiteSpace(directUrl)) directUrl = ExtractJsonStringField(dlJson, "link");
+                return !string.IsNullOrWhiteSpace(directUrl);
+            }
+        }
+
+        private static bool UnlockMagnetWithTorBox(
+            string magnet,
+            string apiKey,
+            MehediAppConfiguration cfg,
+            out string directUrl,
+            out string fileName)
+        {
+            directUrl = "";
+            fileName = "";
+            ShihabAutoUpdater.EnforceModernTls();
+            string createEp = "https://api.torbox.app/v1/api/torrents/createtorrent";
+            HttpWebRequest req = (HttpWebRequest)WebRequest.Create(createEp);
+            req.Method = "POST";
+            req.AllowAutoRedirect = false;
+            req.Headers["Authorization"] = "Bearer " + apiKey.Trim();
+            req.ContentType = "application/x-www-form-urlencoded";
+            req.Timeout = 12000;
+            req.ReadWriteTimeout = 12000;
+            ShihabDnsAndNetworkManager.ApplyNetworkBindingAndProxy(req, cfg, createEp);
+            byte[] body = Encoding.UTF8.GetBytes("magnet=" + Uri.EscapeDataString(magnet));
+            req.ContentLength = body.Length;
+            using (Stream s = req.GetRequestStream()) s.Write(body, 0, body.Length);
+            long torId = 0;
+            using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
+            {
+                string json = ReadBoundedResponseUtf8(resp);
+                torId = ExtractJsonLongField(json, "torrent_id");
+                if (torId <= 0) torId = ExtractJsonLongField(json, "id");
+                fileName = ExtractJsonStringField(json, "name");
+            }
+            if (torId <= 0) return false;
+
+            for (int poll = 0; poll < 5; poll++)
+            {
+                if (poll > 0) Thread.Sleep(1500);
+                string dlEp = "https://api.torbox.app/v1/api/torrents/requestdl?token=" + Uri.EscapeDataString(apiKey.Trim()) +
+                    "&torrent_id=" + torId.ToString(CultureInfo.InvariantCulture) + "&zip_link=true";
+                HttpWebRequest dlReq = (HttpWebRequest)WebRequest.Create(dlEp);
+                dlReq.Method = "GET";
+                dlReq.AllowAutoRedirect = false;
+                dlReq.Headers["Authorization"] = "Bearer " + apiKey.Trim();
+                dlReq.Timeout = 10000;
+                dlReq.ReadWriteTimeout = 10000;
+                ShihabDnsAndNetworkManager.ApplyNetworkBindingAndProxy(dlReq, cfg, dlEp);
+                try
+                {
+                    using (HttpWebResponse dlResp = (HttpWebResponse)dlReq.GetResponse())
+                    {
+                        string dlJson = ReadBoundedResponseUtf8(dlResp);
+                        directUrl = ExtractJsonStringField(dlJson, "data");
+                        if (!string.IsNullOrWhiteSpace(directUrl)) return true;
+                    }
+                }
+                catch { }
+            }
+            return false;
+        }
+
+        private static bool UnlockMagnetWithAllDebrid(
+            string magnet,
+            string apiKey,
+            MehediAppConfiguration cfg,
+            out string directUrl,
+            out string fileName)
+        {
+            directUrl = "";
+            fileName = "";
+            ShihabAutoUpdater.EnforceModernTls();
+            string upEp = "https://api.alldebrid.com/v4/magnet/upload?agent=MHS-Download-Manager";
+            HttpWebRequest upReq = (HttpWebRequest)WebRequest.Create(upEp);
+            upReq.Method = "POST";
+            upReq.AllowAutoRedirect = false;
+            upReq.Headers["Authorization"] = "Bearer " + apiKey.Trim();
+            upReq.ContentType = "application/x-www-form-urlencoded";
+            upReq.Timeout = 12000;
+            upReq.ReadWriteTimeout = 12000;
+            ShihabDnsAndNetworkManager.ApplyNetworkBindingAndProxy(upReq, cfg, upEp);
+            byte[] body = Encoding.UTF8.GetBytes("magnets[]=" + Uri.EscapeDataString(magnet));
+            upReq.ContentLength = body.Length;
+            using (Stream s = upReq.GetRequestStream()) s.Write(body, 0, body.Length);
+            long magId = 0;
+            using (HttpWebResponse resp = (HttpWebResponse)upReq.GetResponse())
+            {
+                string json = ReadBoundedResponseUtf8(resp);
+                magId = ExtractJsonLongField(json, "id");
+                fileName = ExtractJsonStringField(json, "name");
+            }
+            if (magId <= 0) return false;
+
+            for (int poll = 0; poll < 5; poll++)
+            {
+                if (poll > 0) Thread.Sleep(1500);
+                string stUrl = "https://api.alldebrid.com/v4/magnet/status?agent=MHS-Download-Manager&id=" + magId.ToString(CultureInfo.InvariantCulture);
+                HttpWebRequest stReq = (HttpWebRequest)WebRequest.Create(stUrl);
+                stReq.AllowAutoRedirect = false;
+                stReq.Headers["Authorization"] = "Bearer " + apiKey.Trim();
+                stReq.Timeout = 10000;
+                stReq.ReadWriteTimeout = 10000;
+                ShihabDnsAndNetworkManager.ApplyNetworkBindingAndProxy(stReq, cfg, stUrl);
+                using (HttpWebResponse stResp = (HttpWebResponse)stReq.GetResponse())
+                {
+                    string stJson = ReadBoundedResponseUtf8(stResp);
+                    string hostLink = ExtractJsonStringField(stJson, "link");
+                    if (!string.IsNullOrWhiteSpace(hostLink) && hostLink.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+                    {
+                        int chunks;
+                        string candUrl;
+                        string candName;
+                        if (UnrestrictWithAllDebrid(hostLink, "", apiKey, cfg, out candUrl, out candName, out chunks))
+                        {
+                            directUrl = candUrl;
+                            if (!string.IsNullOrWhiteSpace(candName)) fileName = candName;
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        private static bool UnrestrictWithMegaDebrid(
+            string link,
+            string password,
+            string token,
+            MehediAppConfiguration cfg,
+            out string directUrl,
+            out string fileName)
+        {
+            directUrl = "";
+            fileName = "";
+            ShihabAutoUpdater.EnforceModernTls();
+            string endpoint = "https://www.mega-debrid.eu/api.php?action=getLink&token=" + Uri.EscapeDataString(token.Trim());
+            HttpWebRequest req = (HttpWebRequest)WebRequest.Create(endpoint);
+            req.Method = "POST";
+            req.AllowAutoRedirect = false;
+            req.ContentType = "application/x-www-form-urlencoded";
+            req.Timeout = 12000;
+            req.ReadWriteTimeout = 12000;
+            ShihabDnsAndNetworkManager.ApplyNetworkBindingAndProxy(req, cfg, endpoint);
+            string form = "link=" + Uri.EscapeDataString(link);
+            if (!string.IsNullOrEmpty(password)) form += "&password=" + Uri.EscapeDataString(password);
+            byte[] body = Encoding.UTF8.GetBytes(form);
+            req.ContentLength = body.Length;
+            using (Stream s = req.GetRequestStream()) s.Write(body, 0, body.Length);
+            using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
+            {
+                string json = ReadBoundedResponseUtf8(resp);
+                directUrl = ExtractJsonStringField(json, "debridLink");
+                if (string.IsNullOrWhiteSpace(directUrl)) directUrl = ExtractJsonStringField(json, "link");
+                fileName = ExtractJsonStringField(json, "filename");
+                return !string.IsNullOrWhiteSpace(directUrl);
+            }
+        }
+
         public static string CheckAccountStatus(string providerName, string plainToken)
         {
             ShihabDebridAccount acct = new ShihabDebridAccount
@@ -637,6 +929,7 @@ namespace ShihabMehediIDM
             {
                 ShihabAutoUpdater.EnforceModernTls();
                 string url = "https://api.real-debrid.com/rest/1.0/user";
+                bool sendBearerHeader = true;
                 if (string.Equals(acct.ShihabProvider, "AllDebrid", StringComparison.OrdinalIgnoreCase))
                 {
                     url = "https://api.alldebrid.com/v4/user?agent=MHS-Download-Manager";
@@ -645,26 +938,49 @@ namespace ShihabMehediIDM
                 {
                     url = "https://www.premiumize.me/api/account/info";
                 }
+                else if (string.Equals(acct.ShihabProvider, "TorBox", StringComparison.OrdinalIgnoreCase))
+                {
+                    url = "https://api.torbox.app/v1/api/user/me";
+                }
+                else if (string.Equals(acct.ShihabProvider, "Mega-Debrid", StringComparison.OrdinalIgnoreCase))
+                {
+                    url = "https://www.mega-debrid.eu/api.php?action=getUserHistory&token=" + Uri.EscapeDataString(token.Trim());
+                    sendBearerHeader = false;
+                }
 
                 HttpWebRequest req = (HttpWebRequest)WebRequest.Create(url);
                 req.AllowAutoRedirect = false;
-                req.Headers["Authorization"] = "Bearer " + token.Trim();
+                if (sendBearerHeader)
+                {
+                    req.Headers["Authorization"] = "Bearer " + token.Trim();
+                }
                 req.Timeout = 8000;
                 req.ReadWriteTimeout = 8000;
+                MehediAppConfiguration activeCfg = ShihabLocalNetworkRelay.ActiveConfig;
+                if (activeCfg != null)
+                {
+                    ShihabDnsAndNetworkManager.ApplyNetworkBindingAndProxy(req, activeCfg, url);
+                }
                 using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
                 {
                     string json = ReadBoundedResponseUtf8(resp);
-                    if (json.IndexOf("\"status\":\"error\"", StringComparison.OrdinalIgnoreCase) >= 0)
+                    if (json.IndexOf("\"status\":\"error\"", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        json.IndexOf("\"response_code\":\"error\"", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        json.IndexOf("\"success\":false", StringComparison.OrdinalIgnoreCase) >= 0)
                     {
                         string errMsg = ExtractJsonStringField(json, "message");
+                        if (string.IsNullOrEmpty(errMsg)) errMsg = ExtractJsonStringField(json, "detail");
+                        if (string.IsNullOrEmpty(errMsg)) errMsg = ExtractJsonStringField(json, "response_text");
                         acct.ShihabAccountStatus = "Error: " + (string.IsNullOrEmpty(errMsg) ? "Invalid token" : errMsg);
                         statusSummary = acct.ShihabAccountStatus;
                         return false;
                     }
                     string user = ExtractJsonStringField(json, "username");
+                    if (string.IsNullOrEmpty(user)) user = ExtractJsonStringField(json, "email");
                     if (string.IsNullOrEmpty(user)) user = ExtractJsonStringField(json, "customer_id");
                     string type = ExtractJsonStringField(json, "type");
                     string exp = ExtractJsonStringField(json, "expiration");
+                    if (string.IsNullOrEmpty(exp)) exp = ExtractJsonStringField(json, "premium_expires_at");
                     if (string.IsNullOrEmpty(exp))
                     {
                         long unixExp = ExtractJsonLongField(json, "premiumUntil");

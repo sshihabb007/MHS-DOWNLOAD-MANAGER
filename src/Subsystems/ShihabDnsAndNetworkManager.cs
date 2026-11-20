@@ -248,10 +248,21 @@ namespace ShihabMehediIDM
                     return null;
                 }
             }
-            else if (string.Equals(dnsMode, "Plain", StringComparison.OrdinalIgnoreCase) &&
+            else if ((string.Equals(dnsMode, "Plain", StringComparison.OrdinalIgnoreCase) ||
+                      string.Equals(dnsMode, "PlainDNS", StringComparison.OrdinalIgnoreCase)) &&
                      cfg != null && !string.IsNullOrWhiteSpace(cfg.ShihabPlainDnsServer))
             {
-                resolvedIp = ShihabLocalNetworkRelay.QueryPlainUdpDnsA(cleanHost, cfg.ShihabPlainDnsServer.Trim());
+                IPAddress boundDnsIp = null;
+                if (!string.IsNullOrWhiteSpace(cfg.ShihabBoundNetworkAdapter) &&
+                    !cfg.ShihabBoundNetworkAdapter.StartsWith("Any", StringComparison.OrdinalIgnoreCase))
+                {
+                    string failReason;
+                    if (!TryGetBoundAdapterLocalIp(cfg, out boundDnsIp, out failReason))
+                    {
+                        return null;
+                    }
+                }
+                resolvedIp = ShihabLocalNetworkRelay.QueryPlainUdpDnsA(cleanHost, cfg.ShihabPlainDnsServer.Trim(), boundDnsIp);
                 if (resolvedIp == null && !cfg.ShihabDnsFallbackToSystem)
                 {
                     return null;
@@ -350,6 +361,21 @@ namespace ShihabMehediIDM
                 req.Proxy = null;
                 req.Timeout = 4500;
                 req.ReadWriteTimeout = 4500;
+                if (cfg != null && !string.IsNullOrWhiteSpace(cfg.ShihabBoundNetworkAdapter) &&
+                    !cfg.ShihabBoundNetworkAdapter.StartsWith("Any", StringComparison.OrdinalIgnoreCase) &&
+                    !IsLoopbackTargetUrl(url))
+                {
+                    IPAddress boundDohIp;
+                    string failReason;
+                    if (!TryGetBoundAdapterLocalIp(cfg, out boundDohIp, out failReason) || boundDohIp == null)
+                    {
+                        return null;
+                    }
+                    req.ServicePoint.BindIPEndPointDelegate = delegate(ServicePoint sp, IPEndPoint remoteEndPoint, int retryCount)
+                    {
+                        return new IPEndPoint(boundDohIp, 0);
+                    };
+                }
 
                 using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
                 using (Stream s = resp.GetResponseStream())
@@ -402,6 +428,58 @@ namespace ShihabMehediIDM
         public static void ApplyNetworkBindingAndProxy(HttpWebRequest req, MehediAppConfiguration cfg, string targetUrl)
         {
             ApplyAdapterAndProxyPolicy(req, targetUrl, cfg);
+        }
+
+        public static void ApplyFtpNetworkBindingAndProxy(FtpWebRequest req, MehediAppConfiguration cfg, string targetUrl)
+        {
+            if (req == null) return;
+            ShihabAutoUpdater.EnforceModernTls();
+            if (cfg == null) return;
+
+            if (!string.IsNullOrWhiteSpace(cfg.ShihabBoundNetworkAdapter) &&
+                !cfg.ShihabBoundNetworkAdapter.StartsWith("Any", StringComparison.OrdinalIgnoreCase))
+            {
+                IPAddress boundLocalIp;
+                string failReason;
+                if (!TryGetBoundAdapterLocalIp(cfg, out boundLocalIp, out failReason) || boundLocalIp == null)
+                {
+                    throw new WebException(string.IsNullOrEmpty(failReason)
+                        ? "Bound network adapter is offline (VPN Kill-Switch)."
+                        : failReason);
+                }
+                if (!IsLoopbackTargetUrl(targetUrl))
+                {
+                    req.ServicePoint.BindIPEndPointDelegate = delegate(ServicePoint sp, IPEndPoint remoteEndPoint, int retryCount)
+                    {
+                        return new IPEndPoint(boundLocalIp, 0);
+                    };
+                }
+            }
+
+            if (IsLoopbackTargetUrl(targetUrl))
+            {
+                req.Proxy = null;
+                return;
+            }
+
+            string pMode = (cfg.ShihabProxyMode ?? "").Trim();
+            if (string.Equals(pMode, "None", StringComparison.OrdinalIgnoreCase) && !cfg.MehediUseHttpProxy)
+            {
+                req.Proxy = null;
+                return;
+            }
+            if ((string.Equals(pMode, "Manual", StringComparison.OrdinalIgnoreCase) || cfg.MehediUseHttpProxy) &&
+                !string.IsNullOrWhiteSpace(cfg.ShihabProxyAddress))
+            {
+                WebProxy wp = new WebProxy(cfg.ShihabProxyAddress.Trim(), cfg.MehediProxyPort > 0 ? cfg.MehediProxyPort : 8080);
+                if (!string.IsNullOrWhiteSpace(cfg.ShihabProxyUser))
+                {
+                    wp.Credentials = new NetworkCredential(
+                        cfg.ShihabProxyUser.Trim(),
+                        ShihabSecretsVault.UnprotectSecret(cfg.MehediProxyPassword ?? ""));
+                }
+                req.Proxy = wp;
+            }
         }
 
         public static void ApplyAdapterAndProxyPolicy(HttpWebRequest req, string targetUrl, MehediAppConfiguration cfg)

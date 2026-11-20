@@ -17,12 +17,14 @@ namespace ShihabMehediIDM
     {
         public List<string> ShihabGeneratedUrls { get; private set; }
         public bool MehediStartImmediately { get; private set; }
+        public string ShihabOverrideSaveFolder { get; private set; }
 
         public ShihabBatchDownloadForm(bool shihabDark)
         {
             ShihabGeneratedUrls = new List<string>();
+            ShihabOverrideSaveFolder = "";
             Text = "Add Batch Download (Wildcard *) — " + ShihabThemePalette.ShihabMainHeaderTitle;
-            Size = new Size(620, 360);
+            Size = new Size(620, 405);
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
             MinimizeBox = false;
@@ -131,37 +133,59 @@ namespace ShihabMehediIDM
             };
             updateMehediPreview();
 
+            Label saveDirLbl = new Label { Text = "Save to folder (optional override):", Location = new Point(16, 250), AutoSize = true };
+            TextBox saveDirBox = new TextBox
+            {
+                Location = new Point(16, 270),
+                Width = 472,
+                BackColor = ShihabThemePalette.GetShihabSurfaceBg(shihabDark),
+                ForeColor = ForeColor
+            };
+            Button saveDirBrowse = ShihabThemePalette.CreateMehediStyledButton("Browse...", ShihabThemePalette.GetShihabSurfaceBg(shihabDark), ForeColor, 90);
+            saveDirBrowse.Height = 25;
+            saveDirBrowse.Location = new Point(496, 268);
+            saveDirBrowse.Click += delegate
+            {
+                using (FolderBrowserDialog fbd = new FolderBrowserDialog())
+                {
+                    if (!string.IsNullOrWhiteSpace(saveDirBox.Text) && Directory.Exists(saveDirBox.Text)) fbd.SelectedPath = saveDirBox.Text;
+                    if (fbd.ShowDialog(this) == DialogResult.OK) saveDirBox.Text = fbd.SelectedPath;
+                }
+            };
+
             Button shihabQueueBtn = ShihabThemePalette.CreateMehediStyledButton("Add to Main Queue", ShihabThemePalette.GetShihabAccentBlue(), Color.White, 155);
-            shihabQueueBtn.Location = new Point(185, 265);
+            shihabQueueBtn.Location = new Point(185, 312);
             shihabQueueBtn.Click += delegate
             {
                 ShihabGeneratedUrls = buildShihabList();
                 if (ShihabGeneratedUrls.Count == 0) return;
+                ShihabOverrideSaveFolder = (saveDirBox.Text ?? "").Trim();
                 MehediStartImmediately = false;
                 DialogResult = DialogResult.OK;
                 Close();
             };
 
             Button mehediStartBtn = ShihabThemePalette.CreateMehediStyledButton("Download Now", ShihabThemePalette.GetMehediAccentGreen(), Color.White, 135);
-            mehediStartBtn.Location = new Point(348, 265);
+            mehediStartBtn.Location = new Point(348, 312);
             mehediStartBtn.Click += delegate
             {
                 ShihabGeneratedUrls = buildShihabList();
                 if (ShihabGeneratedUrls.Count == 0) return;
+                ShihabOverrideSaveFolder = (saveDirBox.Text ?? "").Trim();
                 MehediStartImmediately = true;
                 DialogResult = DialogResult.OK;
                 Close();
             };
 
             Button shihabCancel = ShihabThemePalette.CreateMehediStyledButton("Cancel", ShihabThemePalette.GetShihabSurfaceBg(shihabDark), ForeColor, 95);
-            shihabCancel.Location = new Point(491, 265);
+            shihabCancel.Location = new Point(491, 312);
             shihabCancel.Click += delegate { Close(); };
 
             Controls.AddRange(new Control[]
             {
                 mehediHint, shihabPatternBox, mehediNumbersRad, shihabLettersRad,
                 mehediFromLbl, shihabFromBox, mehediToLbl, shihabToBox, mehediPadLbl, shihabPadNum,
-                mehediPreviewLbl, shihabQueueBtn, mehediStartBtn, shihabCancel
+                mehediPreviewLbl, saveDirLbl, saveDirBox, saveDirBrowse, shihabQueueBtn, mehediStartBtn, shihabCancel
             });
         }
 
@@ -176,14 +200,16 @@ namespace ShihabMehediIDM
     {
         public List<MehediBatchLinkEntryDto> ShihabChosenLinks { get; private set; }
         public bool MehediStartNow { get; private set; }
+        public string ShihabOverrideSaveFolder { get; private set; }
 
         public MehediDownloadAllLinksForm(ShihabBatchCaptureDto shihabBatch, bool mehediDark)
         {
             if (shihabBatch == null) shihabBatch = new ShihabBatchCaptureDto { ShihabLinks = new List<MehediBatchLinkEntryDto>() };
             if (shihabBatch.ShihabLinks == null) shihabBatch.ShihabLinks = new List<MehediBatchLinkEntryDto>();
             ShihabChosenLinks = new List<MehediBatchLinkEntryDto>();
+            ShihabOverrideSaveFolder = "";
             Text = "Download All Links — " + ShihabThemePalette.ShihabMainHeaderTitle;
-            Size = new Size(800, 495);
+            Size = new Size(800, 535);
             StartPosition = FormStartPosition.CenterScreen;
             TopMost = true;
             BackColor = ShihabThemePalette.GetMehediWindowBg(mehediDark);
@@ -255,16 +281,36 @@ namespace ShihabMehediIDM
             mehediFilterBox.TextChanged += delegate { rebuildMehediTable(); };
             rebuildMehediTable();
 
+            Label batchSaveLbl = new Label { Text = "Save to (opt):", Location = new Point(14, 398), AutoSize = true };
+            TextBox batchSaveBox = new TextBox
+            {
+                Location = new Point(100, 395),
+                Width = 574,
+                BackColor = ShihabThemePalette.GetShihabSurfaceBg(mehediDark),
+                ForeColor = ForeColor
+            };
+            Button batchSaveBrowse = ShihabThemePalette.CreateMehediStyledButton("Browse...", ShihabThemePalette.GetShihabSurfaceBg(mehediDark), ForeColor, 88);
+            batchSaveBrowse.Height = 25;
+            batchSaveBrowse.Location = new Point(680, 393);
+            batchSaveBrowse.Click += delegate
+            {
+                using (FolderBrowserDialog fbd = new FolderBrowserDialog())
+                {
+                    if (!string.IsNullOrWhiteSpace(batchSaveBox.Text) && Directory.Exists(batchSaveBox.Text)) fbd.SelectedPath = batchSaveBox.Text;
+                    if (fbd.ShowDialog(this) == DialogResult.OK) batchSaveBox.Text = fbd.SelectedPath;
+                }
+            };
+
             Button shihabChkAll = ShihabThemePalette.CreateMehediStyledButton("Check All", ShihabThemePalette.GetShihabSurfaceBg(mehediDark), ForeColor, 86);
-            shihabChkAll.Location = new Point(14, 398);
+            shihabChkAll.Location = new Point(14, 436);
             shihabChkAll.Click += delegate { foreach (ListViewItem mehediIt in shihabLinksView.Items) mehediIt.Checked = true; };
 
             Button mehediUnchkAll = ShihabThemePalette.CreateMehediStyledButton("Uncheck All", ShihabThemePalette.GetShihabSurfaceBg(mehediDark), ForeColor, 94);
-            mehediUnchkAll.Location = new Point(106, 398);
+            mehediUnchkAll.Location = new Point(106, 436);
             mehediUnchkAll.Click += delegate { foreach (ListViewItem shihabIt in shihabLinksView.Items) shihabIt.Checked = false; };
 
             Button probeSizesBtn = ShihabThemePalette.CreateMehediStyledButton("Probe Sizes", ShihabThemePalette.GetShihabSurfaceBg(mehediDark), ForeColor, 96);
-            probeSizesBtn.Location = new Point(206, 398);
+            probeSizesBtn.Location = new Point(206, 436);
             probeSizesBtn.Click += delegate
             {
                 probeSizesBtn.Enabled = false;
@@ -306,7 +352,7 @@ namespace ShihabMehediIDM
             };
 
             Button importFileBtn = ShihabThemePalette.CreateMehediStyledButton("Import .ef2/.txt", ShihabThemePalette.GetShihabSurfaceBg(mehediDark), ForeColor, 114);
-            importFileBtn.Location = new Point(308, 398);
+            importFileBtn.Location = new Point(308, 436);
             importFileBtn.Click += delegate
             {
                 using (OpenFileDialog ofd = new OpenFileDialog { Filter = "Link Lists (*.ef2;*.txt)|*.ef2;*.txt|All Files (*.*)|*.*" })
@@ -329,35 +375,38 @@ namespace ShihabMehediIDM
             };
 
             Button shihabQueueBtn = ShihabThemePalette.CreateMehediStyledButton("Add to Queue", ShihabThemePalette.GetShihabAccentBlue(), Color.White, 122);
-            shihabQueueBtn.Location = new Point(430, 398);
+            shihabQueueBtn.Location = new Point(430, 436);
             shihabQueueBtn.Click += delegate
             {
                 CollectCheckedShihabLinks(shihabLinksView);
                 if (ShihabChosenLinks.Count == 0) return;
+                ShihabOverrideSaveFolder = (batchSaveBox.Text ?? "").Trim();
                 MehediStartNow = false;
                 DialogResult = DialogResult.OK;
                 Close();
             };
 
             Button mehediNowBtn = ShihabThemePalette.CreateMehediStyledButton("Download Now", ShihabThemePalette.GetMehediAccentGreen(), Color.White, 126);
-            mehediNowBtn.Location = new Point(558, 398);
+            mehediNowBtn.Location = new Point(558, 436);
             mehediNowBtn.Click += delegate
             {
                 CollectCheckedShihabLinks(shihabLinksView);
                 if (ShihabChosenLinks.Count == 0) return;
+                ShihabOverrideSaveFolder = (batchSaveBox.Text ?? "").Trim();
                 MehediStartNow = true;
                 DialogResult = DialogResult.OK;
                 Close();
             };
 
             Button shihabCancel = ShihabThemePalette.CreateMehediStyledButton("Cancel", ShihabThemePalette.GetShihabSurfaceBg(mehediDark), ForeColor, 78);
-            shihabCancel.Location = new Point(690, 398);
+            shihabCancel.Location = new Point(690, 436);
             shihabCancel.Click += delegate { Close(); };
 
             Controls.AddRange(new Control[]
             {
                 shihabHideHtmlChk, mehediHideImgChk, shihabExtFilterLbl, mehediFilterBox,
-                shihabLinksView, shihabChkAll, mehediUnchkAll, probeSizesBtn, importFileBtn, shihabQueueBtn, mehediNowBtn, shihabCancel
+                shihabLinksView, batchSaveLbl, batchSaveBox, batchSaveBrowse,
+                shihabChkAll, mehediUnchkAll, probeSizesBtn, importFileBtn, shihabQueueBtn, mehediNowBtn, shihabCancel
             });
         }
 
@@ -371,7 +420,7 @@ namespace ShihabMehediIDM
                 req.AllowAutoRedirect = false;
                 req.Timeout = 4500;
                 req.ReadWriteTimeout = 4500;
-                req.UserAgent = "Mozilla/5.0 ShihabMehediIDM/1.0.7";
+                req.UserAgent = "Mozilla/5.0 ShihabMehediIDM/" + ShihabAutoUpdater.GetCurrentAppVersion();
                 try
                 {
                     using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
@@ -606,7 +655,7 @@ namespace ShihabMehediIDM
             {
                 HttpWebRequest shihabReq = (HttpWebRequest)WebRequest.Create(cur);
                 shihabReq.AllowAutoRedirect = false;
-                shihabReq.UserAgent = "Mozilla/5.0 ShihabMehediIDM-Grabber/1.0.7";
+                shihabReq.UserAgent = "Mozilla/5.0 ShihabMehediIDM-Grabber/" + ShihabAutoUpdater.GetCurrentAppVersion();
                 shihabReq.Timeout = 10000;
                 shihabReq.ReadWriteTimeout = 10000;
                 using (HttpWebResponse mehediResp = (HttpWebResponse)shihabReq.GetResponse())

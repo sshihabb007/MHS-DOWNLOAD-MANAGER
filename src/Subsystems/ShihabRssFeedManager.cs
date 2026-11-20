@@ -43,11 +43,16 @@ namespace ShihabMehediIDM
 
         public static List<ShihabRssItemEntry> FetchFeedItems(string feedUrl, string userAgent)
         {
+            return FetchFeedItems(feedUrl, userAgent, null);
+        }
+
+        public static List<ShihabRssItemEntry> FetchFeedItems(string feedUrl, string userAgent, MehediAppConfiguration cfg)
+        {
             List<ShihabRssItemEntry> res = new List<ShihabRssItemEntry>();
             try
             {
                 string title;
-                List<ShihabRssEntryItem> raw = FetchAndParseFeed(feedUrl, null, out title);
+                List<ShihabRssEntryItem> raw = FetchAndParseFeed(feedUrl, cfg, out title);
                 for (int i = 0; i < raw.Count; i++)
                 {
                     res.Add(new ShihabRssItemEntry
@@ -332,11 +337,10 @@ namespace ShihabMehediIDM
             return "";
         }
 
-        public static bool MatchesRssRule(ShihabRssFeedConfig sub, ShihabRssEntryItem entry)
+        public static bool MatchesFilter(string title, string url, string includePattern, string excludePattern)
         {
-            if (sub == null || entry == null) return false;
-            string haystack = ((entry.Title ?? "") + " " + (entry.DownloadUrl ?? "")).Trim();
-            string must = string.IsNullOrWhiteSpace(sub.MehediFilterPattern) ? "*" : sub.MehediFilterPattern.Trim();
+            string haystack = ((title ?? "") + " " + (url ?? "")).Trim();
+            string must = string.IsNullOrWhiteSpace(includePattern) ? "*" : includePattern.Trim();
             if (must != "*" && !ShihabFormatHelpers.WildcardMatchesMehediPattern(haystack, must))
             {
                 try
@@ -346,9 +350,9 @@ namespace ShihabMehediIDM
                 catch { return false; }
             }
 
-            if (!string.IsNullOrWhiteSpace(sub.ShihabExcludePattern))
+            if (!string.IsNullOrWhiteSpace(excludePattern))
             {
-                string excl = sub.ShihabExcludePattern.Trim();
+                string excl = excludePattern.Trim();
                 if (ShihabFormatHelpers.WildcardMatchesMehediPattern(haystack, excl)) return false;
                 try
                 {
@@ -357,6 +361,12 @@ namespace ShihabMehediIDM
                 catch { }
             }
             return true;
+        }
+
+        public static bool MatchesRssRule(ShihabRssFeedConfig sub, ShihabRssEntryItem entry)
+        {
+            if (sub == null || entry == null) return false;
+            return MatchesFilter(entry.Title, entry.DownloadUrl, sub.MehediFilterPattern, sub.ShihabExcludePattern);
         }
 
         public static bool PollDueFeedsInBackground(

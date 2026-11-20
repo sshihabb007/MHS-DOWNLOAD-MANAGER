@@ -405,3 +405,65 @@ body {
 .mehedi-hint a:hover {
   text-decoration: underline;
 }
+
+.shihab-server-select {
+  flex: 1;
+  background: #181a24;
+  border: 1px solid #292e42;
+  border-radius: 8px;
+  padding: 5px 8px;
+  color: #f4f6fc;
+  font-size: 11.5px;
+  outline: none;
+}
+
+.shihab-mini-link-btn {
+  background: transparent;
+  color: #60a5fa;
+  border: none;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+}
+
+.shihab-unpair-btn {
+  padding: 4px 10px;
+  font-weight: 700;
+}
+
+.shihab-pair-box {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border-radius: 8px;
+  background: #161822;
+  border: 1px solid #262b3e;
+}
+
+.shihab-pair-box input {
+  background: #10121a;
+  border: 1px solid #292e42;
+  border-radius: 6px;
+  padding: 5px 8px;
+  color: #f4f6fc;
+  font-size: 11.5px;
+}
+
+.shihab-pair-status {
+  font-size: 11px;
+  color: #93c5fd;
+  min-height: 14px;
+}
+
+.shihab-fullscreen-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 7px;
+  font-size: 11.5px;
+  color: #cbd5e1;
+  cursor: pointer;
+}

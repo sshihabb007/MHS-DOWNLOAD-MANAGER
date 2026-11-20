@@ -541,6 +541,26 @@ namespace ShihabMehediIDM
                 return;
             }
 
+            string targetCandidate = Path.Combine(mehediFolder, shihabLeaf);
+            if (File.Exists(targetCandidate) && _shihabConfig.MehediDuplicateFileMode == 0)
+            {
+                DialogResult dupAns = MessageBox.Show(
+                    this,
+                    string.Format("A file named '{0}' already exists in:\r\n{1}\r\n\r\nYes = Overwrite existing file\r\nNo = Save with a unique numbered name\r\nCancel = Choose another name",
+                        shihabLeaf, mehediFolder),
+                    "Duplicate File — MHS Download Manager",
+                    MessageBoxButtons.YesNoCancel,
+                    MessageBoxIcon.Question);
+                if (dupAns == DialogResult.Cancel)
+                {
+                    return;
+                }
+                if (dupAns == DialogResult.No)
+                {
+                    shihabLeaf = ShihabFormatHelpers.EnsureShihabUniqueFilePath(mehediFolder, shihabLeaf);
+                }
+            }
+
             MehediConfiguredItem.MehediSaveDirectory = mehediFolder;
             MehediConfiguredItem.ShihabFileName = shihabLeaf;
             MehediConfiguredItem.ShihabCategoryName = _mehediCategoryCombo.SelectedItem != null

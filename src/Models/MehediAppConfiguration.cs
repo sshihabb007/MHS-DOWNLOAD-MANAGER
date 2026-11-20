@@ -86,6 +86,12 @@ namespace ShihabMehediIDM
         [DataMember] public bool ShihabTorrentSequentialDefault { get; set; }
         [DataMember] public bool ShihabTorrentKeepSeedingDefault { get; set; }
         [DataMember] public string ShihabTorrentBlocklistUrl { get; set; }
+        [DataMember] public int ShihabTorrentListenPort { get; set; }
+        [DataMember] public bool ShihabTorrentEnableDht { get; set; }
+        [DataMember] public bool ShihabTorrentEnablePex { get; set; }
+        [DataMember] public bool ShihabTorrentEnableLsd { get; set; }
+        [DataMember] public double ShihabTorrentDefaultShareRatio { get; set; }
+        [DataMember] public int ShihabTorrentDefaultSeedMinutes { get; set; }
         [DataMember] public bool ShihabRemoteWebEnabled { get; set; }
         [DataMember] public int ShihabRemoteWebPort { get; set; }
         [DataMember] public string ShihabRemotePairingCode { get; set; }
@@ -125,6 +131,15 @@ namespace ShihabMehediIDM
         [DataMember] public string ShihabPlainDnsServer { get; set; }
         [DataMember] public string ShihabNextDnsConfigId { get; set; }
         [DataMember] public string ShihabRemotePairingExpiresUtc { get; set; }
+        [DataMember] public bool ShihabAutoDetectBrowserUserAgent { get; set; }
+        [DataMember] public List<string> ShihabSavedArchivePasswords { get; set; }
+        [DataMember] public bool ShihabUseHatchZipInPlace { get; set; }
+        [DataMember] public bool ShihabUseUserYtDlpConfig { get; set; }
+        [DataMember] public bool ShihabEnableClickNLoad { get; set; }
+        [DataMember] public int ShihabClickNLoadPort { get; set; }
+        [DataMember] public bool ShihabKeepPrivateDownloads { get; set; }
+        [DataMember] public string ShihabGlobalHotkeySpec { get; set; }
+        [DataMember] public string ShihabCompleteDialogSnoozeUntilUtc { get; set; }
         [DataMember] public List<ShihabCategoryRule> ShihabCategories { get; set; }
         [DataMember] public List<MehediQueueConfig> MehediQueues { get; set; }
         [DataMember] public List<ShihabSiteLoginCredential> ShihabSiteLogins { get; set; }
@@ -185,6 +200,12 @@ namespace ShihabMehediIDM
             ShihabTorrentSequentialDefault = true;
             ShihabTorrentKeepSeedingDefault = false;
             ShihabTorrentBlocklistUrl = "";
+            ShihabTorrentListenPort = 0;
+            ShihabTorrentEnableDht = true;
+            ShihabTorrentEnablePex = true;
+            ShihabTorrentEnableLsd = true;
+            ShihabTorrentDefaultShareRatio = 0.0;
+            ShihabTorrentDefaultSeedMinutes = 0;
             ShihabRemoteWebEnabled = false;
             ShihabRemoteWebPort = 8463;
             ShihabRemotePairingCode = "";
@@ -220,6 +241,15 @@ namespace ShihabMehediIDM
             ShihabMinimizeToTray = false;
             ShihabDropTargetX = -1;
             ShihabDropTargetY = -1;
+            ShihabAutoDetectBrowserUserAgent = true;
+            ShihabSavedArchivePasswords = new List<string>();
+            ShihabUseHatchZipInPlace = false;
+            ShihabUseUserYtDlpConfig = false;
+            ShihabEnableClickNLoad = false;
+            ShihabClickNLoadPort = 9666;
+            ShihabKeepPrivateDownloads = false;
+            ShihabGlobalHotkeySpec = "";
+            ShihabCompleteDialogSnoozeUntilUtc = "";
             ShihabHostConnectionLimits = new List<ShihabHostConnectionLimit>();
             ShihabDebridAccounts = new List<ShihabDebridAccount>();
             ShihabRssFeeds = new List<ShihabRssFeedConfig>();
@@ -292,6 +322,12 @@ namespace ShihabMehediIDM
             mehediCfg.ShihabTorrentSequentialDefault = true;
             mehediCfg.ShihabTorrentKeepSeedingDefault = false;
             mehediCfg.ShihabTorrentBlocklistUrl = "";
+            mehediCfg.ShihabTorrentListenPort = 0;
+            mehediCfg.ShihabTorrentEnableDht = true;
+            mehediCfg.ShihabTorrentEnablePex = true;
+            mehediCfg.ShihabTorrentEnableLsd = true;
+            mehediCfg.ShihabTorrentDefaultShareRatio = 0.0;
+            mehediCfg.ShihabTorrentDefaultSeedMinutes = 0;
             mehediCfg.ShihabRemoteWebEnabled = false;
             mehediCfg.ShihabRemoteWebPort = 8463;
             mehediCfg.ShihabRemotePairingCode = GenerateRandomEightDigitCode();
@@ -331,6 +367,16 @@ namespace ShihabMehediIDM
             mehediCfg.ShihabPlainDnsServer = "1.1.1.1";
             mehediCfg.ShihabNextDnsConfigId = "";
             mehediCfg.ShihabRemotePairingExpiresUtc = DateTime.UtcNow.AddMinutes(10).ToString("o");
+            mehediCfg.ShihabAutoDetectBrowserUserAgent = true;
+            mehediCfg.ShihabSavedArchivePasswords = new List<string>();
+            mehediCfg.ShihabUseHatchZipInPlace = false;
+            mehediCfg.ShihabUseUserYtDlpConfig = false;
+            mehediCfg.ShihabEnableClickNLoad = false;
+            mehediCfg.ShihabClickNLoadPort = 9666;
+            mehediCfg.ShihabKeepPrivateDownloads = false;
+            mehediCfg.ShihabGlobalHotkeySpec = "";
+            mehediCfg.ShihabCompleteDialogSnoozeUntilUtc = "";
+            mehediCfg.ShihabDefaultUserAgent = DetectDefaultBrowserUserAgent();
 
             mehediCfg.ShihabCategories = new List<ShihabCategoryRule>
             {
@@ -360,10 +406,97 @@ namespace ShihabMehediIDM
             {
                 new ShihabDebridAccount { ShihabProvider = "Real-Debrid", MehediEnabled = false },
                 new ShihabDebridAccount { ShihabProvider = "AllDebrid", MehediEnabled = false },
-                new ShihabDebridAccount { ShihabProvider = "Premiumize", MehediEnabled = false }
+                new ShihabDebridAccount { ShihabProvider = "Premiumize", MehediEnabled = false },
+                new ShihabDebridAccount { ShihabProvider = "TorBox", MehediEnabled = false },
+                new ShihabDebridAccount { ShihabProvider = "Mega-Debrid", MehediEnabled = false }
             };
             mehediCfg.ShihabRssFeeds = new List<ShihabRssFeedConfig>();
             return mehediCfg;
+        }
+
+        private static string _cachedDetectedBrowserUa;
+
+        public static string DetectDefaultBrowserUserAgent()
+        {
+            if (!string.IsNullOrEmpty(_cachedDetectedBrowserUa)) return _cachedDetectedBrowserUa;
+            const string fallbackUa = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36";
+            try
+            {
+                string progId = "";
+                using (RegistryKey uc = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice"))
+                {
+                    if (uc != null) progId = (uc.GetValue("ProgId") as string) ?? "";
+                }
+                string exePath = "";
+                if (!string.IsNullOrWhiteSpace(progId))
+                {
+                    using (RegistryKey cmdKey = Registry.ClassesRoot.OpenSubKey(progId + @"\shell\open\command"))
+                    {
+                        string rawCmd = cmdKey != null ? (cmdKey.GetValue("") as string) : "";
+                        if (!string.IsNullOrWhiteSpace(rawCmd))
+                        {
+                            rawCmd = rawCmd.Trim();
+                            if (rawCmd.StartsWith("\"", StringComparison.Ordinal))
+                            {
+                                int endQ = rawCmd.IndexOf('"', 1);
+                                if (endQ > 1) exePath = rawCmd.Substring(1, endQ - 1);
+                            }
+                            else
+                            {
+                                int sp = rawCmd.IndexOf(' ');
+                                exePath = sp > 0 ? rawCmd.Substring(0, sp) : rawCmd;
+                            }
+                        }
+                    }
+                }
+                if (!string.IsNullOrEmpty(exePath) && File.Exists(exePath))
+                {
+                    FileVersionInfo fvi = FileVersionInfo.GetVersionInfo(exePath);
+                    string ver = !string.IsNullOrWhiteSpace(fvi.ProductVersion) ? fvi.ProductVersion : fvi.FileVersion;
+                    int major = 0;
+                    if (!string.IsNullOrWhiteSpace(ver))
+                    {
+                        string[] parts = ver.Split('.');
+                        if (parts.Length > 0) int.TryParse(parts[0].Trim(), out major);
+                    }
+                    string exeLower = Path.GetFileName(exePath).ToLowerInvariant();
+                    if (exeLower.IndexOf("firefox", StringComparison.Ordinal) >= 0 ||
+                        exeLower.IndexOf("librewolf", StringComparison.Ordinal) >= 0 ||
+                        exeLower.IndexOf("waterfox", StringComparison.Ordinal) >= 0 ||
+                        exeLower.IndexOf("zen", StringComparison.Ordinal) >= 0)
+                    {
+                        int ffMajor = major >= 90 ? major : 136;
+                        _cachedDetectedBrowserUa = string.Format("Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:{0}.0) Gecko/20100101 Firefox/{0}.0", ffMajor);
+                        return _cachedDetectedBrowserUa;
+                    }
+                    if (exeLower.IndexOf("msedge", StringComparison.Ordinal) >= 0)
+                    {
+                        int edMajor = major >= 100 ? major : 135;
+                        _cachedDetectedBrowserUa = string.Format("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{0}.0.0.0 Safari/537.36 Edg/{0}.0.0.0", edMajor);
+                        return _cachedDetectedBrowserUa;
+                    }
+                    if (major >= 100)
+                    {
+                        _cachedDetectedBrowserUa = string.Format("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{0}.0.0.0 Safari/537.36", major);
+                        return _cachedDetectedBrowserUa;
+                    }
+                }
+            }
+            catch { }
+            _cachedDetectedBrowserUa = fallbackUa;
+            return _cachedDetectedBrowserUa;
+        }
+
+        public string GetEffectiveDefaultUserAgent()
+        {
+            string raw = (ShihabDefaultUserAgent ?? "").Trim();
+            if (string.IsNullOrEmpty(raw) ||
+                string.Equals(raw, "auto", StringComparison.OrdinalIgnoreCase) ||
+                (ShihabAutoDetectBrowserUserAgent && raw.IndexOf("Chrome/131.0.0.0", StringComparison.Ordinal) >= 0))
+            {
+                return DetectDefaultBrowserUserAgent();
+            }
+            return raw;
         }
 
         public static string GenerateRandomEightDigitCode()

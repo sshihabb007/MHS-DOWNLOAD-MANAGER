@@ -23,9 +23,11 @@ namespace ShihabMehediShared
 
         private static readonly HashSet<string> WindowsReservedDeviceNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            "CON", "PRN", "AUX", "NUL", "CLOCK$",
+            "CON", "PRN", "AUX", "NUL", "CLOCK$", "CONIN$", "CONOUT$",
             "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-            "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
+            "COM\u00B9", "COM\u00B2", "COM\u00B3",
+            "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+            "LPT\u00B9", "LPT\u00B2", "LPT\u00B3"
         };
 
         private static readonly HashSet<string> AllowedSystem32Tools = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -715,6 +717,51 @@ namespace ShihabMehediShared
                 return true;
             }
             return false;
+        }
+
+        internal static bool TryValidateLocalTorrentFilePath(string rawPath, out string validatedFullPath)
+        {
+            validatedFullPath = string.Empty;
+            if (string.IsNullOrWhiteSpace(rawPath) || ContainsControlOrNewline(rawPath))
+            {
+                return false;
+            }
+            string trimmed = rawPath.Trim().Trim('"');
+            if (!trimmed.EndsWith(".torrent", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+            try
+            {
+                if (!Path.IsPathRooted(trimmed))
+                {
+                    return false;
+                }
+                string full = Path.GetFullPath(trimmed);
+                if (!File.Exists(full))
+                {
+                    return false;
+                }
+                FileInfo fi = new FileInfo(full);
+                if (fi.Length <= 2 || fi.Length > 32L * 1024L * 1024L)
+                {
+                    return false;
+                }
+                using (FileStream fs = new FileStream(full, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                {
+                    if (fs.ReadByte() != (byte)'d')
+                    {
+                        return false;
+                    }
+                }
+                validatedFullPath = full;
+                return true;
+            }
+            catch
+            {
+                validatedFullPath = string.Empty;
+                return false;
+            }
         }
 
         internal static bool IsValidGitHubRepoSlug(string slug)

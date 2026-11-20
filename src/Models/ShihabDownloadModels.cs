@@ -104,12 +104,19 @@ namespace ShihabMehediIDM
         [DataMember] public string ShihabTorrentMagnetOrPath { get; set; }
         [DataMember] public bool ShihabTorrentSequential { get; set; }
         [DataMember] public bool ShihabTorrentKeepSeeding { get; set; }
+        [DataMember] public bool ShihabTorrentCreateSubfolder { get; set; }
+        [DataMember] public double ShihabTorrentTargetShareRatio { get; set; }
+        [DataMember] public int ShihabTorrentMaxSeedMinutes { get; set; }
+        [DataMember] public long ShihabTorrentUploadedBytes { get; set; }
         [DataMember] public List<int> ShihabSelectedTorrentFiles { get; set; }
         [DataMember] public string ShihabSubtitleLanguages { get; set; }
         [DataMember] public bool ShihabEmbedSubtitles { get; set; }
+        [DataMember] public bool ShihabEmbedChapters { get; set; }
         [DataMember] public string ShihabAudioExtractFormat { get; set; }
         [DataMember] public bool ShihabIsYtDlpJob { get; set; }
         [DataMember] public string ShihabYtDlpFormatSelector { get; set; }
+        [DataMember] public bool ShihabIsLiveStream { get; set; }
+        [DataMember] public string ShihabDeferredRenameTarget { get; set; }
         [DataMember] public bool ShihabIsGalleryJob { get; set; }
         [DataMember] public int ShihabGalleryMaxItems { get; set; }
         [DataMember] public bool ShihabBypassDebrid { get; set; }
@@ -122,6 +129,12 @@ namespace ShihabMehediIDM
         [IgnoreDataMember] public long MehediEtaSeconds { get; set; }
         [IgnoreDataMember] public string ShihabTransientUnlockedUrl { get; set; }
         [IgnoreDataMember] public int ShihabTransientMaxChunks { get; set; }
+        [IgnoreDataMember] public double ShihabTorrentUploadSpeedBps { get; set; }
+        [IgnoreDataMember] public int ShihabTorrentActivePeers { get; set; }
+        [IgnoreDataMember] public int ShihabTorrentSeeders { get; set; }
+        [IgnoreDataMember] public int ShihabTorrentListenPort { get; set; }
+        [IgnoreDataMember] public bool ShihabTorrentForceRecheck { get; set; }
+        [IgnoreDataMember] public volatile bool ShihabStopLiveAndSaveRequested;
 
         [IgnoreDataMember]
         public string ShihabSubtitleLangs
@@ -213,12 +226,19 @@ namespace ShihabMehediIDM
             ShihabTorrentMagnetOrPath = "";
             ShihabTorrentSequential = true;
             ShihabTorrentKeepSeeding = false;
+            ShihabTorrentCreateSubfolder = true;
+            ShihabTorrentTargetShareRatio = 0.0;
+            ShihabTorrentMaxSeedMinutes = 0;
+            ShihabTorrentUploadedBytes = 0;
             ShihabSelectedTorrentFiles = new List<int>();
             ShihabSubtitleLanguages = "";
             ShihabEmbedSubtitles = false;
+            ShihabEmbedChapters = true;
             ShihabAudioExtractFormat = "";
             ShihabIsYtDlpJob = false;
             ShihabYtDlpFormatSelector = "";
+            ShihabIsLiveStream = false;
+            ShihabDeferredRenameTarget = "";
             ShihabIsGalleryJob = false;
             ShihabGalleryMaxItems = 0;
             ShihabBypassDebrid = false;
@@ -230,6 +250,11 @@ namespace ShihabMehediIDM
             MehediEtaSeconds = -1;
             ShihabTransientUnlockedUrl = "";
             ShihabTransientMaxChunks = 0;
+            ShihabTorrentUploadSpeedBps = 0;
+            ShihabTorrentActivePeers = 0;
+            ShihabTorrentSeeders = 0;
+            ShihabTorrentListenPort = 0;
+            ShihabTorrentForceRecheck = false;
         }
 
         public ShihabDownloadStatus GetShihabStatusEnum()

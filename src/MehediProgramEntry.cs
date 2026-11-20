@@ -7,14 +7,14 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
-[assembly: AssemblyTitle("MHS Download Manager 1.0.7 (Mehedi Hasan Shihab)")]
-[assembly: AssemblyDescription("MHS Download Manager 1.0.7 (Mehedi Hasan Shihab) — Multi-Segment Download Accelerator & Browser Video Suite")]
+[assembly: AssemblyTitle("MHS Download Manager 1.1.0 (Mehedi Hasan Shihab)")]
+[assembly: AssemblyDescription("MHS Download Manager 1.1.0 (Mehedi Hasan Shihab) — Multi-Segment Download Accelerator, BitTorrent P2P & Browser Video Suite")]
 [assembly: AssemblyCompany("Mehedi Hasan Shihab (sshihabb007)")]
-[assembly: AssemblyProduct("MHS Download Manager 1.0.7 (Mehedi Hasan Shihab)")]
+[assembly: AssemblyProduct("MHS Download Manager 1.1.0 (Mehedi Hasan Shihab)")]
 [assembly: AssemblyCopyright("Copyright © Mehedi Hasan Shihab — https://sshihabb007.github.io/")]
-[assembly: AssemblyVersion("1.0.7.0")]
-[assembly: AssemblyFileVersion("1.0.7.0")]
-[assembly: AssemblyInformationalVersion("1.0.7")]
+[assembly: AssemblyVersion("1.1.0.0")]
+[assembly: AssemblyFileVersion("1.1.0.0")]
+[assembly: AssemblyInformationalVersion("1.1.0")]
 
 namespace ShihabMehediIDM
 {
@@ -144,8 +144,8 @@ namespace ShihabMehediIDM
                 ShihabCrashMonitor.InitializeInMainProcess(shihabStore.MehediBaseDirectory, mehediConfig.ShihabCrashMonitorEnabled);
                 ShihabDnsAndNetworkManager.EnsureNetworkWatcherStarted();
 
-                // Ensure bridge authentication token file exists before starting bridge
-                shihabStore.LoadOrCreateBridgeToken();
+                // Ensure bridge authentication token file exists before starting bridge and stays synchronized in memory
+                mehediConfig.ShihabLocalBridgeToken = shihabStore.LoadOrCreateBridgeToken();
 
                 List<ShihabDownloadItem> mehediExistingItems = shihabStore.LoadMehediDownloads();
                 MehediDynamicSegmentEngine shihabEngine = new MehediDynamicSegmentEngine(shihabStore, mehediConfig, mehediExistingItems);
@@ -157,6 +157,31 @@ namespace ShihabMehediIDM
                     {
                         ApplicationContext headlessCtx = new ApplicationContext();
                         mehediBridge.OnShihabGracefulExitRequested += delegate { headlessCtx.ExitThread(); };
+                        shihabEngine.OnQueueFinishedWithActions += delegate(MehediQueueConfig finishedQueue)
+                        {
+                            if (finishedQueue == null) return;
+                            try
+                            {
+                                string powerAct = (finishedQueue.ShihabSystemPowerActionWhenDone ?? "None").Trim();
+                                if (!string.Equals(powerAct, "None", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(powerAct))
+                                {
+                                    ShihabOsAndDiskSafety.ExecuteSystemPowerAction(powerAct);
+                                }
+                            }
+                            catch { }
+                            if (finishedQueue.MehediExitAppWhenQueueFinishes)
+                            {
+                                try { headlessCtx.ExitThread(); } catch { }
+                            }
+                        };
+                        Action headlessNetRestored = delegate
+                        {
+                            if (mehediConfig.ShihabAutoResumeOnNetworkRestore)
+                            {
+                                shihabEngine.ResumeDownloadsAfterNetworkRestore();
+                            }
+                        };
+                        ShihabDnsAndNetworkManager.OnNetworkRestored += headlessNetRestored;
                         mehediBridge.StartShihabBridge();
                         shihabEngine.StartStartupQueues();
 
@@ -164,9 +189,13 @@ namespace ShihabMehediIDM
                             shihabStore,
                             mehediConfig,
                             shihabEngine))
+                        using (ShihabClickNLoadServer cnlServer = new ShihabClickNLoadServer(
+                            mehediConfig,
+                            shihabEngine))
                         using (System.Windows.Forms.Timer tickTimer = new System.Windows.Forms.Timer())
                         {
                             if (mehediConfig.ShihabRemoteWebEnabled) remoteServer.Start();
+                            if (mehediConfig.ShihabEnableClickNLoad) cnlServer.Start();
 
                             tickTimer.Interval = 5000;
                             int rssTickCounter = 0;
@@ -244,6 +273,7 @@ namespace ShihabMehediIDM
                             Application.Run(headlessCtx);
 
                             tickTimer.Stop();
+                            ShihabDnsAndNetworkManager.OnNetworkRestored -= headlessNetRestored;
                             shihabEngine.PersistShihabState();
                         }
                     }

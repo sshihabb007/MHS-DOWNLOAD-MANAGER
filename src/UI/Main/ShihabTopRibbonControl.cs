@@ -496,7 +496,7 @@ namespace ShihabMehediIDM
 
         public void UpdateMetricsForScale()
         {
-            float scale = Math.Max(80, Math.Min(150, UiScalePercent > 0 ? UiScalePercent : 100)) / 100f;
+            float scale = Math.Max(80, Math.Min(200, UiScalePercent > 0 ? UiScalePercent : 100)) / 100f;
             Height = CompactMode ? (int)Math.Round(52 * scale) : (int)Math.Round(72 * scale);
             ClearIconBitmapCache();
             RecalculateItemBounds();
@@ -536,7 +536,7 @@ namespace ShihabMehediIDM
         public void RecalculateItemBounds()
         {
             if (_items.Count == 0) return;
-            float scale = Math.Max(80, Math.Min(150, UiScalePercent > 0 ? UiScalePercent : 100)) / 100f;
+            float scale = Math.Max(80, Math.Min(200, UiScalePercent > 0 ? UiScalePercent : 100)) / 100f;
             int availW = Math.Max(320, ClientSize.Width - 16);
             int maxSlotW = (int)Math.Round(102 * scale);
             int minSlotW = 62;
@@ -741,7 +741,7 @@ namespace ShihabMehediIDM
             if (_items.Count == 0) return;
             if (_items[0].Bounds.Width == 0) RecalculateItemBounds();
 
-            float scale = Math.Max(80, Math.Min(150, UiScalePercent > 0 ? UiScalePercent : 100)) / 100f;
+            float scale = Math.Max(80, Math.Min(200, UiScalePercent > 0 ? UiScalePercent : 100)) / 100f;
             int iconSz = CompactMode ? (int)Math.Round(24 * scale) : (int)Math.Round(35 * scale);
             float fontPt = (CompactMode ? 8.0f : 8.6f) * scale;
             Font lblFont = GetOrCreateLabelFont(fontPt);

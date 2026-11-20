@@ -89,6 +89,7 @@ namespace ShihabMehediIDM
         [DataMember(Name = "forceKey")] public string ShihabForceKey { get; set; }
         [DataMember(Name = "captureOpenedFiles")] public bool ShihabCaptureOpenedFiles { get; set; }
         [DataMember(Name = "captureMinSizeKb")] public int ShihabCaptureMinSizeKb { get; set; }
+        [DataMember(Name = "contextMenuItems")] public string ShihabContextMenuItems { get; set; }
         [DataMember(Name = "activeDownloads")] public int ShihabActiveDownloads { get; set; }
         [DataMember(Name = "updateAvailable")] public bool ShihabUpdateAvailable { get; set; }
         [DataMember(Name = "latestVersion")] public string ShihabLatestVersion { get; set; }
@@ -127,6 +128,7 @@ namespace ShihabMehediIDM
         public bool ShihabForgetSignIns { get; set; }
         public string[] ShihabRawArgs { get; set; }
         public bool ShihabStartMinimized { get; set; }
+        public bool ShihabFromHostStealth { get; set; }
         public int MehediAutoCloseMs { get; set; }
         public bool ShihabHasActionableCommand { get; set; }
 
@@ -148,9 +150,12 @@ namespace ShihabMehediIDM
             if (firstLower == "status" ||
                 firstLower == "list" ||
                 firstLower == "get" ||
+                firstLower == "add" ||
                 firstLower == "pause" ||
                 firstLower == "start" ||
                 firstLower == "resume" ||
+                firstLower == "start-queue" ||
+                firstLower == "stop-queue" ||
                 firstLower == "remove" ||
                 firstLower == "delete" ||
                 firstLower == "pair" ||
@@ -168,6 +173,7 @@ namespace ShihabMehediIDM
                 firstLower == "torrent-create" ||
                 firstLower == "install-ytdlp" ||
                 firstLower == "install-ffmpeg" ||
+                firstLower == "install-deno" ||
                 firstLower == "install-gallery-dl" ||
                 firstLower == "help" ||
                 firstLower == "--help" ||
@@ -279,6 +285,11 @@ namespace ShihabMehediIDM
                 }
                 else if (shihabLower == "--shihab-minimized")
                 {
+                    mehediParsed.ShihabStartMinimized = true;
+                }
+                else if (shihabLower == "/fromhost" || shihabLower == "--from-host")
+                {
+                    mehediParsed.ShihabFromHostStealth = true;
                     mehediParsed.ShihabStartMinimized = true;
                 }
                 else if (shihabLower == "--shihab-auto-close-ms")

@@ -117,6 +117,51 @@ namespace ShihabMehediIDM
             }
         }
 
+        public static void ExecuteSystemPowerAction(string powerAction)
+        {
+            if (string.IsNullOrWhiteSpace(powerAction)) return;
+            string act = powerAction.Trim();
+            try
+            {
+                if (string.Equals(act, "Sleep", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(act, "Standby", StringComparison.OrdinalIgnoreCase))
+                {
+                    EnterSystemSleepOrHibernate(false);
+                }
+                else if (string.Equals(act, "Hibernate", StringComparison.OrdinalIgnoreCase))
+                {
+                    EnterSystemSleepOrHibernate(true);
+                }
+                else if (string.Equals(act, "Shutdown", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(act, "Shut down", StringComparison.OrdinalIgnoreCase))
+                {
+                    string shutdownExe = ShihabMehediShared.ShihabProcessAndPathSafety.ResolveSystem32ToolPath("shutdown.exe");
+                    if (!string.IsNullOrEmpty(shutdownExe) && File.Exists(shutdownExe))
+                    {
+                        using (Process p = Process.Start(new ProcessStartInfo(shutdownExe, "/s /t 15") { UseShellExecute = false, CreateNoWindow = true })) { }
+                    }
+                }
+                else if (string.Equals(act, "Restart", StringComparison.OrdinalIgnoreCase))
+                {
+                    string shutdownExe = ShihabMehediShared.ShihabProcessAndPathSafety.ResolveSystem32ToolPath("shutdown.exe");
+                    if (!string.IsNullOrEmpty(shutdownExe) && File.Exists(shutdownExe))
+                    {
+                        using (Process p = Process.Start(new ProcessStartInfo(shutdownExe, "/r /t 15") { UseShellExecute = false, CreateNoWindow = true })) { }
+                    }
+                }
+                else if (string.Equals(act, "LogOff", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(act, "Log off", StringComparison.OrdinalIgnoreCase))
+                {
+                    string shutdownExe = ShihabMehediShared.ShihabProcessAndPathSafety.ResolveSystem32ToolPath("shutdown.exe");
+                    if (!string.IsNullOrEmpty(shutdownExe) && File.Exists(shutdownExe))
+                    {
+                        using (Process p = Process.Start(new ProcessStartInfo(shutdownExe, "/l") { UseShellExecute = false, CreateNoWindow = true })) { }
+                    }
+                }
+            }
+            catch { }
+        }
+
         public static void ScheduleWakeTimer(DateTime wakeLocalTime)
         {
             lock (_wakeTimerLock)

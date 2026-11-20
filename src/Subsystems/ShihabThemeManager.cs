@@ -30,7 +30,12 @@ namespace ShihabMehediIDM
             "Midnight Nord",
             "Emerald Matrix",
             "Solarized Dark",
-            "Classic Light"
+            "Classic Light",
+            "Luna XP",
+            "Aero Glass",
+            "Adwaita",
+            "Breeze",
+            "High Contrast"
         };
 
         public static readonly string[] SupportedLanguages = new string[]
@@ -334,6 +339,76 @@ namespace ShihabMehediIDM
                     TextPrimary = Color.FromArgb(238, 232, 213),
                     TextSecondary = Color.FromArgb(147, 161, 161),
                     GridAlternate = Color.FromArgb(10, 62, 76)
+                };
+            }
+            if (string.Equals(t, "Luna XP", StringComparison.OrdinalIgnoreCase))
+            {
+                return new ShihabCustomThemePreset
+                {
+                    Name = "Luna XP",
+                    BackgroundMain = Color.FromArgb(236, 233, 216),
+                    BackgroundCard = Color.FromArgb(255, 255, 255),
+                    BackgroundSidebar = Color.FromArgb(214, 223, 247),
+                    AccentPrimary = Color.FromArgb(0, 84, 227),
+                    TextPrimary = Color.FromArgb(20, 28, 44),
+                    TextSecondary = Color.FromArgb(78, 92, 120),
+                    GridAlternate = Color.FromArgb(245, 247, 252)
+                };
+            }
+            if (string.Equals(t, "Aero Glass", StringComparison.OrdinalIgnoreCase))
+            {
+                return new ShihabCustomThemePreset
+                {
+                    Name = "Aero Glass",
+                    BackgroundMain = Color.FromArgb(228, 238, 248),
+                    BackgroundCard = Color.FromArgb(248, 252, 255),
+                    BackgroundSidebar = Color.FromArgb(210, 228, 245),
+                    AccentPrimary = Color.FromArgb(26, 125, 212),
+                    TextPrimary = Color.FromArgb(14, 30, 50),
+                    TextSecondary = Color.FromArgb(68, 92, 118),
+                    GridAlternate = Color.FromArgb(238, 245, 252)
+                };
+            }
+            if (string.Equals(t, "Adwaita", StringComparison.OrdinalIgnoreCase))
+            {
+                return new ShihabCustomThemePreset
+                {
+                    Name = "Adwaita",
+                    BackgroundMain = Color.FromArgb(36, 36, 36),
+                    BackgroundCard = Color.FromArgb(48, 48, 48),
+                    BackgroundSidebar = Color.FromArgb(30, 30, 30),
+                    AccentPrimary = Color.FromArgb(53, 132, 228),
+                    TextPrimary = Color.FromArgb(246, 245, 244),
+                    TextSecondary = Color.FromArgb(154, 153, 150),
+                    GridAlternate = Color.FromArgb(42, 42, 42)
+                };
+            }
+            if (string.Equals(t, "Breeze", StringComparison.OrdinalIgnoreCase))
+            {
+                return new ShihabCustomThemePreset
+                {
+                    Name = "Breeze",
+                    BackgroundMain = Color.FromArgb(35, 38, 41),
+                    BackgroundCard = Color.FromArgb(49, 54, 59),
+                    BackgroundSidebar = Color.FromArgb(29, 32, 35),
+                    AccentPrimary = Color.FromArgb(61, 174, 233),
+                    TextPrimary = Color.FromArgb(239, 240, 241),
+                    TextSecondary = Color.FromArgb(161, 169, 177),
+                    GridAlternate = Color.FromArgb(41, 45, 49)
+                };
+            }
+            if (string.Equals(t, "High Contrast", StringComparison.OrdinalIgnoreCase))
+            {
+                return new ShihabCustomThemePreset
+                {
+                    Name = "High Contrast",
+                    BackgroundMain = Color.FromArgb(0, 0, 0),
+                    BackgroundCard = Color.FromArgb(12, 12, 12),
+                    BackgroundSidebar = Color.FromArgb(0, 0, 0),
+                    AccentPrimary = Color.FromArgb(255, 234, 0),
+                    TextPrimary = Color.FromArgb(255, 255, 255),
+                    TextSecondary = Color.FromArgb(0, 255, 255),
+                    GridAlternate = Color.FromArgb(20, 20, 20)
                 };
             }
             return new ShihabCustomThemePreset

@@ -51,6 +51,22 @@ namespace ShihabMehediIDM
             }
             if (!string.IsNullOrWhiteSpace(outputPath) && File.Exists(outputPath))
             {
+                if (!string.IsNullOrWhiteSpace(shihabItem.ShihabDeferredRenameTarget))
+                {
+                    string saveDir = Path.GetDirectoryName(outputPath);
+                    string safeDef = ShihabFormatHelpers.SanitizeShihabFileName(shihabItem.ShihabDeferredRenameTarget.Trim());
+                    if (!string.IsNullOrWhiteSpace(safeDef) && !string.IsNullOrWhiteSpace(saveDir))
+                    {
+                        string uniqueLeaf = ShihabFormatHelpers.EnsureShihabUniqueFilePath(saveDir, safeDef);
+                        string renamedDest;
+                        if (ShihabProcessAndPathSafety.ResolvePathStrictlyUnderRoot(saveDir, uniqueLeaf, out renamedDest) &&
+                            TryAtomicMoveReplace(outputPath, renamedDest))
+                        {
+                            outputPath = renamedDest;
+                        }
+                    }
+                    shihabItem.ShihabDeferredRenameTarget = "";
+                }
                 shihabItem.ShihabFileName = Path.GetFileName(outputPath);
                 shihabItem.MehediSaveDirectory = Path.GetDirectoryName(outputPath);
                 ComputeShihabFileSha256AndSize(shihabItem, outputPath);
@@ -134,22 +150,56 @@ namespace ShihabMehediIDM
                     CompleteActiveDownload(shihabItem, handle, "Complete (" + providerUsed + ")");
                     return;
                 }
+                // Fail-closed privacy guard: do NOT silently leak user IP to raw P2P swarm when user opted into Debrid cloud offloading!
+                throw new IOException("Debrid torrent/magnet cloud unlock failed (refusing silent fallback to direct P2P swarm to protect privacy).");
             }
 
-            // 2. Parse .torrent or Magnet URI and execute full P2P + BEP-9/10 + BEP-15 UDP/HTTP + BEP-19 WebSeed Session
-            ShihabTorrentMetadata meta = sourceSpec.StartsWith("magnet:", StringComparison.OrdinalIgnoreCase)
-                ? ShihabTorrentManager.ParseMagnetUri(sourceSpec)
-                : (File.Exists(sourceSpec) ? ShihabTorrentManager.InspectTorrentFile(sourceSpec) : ShihabTorrentManager.ParseMagnetUri(sourceSpec));
+            // 2. Parse local .torrent, remote HTTP/HTTPS .torrent URL, or Magnet URI
+            shihabItem.SetMehediStatusEnum(ShihabDownloadStatus.ShihabConnecting, "Inspecting torrent metadata...");
+            NotifyShihabItemChanged(shihabItem);
 
-            if (meta.TotalSizeBytes > 0 && shihabItem.ShihabTotalBytes <= 0)
+            ShihabTorrentMetadata meta = ShihabTorrentManager.InspectTorrentOrMagnet(
+                sourceSpec,
+                _mehediConfig,
+                shihabItem.ShihabCookies,
+                shihabItem.MehediReferer,
+                shihabItem.MehediUserAgent);
+
+            if (meta == null || !meta.ParsedSuccessfully)
             {
-                shihabItem.ShihabTotalBytes = meta.TotalSizeBytes;
+                string mErr = (meta != null && !string.IsNullOrWhiteSpace(meta.ErrorMessage))
+                    ? meta.ErrorMessage
+                    : "Invalid or unreachable .torrent / magnet source.";
+                throw new IOException(mErr);
+            }
+
+            if (meta.TotalSizeBytes > 0)
+            {
+                string preflightErr;
+                if (!ShihabOsAndDiskSafety.VerifyDiskPreflight(shihabItem.MehediSaveDirectory, meta.TotalSizeBytes, out preflightErr))
+                {
+                    throw new IOException(preflightErr);
+                }
+                if (shihabItem.ShihabTotalBytes <= 0)
+                {
+                    shihabItem.ShihabTotalBytes = meta.TotalSizeBytes;
+                }
             }
             if (!string.IsNullOrWhiteSpace(meta.Name) &&
-                (shihabItem.ShihabFileName == "download.bin" || shihabItem.ShihabFileName.StartsWith("magnet_", StringComparison.OrdinalIgnoreCase)))
+                (shihabItem.ShihabFileName == "download.bin" ||
+                 shihabItem.ShihabFileName.StartsWith("magnet_", StringComparison.OrdinalIgnoreCase) ||
+                 shihabItem.ShihabFileName.EndsWith(".torrent", StringComparison.OrdinalIgnoreCase)))
             {
                 shihabItem.ShihabFileName = ShihabFormatHelpers.SanitizeShihabFileName(meta.Name);
             }
+
+            shihabItem.SetMehediStatusEnum(ShihabDownloadStatus.ShihabDownloading, "Connecting to BitTorrent swarm...");
+            NotifyShihabItemChanged(shihabItem);
+
+            Stopwatch rateSw = Stopwatch.StartNew();
+            long rateWinStart = 0;
+            long rateWinBytes = 0;
+            object rateSync = new object();
 
             string p2pErr;
             bool p2pOk = ShihabTorrentManager.ExecuteP2pTorrentSession(
@@ -159,7 +209,18 @@ namespace ShihabMehediIDM
                 _shihabStore.MehediBaseDirectory,
                 delegate { NotifyShihabItemChanged(shihabItem); },
                 mehediToken,
-                out p2pErr);
+                out p2pErr,
+                delegate(int gotBytes)
+                {
+                    lock (rateSync)
+                    {
+                        ApplyExternalTransferRateAndQuota(shihabItem, gotBytes, rateSw, ref rateWinStart, ref rateWinBytes, mehediToken);
+                    }
+                    if (_mehediConfig.IsQuotaExceeded())
+                    {
+                        throw new OperationCanceledException("Rolling bandwidth quota limit reached.");
+                    }
+                });
 
             if (mehediToken.IsCancellationRequested)
             {
@@ -171,13 +232,24 @@ namespace ShihabMehediIDM
             }
 
             string completedPath = shihabItem.GetShihabFullTargetPath();
-            if (File.Exists(completedPath))
+            if (meta.IsMultiFile)
+            {
+                string motwDir = shihabItem.ShihabTorrentCreateSubfolder ? completedPath : shihabItem.MehediSaveDirectory;
+                if (_mehediConfig.ShihabWriteZoneIdentifier && Directory.Exists(motwDir))
+                {
+                    ShihabOsAndDiskSafety.PropagateMarkOfTheWebToDirectory(motwDir, shihabItem.MehediUrl, shihabItem.MehediReferer);
+                }
+            }
+            else if (File.Exists(completedPath))
             {
                 FinalizeShihabDownloadedFileAndOptionalAudioMux(shihabItem, completedPath, mehediItemTempDir, false, mehediToken);
                 if (mehediToken.IsCancellationRequested) return;
             }
 
-            CompleteActiveDownload(shihabItem, handle, shihabItem.ShihabTorrentKeepSeeding ? "Seeded & Complete" : "Complete");
+            string doneLabel = (shihabItem.ShihabTorrentKeepSeeding && shihabItem.ShihabTorrentUploadedBytes > 0)
+                ? string.Format("Complete (Seeded {0})", ShihabFormatHelpers.FormatMehediBytes(shihabItem.ShihabTorrentUploadedBytes))
+                : "Complete";
+            CompleteActiveDownload(shihabItem, handle, doneLabel);
         }
 
         private void FinalizeShihabDownloadedFileAndOptionalAudioMux(
@@ -197,6 +269,23 @@ namespace ShihabMehediIDM
             string shihabFinalTargetPath = shihabItem.GetShihabFullTargetPath();
             string targetDir = Path.GetDirectoryName(shihabFinalTargetPath);
             if (!string.IsNullOrEmpty(targetDir)) Directory.CreateDirectory(targetDir);
+
+            // Apply deferred rename requested while download was active
+            if (!string.IsNullOrWhiteSpace(shihabItem.ShihabDeferredRenameTarget))
+            {
+                string safeDeferred = ShihabFormatHelpers.SanitizeShihabFileName(shihabItem.ShihabDeferredRenameTarget.Trim());
+                if (!string.IsNullOrWhiteSpace(safeDeferred))
+                {
+                    string uniqueLeaf = ShihabFormatHelpers.EnsureShihabUniqueFilePath(targetDir, safeDeferred);
+                    string resolvedRenamed;
+                    if (ShihabProcessAndPathSafety.ResolvePathStrictlyUnderRoot(targetDir, uniqueLeaf, out resolvedRenamed))
+                    {
+                        shihabFinalTargetPath = resolvedRenamed;
+                        shihabItem.ShihabFileName = Path.GetFileName(resolvedRenamed);
+                    }
+                }
+                shihabItem.ShihabDeferredRenameTarget = "";
+            }
 
             bool mehediNeedsAudioMux =
                 !string.IsNullOrWhiteSpace(shihabItem.MehediAudioCompanionUrl) &&
@@ -290,12 +379,13 @@ namespace ShihabMehediIDM
                 }
             }
 
-            // Hardened Post-Download Archive Auto-Extraction (waits for all split volumes + propagates MotW)
+            // Hardened Post-Download Archive Auto-Extraction (triggers via part 1 when final split volume completes + MRU saved passwords + MotW)
             if ((shihabItem.ShihabAutoExtract || _mehediConfig.ShihabAutoExtractArchives) &&
                 ShihabSafeArchiveExtractor.IsSupportedArchiveFile(shihabFinalTargetPath))
             {
+                string primaryArchivePath;
                 string splitWaitReason;
-                if (!ShihabSafeArchiveExtractor.AreAllSplitArchiveVolumesReady(shihabFinalTargetPath, out splitWaitReason))
+                if (!ShihabSafeArchiveExtractor.TryResolvePrimarySplitArchiveIfReady(shihabFinalTargetPath, out primaryArchivePath, out splitWaitReason))
                 {
                     EmitShihabLog("[Extract] Deferred split archive extraction: " + splitWaitReason);
                 }
@@ -305,17 +395,17 @@ namespace ShihabMehediIDM
                     NotifyShihabItemChanged(shihabItem);
                     string extractedDest;
                     string extractErr;
-                    if (ShihabSafeArchiveExtractor.ExtractArchiveSafely(
-                        shihabFinalTargetPath,
-                        _mehediConfig.ShihabExtractSubfolderMode,
+                    if (ShihabSafeArchiveExtractor.ExtractArchiveSafelyWithConfig(
+                        primaryArchivePath,
+                        _mehediConfig,
+                        _shihabStore,
                         shihabItem.ShihabArchivePassword,
-                        _mehediConfig.ShihabDeleteArchiveAfterExtract,
                         _mehediConfig.ShihabWriteZoneIdentifier ? shihabItem.MehediUrl : "",
                         _mehediConfig.ShihabWriteZoneIdentifier ? shihabItem.MehediReferer : "",
                         out extractedDest,
                         out extractErr))
                     {
-                        EmitShihabLog("[Extract] Extracted " + shihabItem.ShihabFileName + " -> " + extractedDest);
+                        EmitShihabLog("[Extract] Extracted " + Path.GetFileName(primaryArchivePath) + " -> " + extractedDest);
                     }
                     else
                     {

@@ -80,6 +80,7 @@ namespace ShihabMehediIDM
 
         [IgnoreDataMember] public bool MehediIsRunningNow { get; set; }
         [IgnoreDataMember] public bool MehediHadWorkInCurrentRun { get; set; }
+        [IgnoreDataMember] public long MehediQueueRunBaselineBytes { get; set; }
         [IgnoreDataMember] public string ShihabLastAutoStartMinute { get; set; }
         [IgnoreDataMember] public string MehediLastAutoStopMinute { get; set; }
         [IgnoreDataMember] public DateTime ShihabLastPeriodicSyncUtc { get; set; }

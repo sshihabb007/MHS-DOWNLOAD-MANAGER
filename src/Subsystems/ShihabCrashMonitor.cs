@@ -167,10 +167,49 @@ namespace ShihabMehediIDM
                 Directory.CreateDirectory(crashDir);
                 string sessionRunning = Path.Combine(crashDir, "session.running");
                 string dirtyMarker = Path.Combine(crashDir, "dirty_shutdown.marker");
+                string heartbeatFile = Path.Combine(crashDir, "heartbeat.tick");
+                DateTime startedMonitoringUtc = DateTime.UtcNow;
+                bool freezeReportedForCurrentStall = false;
+                long lastSeenHeartbeatTicks = 0;
 
                 using (Process parent = Process.GetProcessById(parentPid))
                 {
-                    parent.WaitForExit();
+                    while (!parent.WaitForExit(3000))
+                    {
+                        try
+                        {
+                            if ((DateTime.UtcNow - startedMonitoringUtc).TotalSeconds < 15.0) continue;
+                            if (!File.Exists(heartbeatFile)) continue;
+                            string tickStr = File.ReadAllText(heartbeatFile, Encoding.UTF8).Trim();
+                            long ticks;
+                            if (long.TryParse(tickStr, NumberStyles.Integer, CultureInfo.InvariantCulture, out ticks) && ticks > 0)
+                            {
+                                if (ticks != lastSeenHeartbeatTicks)
+                                {
+                                    lastSeenHeartbeatTicks = ticks;
+                                    freezeReportedForCurrentStall = false;
+                                }
+                                DateTime hbUtc = new DateTime(ticks, DateTimeKind.Utc);
+                                double stallSec = (DateTime.UtcNow - hbUtc).TotalSeconds;
+                                if (stallSec >= 30.0 && !freezeReportedForCurrentStall)
+                                {
+                                    freezeReportedForCurrentStall = true;
+                                    string freezeFile = Path.Combine(
+                                        crashDir,
+                                        string.Format(CultureInfo.InvariantCulture, "freeze_{0:yyyyMMdd_HHmmss}_watchdog.log", DateTime.Now));
+                                    StringBuilder fsb = new StringBuilder();
+                                    fsb.AppendLine("MHS Download Manager Out-of-Process Freeze Watchdog Report");
+                                    fsb.AppendLine("Timestamp : " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture));
+                                    fsb.AppendLine("OS        : " + Environment.OSVersion);
+                                    fsb.AppendLine("PID       : " + parentPid.ToString(CultureInfo.InvariantCulture));
+                                    fsb.AppendLine(string.Format(CultureInfo.InvariantCulture, "StallSec  : {0:0.0}s without UI heartbeat", stallSec));
+                                    fsb.AppendLine("Reason    : Monitored UI thread heartbeat stopped advancing.");
+                                    File.WriteAllText(freezeFile, ScrubSensitivePaths(fsb.ToString()), Encoding.UTF8);
+                                }
+                            }
+                        }
+                        catch { }
+                    }
                     int exitCode = 0;
                     try { exitCode = parent.ExitCode; } catch { }
 

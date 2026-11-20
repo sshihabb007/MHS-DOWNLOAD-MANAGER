@@ -96,7 +96,7 @@ namespace ShihabMehediIDM
             Action<string, string, string> fetchAndDisplayFeed = delegate(string url, string pattern, string exclPattern)
             {
                 Uri parsedFeedUri;
-                if (!ShihabProcessAndPathSafety.TryValidateHttpUrl(url, true, out parsedFeedUri))
+                if (!ShihabProcessAndPathSafety.TryValidateHttpUrl(url, false, out parsedFeedUri))
                 {
                     MessageBox.Show(this, "Please enter a valid HTTP or HTTPS feed URL.", "RSS Feed Reader", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return;
@@ -106,40 +106,19 @@ namespace ShihabMehediIDM
                 entriesView.Items.Clear();
                 fetchNowBtn.Enabled = false;
                 fetchNowBtn.Text = "Fetching...";
-                string ua = config.ShihabDefaultUserAgent;
+                string ua = config.GetEffectiveDefaultUserAgent();
 
                 Task.Run(delegate
                 {
-                    List<ShihabRssItemEntry> items = ShihabRssFeedManager.FetchFeedItems(url, ua);
+                    List<ShihabRssItemEntry> items = ShihabRssFeedManager.FetchFeedItems(url, ua, config);
                     List<ShihabRssItemEntry> filtered = new List<ShihabRssItemEntry>();
-                    TimeSpan rxTimeout = TimeSpan.FromMilliseconds(150);
 
                     for (int i = 0; i < items.Count; i++)
                     {
                         ShihabRssItemEntry it = items[i];
-                        if (!string.IsNullOrWhiteSpace(pattern) && pattern != "*")
+                        if (!ShihabRssFeedManager.MatchesFilter(it.Title, it.DownloadUrl, pattern, exclPattern))
                         {
-                            try
-                            {
-                                if (!Regex.IsMatch(it.Title ?? "", pattern, RegexOptions.IgnoreCase, rxTimeout) &&
-                                    !Regex.IsMatch(it.DownloadUrl ?? "", pattern, RegexOptions.IgnoreCase, rxTimeout))
-                                {
-                                    continue;
-                                }
-                            }
-                            catch { }
-                        }
-                        if (!string.IsNullOrWhiteSpace(exclPattern))
-                        {
-                            try
-                            {
-                                if (Regex.IsMatch(it.Title ?? "", exclPattern, RegexOptions.IgnoreCase, rxTimeout) ||
-                                    Regex.IsMatch(it.DownloadUrl ?? "", exclPattern, RegexOptions.IgnoreCase, rxTimeout))
-                                {
-                                    continue;
-                                }
-                            }
-                            catch { }
+                            continue;
                         }
                         filtered.Add(it);
                     }
@@ -181,7 +160,7 @@ namespace ShihabMehediIDM
                 string u = feedUrlBox.Text.Trim();
                 if (string.IsNullOrEmpty(u) || u == "https://") return;
                 Uri parsedFeedUri;
-                if (!ShihabProcessAndPathSafety.TryValidateHttpUrl(u, true, out parsedFeedUri))
+                if (!ShihabProcessAndPathSafety.TryValidateHttpUrl(u, false, out parsedFeedUri))
                 {
                     MessageBox.Show(this, "Please enter a valid HTTP or HTTPS feed URL.", "RSS Feed Reader", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return;
@@ -275,10 +254,7 @@ namespace ShihabMehediIDM
             bool dark = config.ShihabDarkMode;
             Color surf = ShihabThemePalette.GetShihabSurfaceBg(dark);
 
-            if (string.IsNullOrWhiteSpace(config.ShihabRemotePairingCode))
-            {
-                config.ShihabRemotePairingCode = ShihabRemoteControlServer.GenerateEightDigitPairingCode();
-            }
+            ShihabRemoteControlServer.EnsureFreshPairingCode(config, delegate { if (store != null) store.SaveMehediConfig(config); }, false);
 
             Text = "LAN Remote Web UI & Mobile Pairing (QR / 8-Digit Code) — " + ShihabThemePalette.ShihabMainHeaderTitle;
             Size = new Size(640, 420);
@@ -323,7 +299,7 @@ namespace ShihabMehediIDM
                 BorderStyle = BorderStyle.FixedSingle,
                 SizeMode = PictureBoxSizeMode.Zoom,
                 BackColor = Color.White,
-                Image = ShihabQrCodeEncoder.RenderBitmap(lanUrl + "/?code=" + config.ShihabRemotePairingCode, 6, 4)
+                Image = ShihabQrCodeEncoder.RenderBitmap(lanUrl + "/#pair=" + config.ShihabRemotePairingCode, 6, 4)
             };
 
             Label urlTitleLbl = new Label { Text = "LAN Dashboard URL:", Location = new Point(216, 56), AutoSize = true };
@@ -344,7 +320,7 @@ namespace ShihabMehediIDM
                 lanUrl = ShihabRemoteControlServer.GetLocalLanDashboardUrl((int)portNum.Value);
                 urlBox.Text = lanUrl;
                 Image oldImg = _qrBox.Image;
-                _qrBox.Image = ShihabQrCodeEncoder.RenderBitmap(lanUrl + "/?code=" + config.ShihabRemotePairingCode, 6, 4);
+                _qrBox.Image = ShihabQrCodeEncoder.RenderBitmap(lanUrl + "/#pair=" + config.ShihabRemotePairingCode, 6, 4);
                 if (oldImg != null) oldImg.Dispose();
             };
 
@@ -354,7 +330,7 @@ namespace ShihabMehediIDM
             regenBtn.Location = new Point(495, 140);
             regenBtn.Click += delegate
             {
-                config.ShihabRemotePairingCode = ShihabRemoteControlServer.GenerateEightDigitPairingCode();
+                ShihabRemoteControlServer.EnsureFreshPairingCode(config, delegate { if (store != null) store.SaveMehediConfig(config); }, true);
                 codeBigLbl.Text = config.ShihabRemotePairingCode;
                 refreshQrImage();
                 RemoteConfigChanged = true;

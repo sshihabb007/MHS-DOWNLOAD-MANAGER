@@ -117,6 +117,7 @@ namespace ShihabMehediIDM
                             fReq.UsePassive = _mehediConfig.ShihabFtpUsePassiveMode;
                             fReq.EnableSsl = enableTls;
                             if (startOff > 0) fReq.ContentOffset = startOff;
+                            ShihabDnsAndNetworkManager.ApplyFtpNetworkBindingAndProxy(fReq, _mehediConfig, normUrl);
                             ApplyFtpCredentials(fReq, normUrl, shihabItem);
 
                             long winStart = 0;
@@ -249,6 +250,7 @@ namespace ShihabMehediIDM
             {
                 req.ContentOffset = resumeOffset;
             }
+            ShihabDnsAndNetworkManager.ApplyFtpNetworkBindingAndProxy(req, _mehediConfig, normUrl);
             ApplyFtpCredentials(req, normUrl, shihabItem);
 
             Stopwatch singleWatch = Stopwatch.StartNew();
