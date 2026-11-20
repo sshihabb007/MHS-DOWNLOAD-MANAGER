@@ -1,0 +1,16 @@
+{
+  "name": "MHS Download Manager",
+  "short_name": "MHS DM",
+  "description": "Free open-source Windows x64 download accelerator, BitTorrent P2P client, 14-browser stream sniffer, and lossless media muxer by Mehedi Hasan Shihab.",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#070B14",
+  "theme_color": "#3B82F6",
+  "icons": [
+    {
+      "src": "assets/mdm.png",
+      "sizes": "256x256",
+      "type": "image/png"
+    }
+  ]
+}

@@ -1,0 +1,1979 @@
+/* docs/styles.css — Official MHS Download Manager Web Presence
+   Visual DNA aligned with Mehedi Hasan Shihab's shihabCV DESIGN.md
+   Supports Dark Mode (default), Light Mode (body.light-mode), and 7 accent themes. */
+
+:root {
+  color-scheme: dark;
+  scroll-behavior: smooth;
+  scroll-padding-top: 84px;
+
+  /* shihabCV DESIGN.md Dark Mode Tokens */
+  --bg-dark: #070B14;
+  --bg-card: #111526;
+  --bg-hover: #1A2033;
+  --border-color: #1F293B;
+  --text-main: #F8FAFC;
+  --text-muted: #94A3B8;
+
+  --primary-color: #3B82F6;
+  --secondary-accent: #8B5CF6;
+  --magenta-accent: #EC4899;
+  --cyan-accent: #06B6D4;
+  --brand-gradient: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-accent) 60%, var(--magenta-accent) 100%);
+
+  --tag-green-bg: rgba(16, 185, 129, 0.12);
+  --tag-green-text: #34D399;
+  --tag-orange-bg: rgba(245, 158, 11, 0.12);
+  --tag-orange-text: #FBBF24;
+  --tag-pink-bg: rgba(236, 72, 153, 0.12);
+  --tag-pink-text: #F472B6;
+  --tag-blue-bg: rgba(59, 130, 246, 0.12);
+  --tag-blue-text: #60A5FA;
+  --tag-purple-bg: rgba(168, 85, 247, 0.12);
+  --tag-purple-text: #C084FC;
+  --tag-cyan-bg: rgba(6, 182, 212, 0.12);
+  --tag-cyan-text: #22D3EE;
+
+  --hero-glow-1: rgba(168, 85, 247, 0.24);
+  --hero-glow-2: rgba(59, 130, 246, 0.18);
+  --hero-glow-bg: rgba(7, 11, 20, 0);
+  --overlay-bg: rgba(0, 0, 0, 0.28);
+
+  --shihab-surface-elevated: color-mix(in srgb, var(--bg-card) 82%, var(--bg-hover) 18%);
+  --shihab-accent-soft: color-mix(in srgb, var(--primary-color) 13%, transparent);
+  --shihab-accent-border: color-mix(in srgb, var(--primary-color) 38%, var(--border-color));
+  --shihab-shadow-card: 0 12px 32px rgba(0, 0, 0, 0.28);
+  --shihab-shadow-hero: 0 28px 80px rgba(0, 0, 0, 0.55);
+
+  --font-sans: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+body.light-mode {
+  color-scheme: light;
+
+  /* shihabCV DESIGN.md Light Mode Warm Parchment Tokens */
+  --bg-dark: #F2EFE9;
+  --bg-card: #FAF8F2;
+  --bg-hover: #E8E4DB;
+  --border-color: #D5CFC4;
+  --text-main: #2A2520;
+  --text-muted: #5F584E;
+
+  --tag-green-bg: rgba(4, 120, 87, 0.10);
+  --tag-green-text: #047857;
+  --tag-orange-bg: rgba(180, 83, 9, 0.10);
+  --tag-orange-text: #B45309;
+  --tag-pink-bg: rgba(190, 24, 93, 0.10);
+  --tag-pink-text: #BE185D;
+  --tag-blue-bg: rgba(29, 78, 216, 0.10);
+  --tag-blue-text: #1D4ED8;
+  --tag-purple-bg: rgba(126, 34, 206, 0.10);
+  --tag-purple-text: #7E22CE;
+  --tag-cyan-bg: rgba(14, 116, 144, 0.10);
+  --tag-cyan-text: #0E7490;
+
+  --hero-glow-1: rgba(168, 85, 247, 0.13);
+  --hero-glow-2: rgba(59, 130, 246, 0.11);
+  --hero-glow-bg: rgba(242, 239, 233, 0);
+  --overlay-bg: rgba(232, 228, 219, 0.65);
+
+  --shihab-surface-elevated: color-mix(in srgb, var(--bg-card) 75%, var(--bg-hover) 25%);
+  --shihab-accent-soft: color-mix(in srgb, var(--primary-color) 11%, transparent);
+  --shihab-accent-border: color-mix(in srgb, var(--primary-color) 42%, var(--border-color));
+  --shihab-shadow-card: 0 10px 26px rgba(54, 49, 43, 0.08);
+  --shihab-shadow-hero: 0 22px 54px rgba(54, 49, 43, 0.16);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  width: 100%;
+  overflow-x: clip;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--bg-dark);
+  color: var(--text-main);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+a {
+  color: var(--primary-color);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+a:focus-visible,
+button:focus-visible,
+summary:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--primary-color);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+code,
+pre,
+kbd {
+  font-family: var(--font-mono);
+}
+
+.shihab_sr_only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Skip Link */
+.shihab_skip_link {
+  position: absolute;
+  top: 12px;
+  left: 16px;
+  z-index: 10001;
+  background: var(--text-main);
+  color: var(--bg-dark);
+  padding: 10px 16px;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  font-weight: 700;
+  text-decoration: none;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-200%);
+  transition: transform 0.18s ease, opacity 0.18s ease;
+}
+
+.shihab_skip_link:focus-visible {
+  position: fixed;
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+/* =====================================================
+   STICKY NAVBAR (Matches shihabCV .navbar)
+   ===================================================== */
+.navbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 14px 32px;
+  background-color: color-mix(in srgb, var(--bg-dark) 88%, transparent);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--border-color);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.nav-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 800;
+  font-size: 1.15rem;
+  letter-spacing: -0.02em;
+  color: var(--text-main);
+  text-decoration: none;
+  white-space: nowrap;
+  transition: transform 0.2s ease;
+}
+
+.nav-brand:hover {
+  transform: scale(1.02);
+}
+
+.nav-brand img {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  object-fit: contain;
+}
+
+.nav-brand span {
+  color: var(--primary-color);
+}
+
+.nav-links {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  font-size: 0.92rem;
+  color: var(--text-muted);
+}
+
+.nav-links a {
+  color: inherit;
+  text-decoration: none;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: color 0.2s ease, transform 0.2s ease;
+}
+
+.nav-links a:hover,
+.nav-links a.active {
+  color: var(--primary-color);
+}
+
+.nav-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+/* =====================================================
+   BUTTONS (Matches shihabCV .btn / .btn-primary / .btn-outline)
+   ===================================================== */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 20px;
+  border-radius: 8px;
+  font-size: 0.92rem;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: transform 0.2s ease, background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
+  touch-action: manipulation;
+  white-space: nowrap;
+}
+
+.btn:hover {
+  transform: translateY(-1px);
+}
+
+.btn-primary {
+  background: var(--text-main);
+  color: var(--bg-dark);
+}
+
+.btn-primary:hover {
+  opacity: 0.92;
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--primary-color) 25%, transparent);
+}
+
+.btn-accent {
+  background: var(--primary-color);
+  color: #FFFFFF;
+  border-color: color-mix(in srgb, var(--primary-color) 80%, #FFFFFF);
+  box-shadow: 0 8px 26px color-mix(in srgb, var(--primary-color) 34%, transparent);
+}
+
+.btn-accent:hover {
+  filter: brightness(1.08);
+  box-shadow: 0 12px 32px color-mix(in srgb, var(--primary-color) 44%, transparent);
+}
+
+.btn-outline {
+  background: transparent;
+  color: var(--text-main);
+  border-color: var(--border-color);
+}
+
+.btn-outline:hover {
+  background: var(--bg-hover);
+  border-color: var(--shihab-accent-border);
+}
+
+.btn-sm {
+  padding: 7px 13px;
+  font-size: 0.84rem;
+  border-radius: 6px;
+}
+
+.btn-lg {
+  padding: 13px 24px;
+  font-size: 0.98rem;
+  font-weight: 700;
+}
+
+.btn svg,
+.nav-actions svg {
+  width: 17px;
+  height: 17px;
+  flex-shrink: 0;
+}
+
+/* =====================================================
+   HERO SECTION (shihabCV Ambient Glow + Interactive Showcase)
+   ===================================================== */
+.hero {
+  position: relative;
+  text-align: center;
+  padding: 30px 20px 44px;
+  border-bottom: 1px solid var(--border-color);
+  overflow: hidden;
+}
+
+.hero::before {
+  content: '';
+  position: absolute;
+  top: -190px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 1040px;
+  height: 620px;
+  background: radial-gradient(ellipse at top, var(--hero-glow-1) 0%, var(--hero-glow-2) 34%, var(--hero-glow-bg) 72%);
+  z-index: 0;
+  pointer-events: none;
+}
+
+.shihab_hero_inner {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 1120px;
+  margin: 0 auto;
+  min-width: 0;
+}
+
+.shihab_hero_logo_row {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin-bottom: 12px;
+}
+
+.shihab_hero_logo_glow {
+  position: relative;
+  width: 68px;
+  height: 68px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--bg-card) 86%, transparent);
+  border: 1px solid var(--shihab-accent-border);
+  box-shadow: 0 12px 34px color-mix(in srgb, var(--primary-color) 24%, transparent);
+}
+
+.shihab_hero_logo_glow img {
+  width: 52px;
+  height: 52px;
+  object-fit: contain;
+}
+
+.shihab_eyebrow_badge {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--primary-color);
+  background: var(--shihab-accent-soft);
+  border: 1px solid var(--shihab-accent-border);
+  margin-bottom: 12px;
+  text-align: center;
+}
+
+.shihab_pulse_dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #10B981;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.22);
+  flex-shrink: 0;
+}
+
+.hero h1 {
+  font-size: clamp(1.75rem, 4.1vw, 3.2rem);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.12;
+  max-width: 920px;
+  margin: 0 auto 10px;
+  text-wrap: balance;
+  overflow-wrap: break-word;
+}
+
+.shihab_gradient_text {
+  background: var(--brand-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+body.light-mode .shihab_gradient_text {
+  background: linear-gradient(135deg, #1D4ED8 0%, #6D28D9 65%, #BE185D 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.shihab_dev_attribution {
+  font-size: 0.94rem;
+  color: var(--text-muted);
+  margin: 0 auto 10px;
+  font-weight: 500;
+}
+
+.shihab_dev_attribution a {
+  color: var(--primary-color);
+  text-decoration: none;
+  font-weight: 700;
+  border-bottom: 1px solid transparent;
+  transition: border-color 0.2s ease;
+}
+
+.shihab_dev_attribution a:hover {
+  border-bottom-color: var(--primary-color);
+}
+
+.shihab_hero_lead {
+  font-size: clamp(0.95rem, 1.45vw, 1.08rem);
+  color: var(--text-muted);
+  max-width: 780px;
+  margin: 0 auto 20px;
+  line-height: 1.62;
+  text-wrap: pretty;
+}
+
+.btn-group {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.shihab_trust_strip {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px 18px;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  margin-bottom: 34px;
+}
+
+.shihab_trust_item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 500;
+}
+
+.shihab_trust_item svg {
+  width: 15px;
+  height: 15px;
+  color: var(--tag-green-text);
+}
+
+/* =====================================================
+   INTERACTIVE MDM DESKTOP APP PREVIEW MOCKUP
+   ===================================================== */
+.shihab_app_showcase {
+  width: 100%;
+  max-width: 980px;
+  margin: 0 auto 32px;
+  text-align: left;
+  min-width: 0;
+}
+
+.shihab_app_window {
+  width: 100%;
+  max-width: 100%;
+  --mdm-bg: #0B0F1A;
+  --mdm-sidebar: #0F1524;
+  --mdm-row: #131B2E;
+  --mdm-border: #1F2A44;
+  --mdm-text: #F1F5F9;
+  --mdm-muted: #94A3B8;
+  --mdm-accent: #3B82F6;
+  --mdm-accent-2: #8B5CF6;
+
+  background: var(--mdm-bg);
+  color: var(--mdm-text);
+  border: 1px solid var(--mdm-border);
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: var(--shihab-shadow-hero);
+  transition: background-color 0.25s ease, border-color 0.25s ease, color 0.25s ease;
+}
+
+.shihab_app_window[data-mdm-theme="nord"] {
+  --mdm-bg: #2E3440;
+  --mdm-sidebar: #272C36;
+  --mdm-row: #3B4252;
+  --mdm-border: #4C566A;
+  --mdm-text: #ECEFF4;
+  --mdm-muted: #D8DEE9;
+  --mdm-accent: #88C0D0;
+  --mdm-accent-2: #81A1C1;
+}
+
+.shihab_app_window[data-mdm-theme="emerald"] {
+  --mdm-bg: #07130F;
+  --mdm-sidebar: #0A1D17;
+  --mdm-row: #0F2920;
+  --mdm-border: #164434;
+  --mdm-text: #ECFDF5;
+  --mdm-muted: #A7F3D0;
+  --mdm-accent: #10B981;
+  --mdm-accent-2: #34D399;
+}
+
+.shihab_app_window[data-mdm-theme="solarized"] {
+  --mdm-bg: #002B36;
+  --mdm-sidebar: #073642;
+  --mdm-row: #0B3E4B;
+  --mdm-border: #1A5261;
+  --mdm-text: #FDF6E3;
+  --mdm-muted: #93A1A1;
+  --mdm-accent: #268BD2;
+  --mdm-accent-2: #2AA198;
+}
+
+.shihab_app_window[data-mdm-theme="light"] {
+  --mdm-bg: #F8FAFC;
+  --mdm-sidebar: #EFF3F8;
+  --mdm-row: #FFFFFF;
+  --mdm-border: #CBD5E1;
+  --mdm-text: #0F172A;
+  --mdm-muted: #475569;
+  --mdm-accent: #2563EB;
+  --mdm-accent-2: #7C3AED;
+}
+
+.shihab_app_window[data-mdm-theme="aero"] {
+  --mdm-bg: #0E2238;
+  --mdm-sidebar: #14304E;
+  --mdm-row: #1A3B5E;
+  --mdm-border: #3B7BBF;
+  --mdm-text: #F0F9FF;
+  --mdm-muted: #BAE6FD;
+  --mdm-accent: #38BDF8;
+  --mdm-accent-2: #60A5FA;
+}
+
+.shihab_app_window[data-mdm-theme="contrast"] {
+  --mdm-bg: #000000;
+  --mdm-sidebar: #0B0B0B;
+  --mdm-row: #141414;
+  --mdm-border: #FFFFFF;
+  --mdm-text: #FFFFFF;
+  --mdm-muted: #FDE047;
+  --mdm-accent: #38BDF8;
+  --mdm-accent-2: #FDE047;
+}
+
+.shihab_app_titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--mdm-sidebar);
+  border-bottom: 1px solid var(--mdm-border);
+  font-size: 0.78rem;
+}
+
+.shihab_app_title_left {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+}
+
+.shihab_app_title_left img {
+  width: 18px;
+  height: 18px;
+}
+
+.shihab_app_bridge_pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: rgba(16, 185, 129, 0.14);
+  color: #34D399;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+.shihab_app_window[data-mdm-theme="light"] .shihab_app_bridge_pill {
+  color: #047857;
+}
+
+.shihab_app_win_controls {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.shihab_app_win_dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--mdm-border);
+}
+
+.shihab_app_toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--mdm-border);
+  background: color-mix(in srgb, var(--mdm-sidebar) 65%, var(--mdm-bg) 35%);
+}
+
+.shihab_app_ribbon {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.shihab_ribbon_chip {
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  border: 1px solid var(--mdm-border);
+  background: var(--mdm-row);
+  color: var(--mdm-text);
+}
+
+.shihab_ribbon_chip_primary {
+  background: var(--mdm-accent);
+  border-color: var(--mdm-accent);
+  color: #FFFFFF;
+}
+
+.shihab_app_body {
+  display: grid;
+  grid-template-columns: 185px 1fr;
+  min-height: 244px;
+}
+
+.shihab_app_sidebar {
+  background: var(--mdm-sidebar);
+  border-right: 1px solid var(--mdm-border);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.shihab_app_sidebar_label {
+  font-size: 0.67rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: var(--mdm-muted);
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
+.shihab_app_nav_list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.78rem;
+}
+
+.shihab_app_nav_list li {
+  display: flex;
+  justify-content: space-between;
+  padding: 5px 8px;
+  border-radius: 6px;
+  color: var(--mdm-muted);
+}
+
+.shihab_app_nav_list li.active {
+  background: color-mix(in srgb, var(--mdm-accent) 18%, transparent);
+  color: var(--mdm-text);
+  font-weight: 700;
+}
+
+.shihab_storage_card {
+  padding: 9px 10px;
+  border-radius: 8px;
+  background: var(--mdm-row);
+  border: 1px solid var(--mdm-border);
+  font-size: 0.7rem;
+}
+
+.shihab_storage_bar {
+  height: 5px;
+  border-radius: 999px;
+  background: var(--mdm-border);
+  margin: 6px 0 4px;
+  overflow: hidden;
+}
+
+.shihab_storage_fill {
+  width: 62%;
+  height: 100%;
+  background: linear-gradient(90deg, var(--mdm-accent), var(--mdm-accent-2));
+}
+
+.shihab_app_transfers {
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.shihab_transfer_row {
+  background: var(--mdm-row);
+  border: 1px solid var(--mdm-border);
+  border-radius: 8px;
+  padding: 9px 12px;
+  display: grid;
+  grid-template-columns: minmax(0, 1.8fr) minmax(110px, 1fr) 92px;
+  align-items: center;
+  gap: 12px;
+  font-size: 0.78rem;
+}
+
+.shihab_transfer_name {
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.shihab_transfer_meta {
+  font-size: 0.7rem;
+  color: var(--mdm-muted);
+  margin-top: 2px;
+}
+
+.shihab_progress_track {
+  height: 7px;
+  border-radius: 999px;
+  background: var(--mdm-border);
+  overflow: hidden;
+}
+
+.shihab_progress_fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--mdm-accent), var(--mdm-accent-2));
+}
+
+.shihab_progress_done {
+  background: #10B981;
+}
+
+.shihab_transfer_speed {
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: var(--mdm-accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.shihab_transfer_speed_done {
+  color: #10B981;
+}
+
+.shihab_app_footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--mdm-border);
+  background: var(--mdm-sidebar);
+  font-size: 0.72rem;
+  font-family: var(--font-mono);
+  color: var(--mdm-muted);
+}
+
+.shihab_theme_preview_bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.shihab_theme_preview_label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-right: 4px;
+}
+
+.shihab_mdm_theme_btn {
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-card);
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.18s ease, background-color 0.18s ease, color 0.18s ease;
+}
+
+.shihab_mdm_theme_btn:hover {
+  color: var(--text-main);
+  border-color: var(--primary-color);
+}
+
+.shihab_mdm_theme_btn[aria-pressed="true"] {
+  background: var(--text-main);
+  color: var(--bg-dark);
+  border-color: var(--text-main);
+}
+
+/* =====================================================
+   STATS BANNER (Exact shihabCV .stats-banner)
+   ===================================================== */
+.stats-banner {
+  max-width: 980px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+}
+
+.stat-box {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  padding: 18px 14px;
+  text-align: center;
+  border-radius: 10px;
+  transition: border-color 0.2s ease, transform 0.2s ease;
+}
+
+.stat-box:hover {
+  border-color: var(--shihab-accent-border);
+  transform: translateY(-2px);
+}
+
+.shihab_stat_num {
+  font-size: 1.75rem;
+  font-weight: 800;
+  color: var(--primary-color);
+  line-height: 1.2;
+  margin-bottom: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-box p {
+  font-size: 0.76rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
+
+/* =====================================================
+   MAIN CONTAINER & SECTION HEADINGS
+   ===================================================== */
+.shihab_page_main {
+  width: 100%;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 48px 20px 84px;
+}
+
+.shihab_section {
+  margin-bottom: 68px;
+  scroll-margin-top: 90px;
+}
+
+.shihab_section:last-of-type {
+  margin-bottom: 0;
+}
+
+.shihab_section_header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 24px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.shihab_section_title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: clamp(1.35rem, 2.5vw, 1.75rem);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--text-main);
+  margin-bottom: 4px;
+  text-wrap: balance;
+}
+
+.shihab_section_title svg {
+  width: 22px;
+  height: 22px;
+  color: var(--primary-color);
+  flex-shrink: 0;
+}
+
+.shihab_section_subtitle {
+  font-size: 0.95rem;
+  color: var(--text-muted);
+  max-width: 720px;
+}
+
+.shihab_count_pill {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  padding: 5px 12px;
+  border-radius: 999px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* =====================================================
+   TAGS & BADGES (Exact shihabCV .tag-* Palette)
+   ===================================================== */
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.tag {
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 4px 9px;
+  border-radius: 5px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.tag-green { background: var(--tag-green-bg); color: var(--tag-green-text); }
+.tag-purple { background: var(--tag-purple-bg); color: var(--tag-purple-text); }
+.tag-orange { background: var(--tag-orange-bg); color: var(--tag-orange-text); }
+.tag-blue { background: var(--tag-blue-bg); color: var(--tag-blue-text); }
+.tag-pink { background: var(--tag-pink-bg); color: var(--tag-pink-text); }
+.tag-cyan { background: var(--tag-cyan-bg); color: var(--tag-cyan-text); }
+
+/* =====================================================
+   DOWNLOAD CARDS GRID
+   ===================================================== */
+.shihab_download_grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 20px;
+  margin-bottom: 18px;
+}
+
+.shihab_download_card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  position: relative;
+  overflow: hidden;
+  box-shadow: var(--shihab-shadow-card);
+  transition: border-color 0.2s ease, transform 0.2s ease;
+}
+
+.shihab_download_card:hover {
+  border-color: var(--primary-color);
+  transform: translateY(-2px);
+}
+
+.shihab_download_card_featured {
+  border-color: var(--shihab-accent-border);
+}
+
+.shihab_download_card_featured::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: var(--brand-gradient);
+}
+
+.shihab_download_card h3 {
+  font-size: 1.15rem;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.shihab_download_meta {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--tag-blue-text);
+  font-weight: 600;
+}
+
+.shihab_download_desc {
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  flex-grow: 1;
+}
+
+.shihab_check_list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 0.86rem;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.shihab_check_list li {
+  display: block;
+  position: relative;
+  padding-left: 20px;
+  overflow-wrap: break-word;
+}
+
+.shihab_check_list li::before {
+  content: '✓';
+  position: absolute;
+  left: 0;
+  top: 0;
+  color: var(--tag-green-text);
+  font-weight: 800;
+}
+
+.shihab_check_list code {
+  font-size: 0.8em;
+  color: var(--text-main);
+  background: color-mix(in srgb, var(--bg-hover) 85%, transparent);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+.shihab_sha_bar {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 14px 18px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.86rem;
+  color: var(--text-muted);
+}
+
+.shihab_sha_bar strong {
+  color: var(--text-main);
+}
+
+/* =====================================================
+   FILTERABLE FEATURES GRID (Inspired by shihabCV/tools)
+   ===================================================== */
+.shihab_controls_shell {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 16px 18px;
+  margin-bottom: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.shihab_controls_top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.shihab_search_wrap {
+  position: relative;
+  flex: 1 1 300px;
+  display: flex;
+  align-items: center;
+}
+
+.shihab_search_wrap svg {
+  position: absolute;
+  left: 13px;
+  width: 16px;
+  height: 16px;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.shihab_search_input {
+  width: 100%;
+  padding: 10px 44px 10px 38px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-dark);
+  color: var(--text-main);
+  font-size: 0.92rem;
+}
+
+.shihab_search_input::placeholder {
+  color: var(--text-muted);
+}
+
+.shihab_search_kbd {
+  position: absolute;
+  right: 12px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 2px 7px;
+  pointer-events: none;
+}
+
+.shihab_filter_bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.shihab_filter_btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 13px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+.shihab_filter_btn:hover {
+  color: var(--text-main);
+  background: var(--bg-hover);
+  border-color: var(--shihab-accent-border);
+}
+
+.shihab_filter_btn[aria-pressed="true"] {
+  background: var(--text-main);
+  color: var(--bg-dark);
+  border-color: var(--text-main);
+}
+
+.shihab_feature_grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+
+.shihab_feature_card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  position: relative;
+  overflow: hidden;
+  box-shadow: var(--shihab-shadow-card);
+  transition: border-color 0.2s ease, transform 0.2s ease;
+}
+
+.shihab_feature_card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, var(--primary-color), var(--secondary-accent));
+  opacity: 0.85;
+}
+
+.shihab_feature_card:hover {
+  border-color: var(--primary-color);
+  transform: translateY(-2px);
+}
+
+.shihab_feature_card[hidden] {
+  display: none;
+}
+
+.shihab_card_head {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.shihab_icon_badge {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border: 1px solid transparent;
+}
+
+.shihab_icon_badge svg {
+  width: 22px;
+  height: 22px;
+}
+
+.shihab_icon_blue { background: var(--tag-blue-bg); color: var(--tag-blue-text); border-color: color-mix(in srgb, var(--tag-blue-text) 28%, transparent); }
+.shihab_icon_purple { background: var(--tag-purple-bg); color: var(--tag-purple-text); border-color: color-mix(in srgb, var(--tag-purple-text) 28%, transparent); }
+.shihab_icon_pink { background: var(--tag-pink-bg); color: var(--tag-pink-text); border-color: color-mix(in srgb, var(--tag-pink-text) 28%, transparent); }
+.shihab_icon_green { background: var(--tag-green-bg); color: var(--tag-green-text); border-color: color-mix(in srgb, var(--tag-green-text) 28%, transparent); }
+.shihab_icon_orange { background: var(--tag-orange-bg); color: var(--tag-orange-text); border-color: color-mix(in srgb, var(--tag-orange-text) 28%, transparent); }
+.shihab_icon_cyan { background: var(--tag-cyan-bg); color: var(--tag-cyan-text); border-color: color-mix(in srgb, var(--tag-cyan-text) 28%, transparent); }
+
+.shihab_feature_card h3 {
+  font-size: 1.08rem;
+  font-weight: 700;
+  line-height: 1.3;
+  margin-bottom: 3px;
+}
+
+.shihab_feature_sub {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+.shihab_feature_body {
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  flex-grow: 1;
+}
+
+.shihab_empty_state {
+  text-align: center;
+  padding: 40px 20px;
+  background: var(--bg-card);
+  border: 1px dashed var(--border-color);
+  border-radius: 12px;
+  color: var(--text-muted);
+}
+
+.shihab_empty_state[hidden] {
+  display: none;
+}
+
+/* =====================================================
+   EXTENSION SETUP & INTERACTIVE TABS
+   ===================================================== */
+.shihab_panel_card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 24px;
+  box-shadow: var(--shihab-shadow-card);
+}
+
+.shihab_path_copy_row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: var(--bg-dark);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 20px;
+}
+
+.shihab_path_copy_row code {
+  font-size: 0.88rem;
+  color: var(--tag-cyan-text);
+  word-break: break-all;
+}
+
+.shihab_tablist {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 12px;
+  margin-bottom: 18px;
+}
+
+.shihab_tab_btn {
+  padding: 8px 15px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.86rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.18s ease, color 0.18s ease, border-color 0.18s ease;
+}
+
+.shihab_tab_btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-main);
+}
+
+.shihab_tab_btn[aria-selected="true"] {
+  background: var(--primary-color);
+  color: #FFFFFF;
+  border-color: var(--primary-color);
+}
+
+.shihab_tabpanel[hidden] {
+  display: none;
+}
+
+.shihab_steps_list {
+  list-style: none;
+  counter-reset: shihab-step;
+  display: grid;
+  gap: 12px;
+}
+
+.shihab_steps_list li {
+  counter-increment: shihab-step;
+  display: grid;
+  grid-template-columns: 30px 1fr;
+  align-items: start;
+  gap: 12px;
+  font-size: 0.92rem;
+  color: var(--text-muted);
+}
+
+.shihab_steps_list li::before {
+  content: counter(shihab-step);
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--shihab-accent-soft);
+  color: var(--primary-color);
+  border: 1px solid var(--shihab-accent-border);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.shihab_steps_list strong {
+  color: var(--text-main);
+}
+
+/* =====================================================
+   COMPARISON TABLE (SEO Magnet)
+   ===================================================== */
+.shihab_table_wrap {
+  overflow-x: auto;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  box-shadow: var(--shihab-shadow-card);
+}
+
+.shihab_compare_table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+  min-width: 680px;
+}
+
+.shihab_compare_table th,
+.shihab_compare_table td {
+  padding: 14px 18px;
+  text-align: left;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.shihab_compare_table thead th {
+  background: var(--shihab-surface-elevated);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  font-weight: 700;
+}
+
+.shihab_compare_table thead th.shihab_col_mhs {
+  color: var(--primary-color);
+}
+
+.shihab_compare_table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.shihab_compare_table tbody tr:hover {
+  background: var(--bg-hover);
+}
+
+.shihab_compare_table td.shihab_col_mhs {
+  font-weight: 700;
+  color: var(--text-main);
+  background: color-mix(in srgb, var(--primary-color) 6%, transparent);
+}
+
+.shihab_yes {
+  color: var(--tag-green-text);
+  font-weight: 700;
+}
+
+.shihab_no {
+  color: var(--text-muted);
+}
+
+/* =====================================================
+   CODE WORKBENCH (CLI & MCP)
+   ===================================================== */
+.shihab_code_box {
+  position: relative;
+  background: #060911;
+  color: #E2E8F0;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+body.light-mode .shihab_code_box {
+  background: #1B202C;
+  color: #F1F5F9;
+}
+
+.shihab_code_header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 0.78rem;
+  color: #94A3B8;
+}
+
+.shihab_code_pre {
+  padding: 16px 18px;
+  overflow-x: auto;
+  font-size: 0.85rem;
+  line-height: 1.7;
+}
+
+.shihab_code_comment { color: #64748B; }
+.shihab_code_cmd { color: #60A5FA; }
+.shihab_code_flag { color: #34D399; }
+.shihab_code_str { color: #FBBF24; }
+
+.shihab_copy_btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.06);
+  color: #F8FAFC;
+  font-size: 0.76rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.18s ease, border-color 0.18s ease;
+}
+
+.shihab_copy_btn:hover {
+  background: var(--primary-color);
+  border-color: var(--primary-color);
+}
+
+/* =====================================================
+   ACCORDION LIST (Release History & FAQ — shihabCV .project-row)
+   ===================================================== */
+.shihab_accordion_list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.project-row {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  overflow: hidden;
+  transition: border-color 0.2s ease;
+}
+
+.project-row:hover,
+.project-row[open] {
+  border-color: var(--primary-color);
+}
+
+.project-row summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 20px;
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 0.98rem;
+  color: var(--text-main);
+}
+
+.project-row summary::-webkit-details-marker {
+  display: none;
+}
+
+.shihab_summary_left {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.shihab_chevron {
+  width: 18px;
+  height: 18px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  transition: transform 0.22s ease;
+}
+
+.project-row[open] .shihab_chevron {
+  transform: rotate(180deg);
+  color: var(--primary-color);
+}
+
+.shihab_accordion_body {
+  padding: 16px 20px 20px;
+  border-top: 1px solid var(--border-color);
+  background: var(--overlay-bg);
+  color: var(--text-muted);
+  font-size: 0.92rem;
+}
+
+.shihab_accordion_body ul {
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 8px;
+}
+
+.shihab_accordion_body strong {
+  color: var(--text-main);
+}
+
+/* =====================================================
+   DEVELOPER PROFILE CARD (Signature shihabCV Hero Card)
+   ===================================================== */
+.shihab_dev_card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  padding: 32px;
+  display: flex;
+  align-items: center;
+  gap: 32px;
+  box-shadow: var(--shihab-shadow-card);
+}
+
+.shihab_dev_avatar {
+  width: 148px;
+  height: 148px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 3px solid var(--shihab-accent-border);
+  flex-shrink: 0;
+}
+
+.shihab_dev_info h2 {
+  font-size: 1.55rem;
+  font-weight: 800;
+  margin-bottom: 4px;
+}
+
+.shihab_dev_role {
+  color: var(--primary-color);
+  font-weight: 600;
+  font-size: 0.95rem;
+  margin-bottom: 10px;
+}
+
+.shihab_dev_bio {
+  color: var(--text-muted);
+  font-size: 0.93rem;
+  margin-bottom: 18px;
+  max-width: 680px;
+}
+
+.social-btn-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.btn-social {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 15px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #FFFFFF;
+  text-decoration: none;
+  border-radius: 6px;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.btn-social:hover {
+  opacity: 0.9;
+  transform: translateY(-1px);
+}
+
+.btn-portfolio { background: #2563EB; }
+.btn-github { background: #24292E; }
+.btn-linkedin { background: #0077B5; }
+.btn-email { background: #DC2626; }
+
+/* =====================================================
+   FOOTER (Matches shihabCV Footer)
+   ===================================================== */
+.shihab_footer {
+  text-align: center;
+  padding: 40px 20px 56px;
+  border-top: 1px solid var(--border-color);
+  color: var(--text-muted);
+  font-size: 0.88rem;
+}
+
+.shihab_footer_note {
+  max-width: 740px;
+  margin: 0 auto 18px;
+  font-size: 0.83rem;
+}
+
+.shihab_footer_links {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.shihab_footer_links a {
+  color: var(--text-muted);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.shihab_footer_links a:hover {
+  color: var(--primary-color);
+}
+
+/* =====================================================
+   FLOATING COLOR PALETTE SWITCHER & BACK-TO-TOP (shihabCV Signature)
+   ===================================================== */
+.color-switcher-container {
+  position: fixed;
+  bottom: 24px;
+  left: 24px;
+  z-index: 999;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.color-palette {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  padding: 9px 12px;
+  border-radius: 999px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.color-palette[hidden] {
+  display: none;
+}
+
+.color-btn {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: transform 0.18s ease;
+}
+
+.color-btn:hover {
+  transform: scale(1.12);
+}
+
+.color-btn.active {
+  box-shadow: 0 0 0 2px var(--bg-card), 0 0 0 4px var(--primary-color);
+}
+
+.icon-btn {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  color: var(--text-main);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+  transition: background-color 0.2s ease, color 0.2s ease, transform 0.2s ease;
+}
+
+.icon-btn:hover {
+  background: var(--bg-hover);
+  color: var(--primary-color);
+  transform: translateY(-2px);
+}
+
+.back-to-top {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background-color: var(--text-main);
+  color: var(--bg-dark);
+  border: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 999;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.25s ease, visibility 0.25s ease, transform 0.25s ease;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+}
+
+.back-to-top.show {
+  opacity: 1;
+  visibility: visible;
+}
+
+.back-to-top:hover {
+  transform: translateY(-3px);
+}
+
+.shihab_toast {
+  position: fixed;
+  bottom: 28px;
+  left: 50%;
+  transform: translate(-50%, 16px);
+  background: var(--text-main);
+  color: var(--bg-dark);
+  padding: 10px 18px;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+  z-index: 10002;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.shihab_toast.show {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+/* =====================================================
+   RESPONSIVE BREAKPOINTS (1024px, 768px, 480px, 320px)
+   ===================================================== */
+@media (max-width: 992px) {
+  .shihab_download_grid {
+    grid-template-columns: 1fr;
+  }
+
+  .shihab_feature_grid {
+    grid-template-columns: 1fr;
+  }
+
+  .stats-banner {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 768px) {
+  .navbar {
+    flex-wrap: wrap;
+    padding: 10px 14px;
+    gap: 10px;
+  }
+
+  .nav-brand {
+    font-size: 1rem;
+    order: 1;
+  }
+
+  .nav-actions {
+    order: 2;
+    gap: 6px;
+  }
+
+  .nav-links {
+    order: 3;
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    gap: 18px;
+    padding: 8px 2px 4px;
+    border-top: 1px solid var(--border-color);
+    scrollbar-width: none;
+  }
+
+  .nav-links::-webkit-scrollbar {
+    display: none;
+  }
+
+  .shihab_app_body {
+    grid-template-columns: 1fr;
+  }
+
+  .shihab_app_sidebar {
+    border-right: none;
+    border-bottom: 1px solid var(--mdm-border);
+  }
+
+  .shihab_transfer_row {
+    grid-template-columns: 1fr auto;
+  }
+
+  .shihab_progress_track {
+    grid-column: 1 / -1;
+    order: 3;
+  }
+
+  .shihab_dev_card {
+    flex-direction: column;
+    text-align: center;
+    padding: 24px 18px;
+  }
+
+  .social-btn-group {
+    justify-content: center;
+  }
+
+  .color-switcher-container {
+    bottom: 16px;
+    left: 16px;
+  }
+
+  .back-to-top {
+    bottom: 16px;
+    right: 16px;
+  }
+}
+
+@media (max-width: 600px) {
+  .btn {
+    white-space: normal;
+    text-align: center;
+  }
+
+  .shihab_app_titlebar {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .shihab_app_win_controls {
+    display: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .hero {
+    padding: 24px 14px 36px;
+  }
+
+  .hero h1 {
+    font-size: clamp(1.5rem, 6.4vw, 2rem);
+  }
+
+  .btn-group {
+    flex-direction: column;
+    width: 100%;
+  }
+
+  .btn-group .btn {
+    width: 100%;
+    padding: 12px 16px;
+    font-size: 0.9rem;
+  }
+
+  .shihab_hero_logo_glow {
+    width: 60px;
+    height: 60px;
+  }
+
+  .shihab_hero_logo_glow img {
+    width: 44px;
+    height: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

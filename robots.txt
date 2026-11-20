@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://sshihabb007.github.io/MHS-DOWNLOAD-MANAGER/sitemap.xml
