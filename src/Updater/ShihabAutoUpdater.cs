@@ -73,7 +73,7 @@ namespace ShihabMehediIDM
                 }
             }
             catch { }
-            return "1.1.1";
+            return "1.2.0";
         }
 
         public static string NormalizeVersionString(string rawTagOrVer)
@@ -171,7 +171,23 @@ namespace ShihabMehediIDM
                 {
                     return ShihabAppInstallMode.InstalledSetup;
                 }
-                using (RegistryKey rk = Registry.CurrentUser.OpenSubKey(UninstallRegKeyPath, false))
+                if (MatchesUninstallLocationKey(RegistryHive.LocalMachine, RegistryView.Registry64, exeDir) ||
+                    MatchesUninstallLocationKey(RegistryHive.LocalMachine, RegistryView.Registry32, exeDir) ||
+                    MatchesUninstallLocationKey(RegistryHive.CurrentUser, RegistryView.Default, exeDir))
+                {
+                    return ShihabAppInstallMode.InstalledSetup;
+                }
+            }
+            catch { }
+            return ShihabAppInstallMode.Portable;
+        }
+
+        private static bool MatchesUninstallLocationKey(RegistryHive hive, RegistryView view, string normalizedExeDir)
+        {
+            try
+            {
+                using (RegistryKey baseKey = RegistryKey.OpenBaseKey(hive, view))
+                using (RegistryKey rk = baseKey.OpenSubKey(UninstallRegKeyPath, false))
                 {
                     if (rk != null)
                     {
@@ -179,16 +195,16 @@ namespace ShihabMehediIDM
                         if (locObj != null && !string.IsNullOrWhiteSpace(locObj.ToString()))
                         {
                             string regDir = Path.GetFullPath(locObj.ToString().Trim()).TrimEnd('\\', '/');
-                            if (string.Equals(exeDir, regDir, StringComparison.OrdinalIgnoreCase))
+                            if (string.Equals(normalizedExeDir, regDir, StringComparison.OrdinalIgnoreCase))
                             {
-                                return ShihabAppInstallMode.InstalledSetup;
+                                return true;
                             }
                         }
                     }
                 }
             }
             catch { }
-            return ShihabAppInstallMode.Portable;
+            return false;
         }
 
         public static void TidyOldUpdateArtifacts(string dataDirectory)
@@ -772,7 +788,7 @@ namespace ShihabMehediIDM
             result.ExtensionZipAsset = extZipAsset;
             if (mode == ShihabAppInstallMode.InstalledSetup)
             {
-                result.PrimaryAsset = setupAsset ?? portableAsset;
+                result.PrimaryAsset = setupAsset;
             }
             else
             {
@@ -1132,6 +1148,11 @@ namespace ShihabMehediIDM
                 bool isSetupAsset = Path.GetFileName(verifiedPrimaryPath).IndexOf("Setup", StringComparison.OrdinalIgnoreCase) >= 0;
                 if ((checkResult != null && checkResult.InstallMode == ShihabAppInstallMode.InstalledSetup) || isSetupAsset)
                 {
+                    if (!isSetupAsset)
+                    {
+                        errorMessage = "Installed copy requires the official Setup installer asset to update safely.";
+                        return false;
+                    }
                     string args = ShihabProcessAndPathSafety.BuildWindowsArgumentString(
                         "--shihab-silent",
                         "--shihab-update-mode",
@@ -1145,15 +1166,33 @@ namespace ShihabMehediIDM
 
                     ProcessStartInfo psi = new ProcessStartInfo(verifiedPrimaryPath, args);
                     psi.WorkingDirectory = Path.GetDirectoryName(verifiedPrimaryPath);
-                    // UseShellExecute = true prevents child Setup.exe from inheriting any open listening socket handles (e.g. :45779).
+                    // UseShellExecute = true prevents child Setup.exe from inheriting any open listening socket handles (e.g. :45779)
+                    // and allows Windows UAC elevation for Program Files (x86) installations.
                     psi.UseShellExecute = true;
-                    Process.Start(psi);
+                    try
+                    {
+                        Process.Start(psi);
+                    }
+                    catch (System.ComponentModel.Win32Exception wex)
+                    {
+                        if (wex.NativeErrorCode == 1223)
+                        {
+                            errorMessage = "Update canceled: Administrator permission was declined.";
+                            return false;
+                        }
+                        throw;
+                    }
 
                     if (cleanExitCallback != null) cleanExitCallback();
                     return true;
                 }
                 else
                 {
+                    if (!CanWriteDirectory(currentDir))
+                    {
+                        errorMessage = "Cannot replace executable in protected folder (" + currentDir + "). Please download and run the Setup Installer.";
+                        return false;
+                    }
                     string backupOld = currentExe + ".old";
                     try { if (File.Exists(backupOld)) File.Delete(backupOld); } catch { }
                     File.Move(currentExe, backupOld);
@@ -1203,6 +1242,22 @@ namespace ShihabMehediIDM
             catch (Exception ex)
             {
                 errorMessage = "Failed to apply update: " + ex.Message;
+                return false;
+            }
+        }
+
+        private static bool CanWriteDirectory(string dirPath)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(dirPath) || !Directory.Exists(dirPath)) return false;
+                string probe = Path.Combine(dirPath, ".mhs_upd_probe_" + Guid.NewGuid().ToString("N") + ".tmp");
+                File.WriteAllText(probe, "ok");
+                File.Delete(probe);
+                return true;
+            }
+            catch
+            {
                 return false;
             }
         }

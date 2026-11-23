@@ -333,9 +333,10 @@ namespace ShihabMehediIDM
                     UpdateSubItemIfChanged(mehediRow, 3, (shihabIt.GetShihabStatusEnum() == ShihabDownloadStatus.ShihabCompleted || shihabIt.ShihabTotalBytes > 0)
                         ? string.Format("{0:0}%", shihabPctVal)
                         : (mehediRowActive ? "Live" : "0%"));
+                    bool useBitsSpeed = ShihabFormatHelpers.IsBitsSpeedUnit(_mehediConfig != null ? _mehediConfig.ShihabDefaultSpeedUnit : null);
                     UpdateSubItemIfChanged(mehediRow, 4, (mehediRowActive && shihabIt.ShihabCurrentSpeedBps > 1.0)
-                        ? ShihabFormatHelpers.FormatShihabSpeed(shihabIt.ShihabCurrentSpeedBps).Replace("/sec", "/s")
-                        : "0 B/s");
+                        ? ShihabFormatHelpers.FormatShihabSpeed(shihabIt.ShihabCurrentSpeedBps, useBitsSpeed, true)
+                        : ShihabFormatHelpers.FormatZeroSpeed(useBitsSpeed, true));
                     UpdateSubItemIfChanged(mehediRow, 5, (mehediRowActive && shihabIt.MehediEtaSeconds > 0)
                         ? ShihabFormatHelpers.FormatMehediTimeLeft(shihabIt.MehediEtaSeconds)
                         : "0s");
@@ -361,12 +362,15 @@ namespace ShihabMehediIDM
                 _shihabDownloadsListView.EndUpdate();
             }
 
+            bool useBitsFooter = ShihabFormatHelpers.IsBitsSpeedUnit(_mehediConfig != null ? _mehediConfig.ShihabDefaultSpeedUnit : null);
             string shihabSpeedPill = mehediGlobalSpeedBps > 5.0
-                ? ("Speed: " + ShihabFormatHelpers.FormatShihabSpeed(mehediGlobalSpeedBps).Replace("/sec", "/s"))
-                : "Speed: 0 KB/s";
+                ? ("Speed: " + ShihabFormatHelpers.FormatShihabSpeed(mehediGlobalSpeedBps, useBitsFooter, true))
+                : ("Speed: " + ShihabFormatHelpers.FormatFooterZeroSpeed(useBitsFooter));
             if (_mehediConfig.MehediGlobalSpeedLimiterEnabled && _mehediConfig.ShihabGlobalSpeedLimitKb > 0)
             {
-                shihabSpeedPill = shihabSpeedPill + string.Format(" (Lim: {0} KB/s)", _mehediConfig.ShihabGlobalSpeedLimitKb);
+                shihabSpeedPill = shihabSpeedPill + (useBitsFooter
+                    ? (" (Lim: " + ShihabFormatHelpers.FormatSpeedLimitCap(_mehediConfig.ShihabGlobalSpeedLimitKb, true) + ")")
+                    : string.Format(" (Lim: {0} KB/s)", _mehediConfig.ShihabGlobalSpeedLimitKb));
             }
             if (_mehediFooterBar != null)
             {
@@ -381,17 +385,22 @@ namespace ShihabMehediIDM
                 string trayTip;
                 if (shihabActiveSockets > 0 || mehediGlobalSpeedBps > 5.0)
                 {
-                    string spdShort = ShihabFormatHelpers.FormatShihabSpeed(mehediGlobalSpeedBps).Replace("/sec", "/s");
+                    string spdShort = ShihabFormatHelpers.FormatShihabSpeed(mehediGlobalSpeedBps, useBitsFooter, true);
+                    if (string.IsNullOrEmpty(spdShort)) spdShort = ShihabFormatHelpers.FormatZeroSpeed(useBitsFooter, true);
                     trayTip = string.Format("MHS · {0} sock · {1}", shihabActiveSockets, spdShort);
                     if (_mehediConfig.MehediGlobalSpeedLimiterEnabled && _mehediConfig.ShihabGlobalSpeedLimitKb > 0)
                     {
-                        trayTip = trayTip + string.Format(" (Lim {0}K)", _mehediConfig.ShihabGlobalSpeedLimitKb);
+                        trayTip = trayTip + (useBitsFooter
+                            ? (" (Lim " + ShihabFormatHelpers.FormatSpeedLimitCap(_mehediConfig.ShihabGlobalSpeedLimitKb, true) + ")")
+                            : string.Format(" (Lim {0}K)", _mehediConfig.ShihabGlobalSpeedLimitKb));
                     }
                 }
                 else
                 {
                     trayTip = (_mehediConfig.MehediGlobalSpeedLimiterEnabled && _mehediConfig.ShihabGlobalSpeedLimitKb > 0)
-                        ? string.Format("MHS Download Manager · Idle (Lim {0} KB/s)", _mehediConfig.ShihabGlobalSpeedLimitKb)
+                        ? (useBitsFooter
+                            ? ("MHS Download Manager · Idle (Lim " + ShihabFormatHelpers.FormatSpeedLimitCap(_mehediConfig.ShihabGlobalSpeedLimitKb, true) + ")")
+                            : string.Format("MHS Download Manager · Idle (Lim {0} KB/s)", _mehediConfig.ShihabGlobalSpeedLimitKb))
                         : "MHS Download Manager · Idle";
                 }
                 if (trayTip.Length > 63) trayTip = trayTip.Substring(0, 63);
@@ -413,8 +422,11 @@ namespace ShihabMehediIDM
         {
             if (_mehediStorageCard == null) return;
 
+            bool useBitsCap = ShihabFormatHelpers.IsBitsSpeedUnit(_mehediConfig != null ? _mehediConfig.ShihabDefaultSpeedUnit : null);
             string mehediSpeedLimitLabel = _mehediConfig.MehediGlobalSpeedLimiterEnabled
-                ? string.Format("Speed: {0} KB/s", _mehediConfig.ShihabGlobalSpeedLimitKb)
+                ? ("Speed: " + (useBitsCap
+                    ? ShihabFormatHelpers.FormatSpeedLimitCap(_mehediConfig.ShihabGlobalSpeedLimitKb, true)
+                    : string.Format("{0} KB/s", _mehediConfig.ShihabGlobalSpeedLimitKb)))
                 : "Speed: Unlimited";
             _mehediStorageCard.SetShihabStorageAndSpeed(_shihabCachedUsedGb, _mehediCachedTotalGb, _shihabCachedFreeGb, mehediSpeedLimitLabel);
 
@@ -458,8 +470,11 @@ namespace ShihabMehediIDM
                                     _mehediCachedTotalGb = totalGb;
                                     _shihabCachedFreeGb = freeGb;
                                     _shihabCachedUsedGb = usedGb;
+                                    bool curUseBits = ShihabFormatHelpers.IsBitsSpeedUnit(_mehediConfig != null ? _mehediConfig.ShihabDefaultSpeedUnit : null);
                                     string curSpeedLbl = _mehediConfig.MehediGlobalSpeedLimiterEnabled
-                                        ? string.Format("Speed: {0} KB/s", _mehediConfig.ShihabGlobalSpeedLimitKb)
+                                        ? ("Speed: " + (curUseBits
+                                            ? ShihabFormatHelpers.FormatSpeedLimitCap(_mehediConfig.ShihabGlobalSpeedLimitKb, true)
+                                            : string.Format("{0} KB/s", _mehediConfig.ShihabGlobalSpeedLimitKb)))
                                         : "Speed: Unlimited";
                                     _mehediStorageCard.SetShihabStorageAndSpeed(usedGb, totalGb, freeGb, curSpeedLbl);
                                 });

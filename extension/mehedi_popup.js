@@ -221,12 +221,12 @@ document.addEventListener("DOMContentLoaded", async () => {
       shihabDot.classList.remove("online");
       mehediSub.textContent = (shihabRes && (shihabRes.__shihabDisconnected || shihabRes.__shihabTimedOut))
         ? "Worker busy — Reload extension or launch mdm.exe"
-        : "Offline — Launch mdm.exe v1.1.1";
+        : "Offline — Launch mdm.exe v1.2.0";
       shihabToggleBtn.textContent = "Offline";
       return;
     }
 
-    const mehediBridgeVer = (shihabRes.shihabBridgeInfo && shihabRes.shihabBridgeInfo.version) || "1.1.1";
+    const mehediBridgeVer = (shihabRes.shihabBridgeInfo && shihabRes.shihabBridgeInfo.version) || "1.2.0";
     shihabDot.classList.add("online");
     mehediSub.textContent = shihabRes.shihabEnabled
       ? `Connected · mdm.exe v${mehediBridgeVer}`

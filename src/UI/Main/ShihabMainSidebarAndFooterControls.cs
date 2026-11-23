@@ -505,7 +505,7 @@ namespace ShihabMehediIDM
         public bool ShihabDarkMode { get; set; }
         private string _mehediTotalText = "Total: 0 B";
         private string _shihabDownloadedText = "Downloaded: 0 B";
-        private string _mehediSpeedText = "Speed: 0 KB/s";
+        private string _mehediSpeedText = "Speed: " + ShihabFormatHelpers.FormatFooterZeroSpeed(ShihabFormatHelpers.DefaultUseBitsPerSec);
         private string _shihabSocketsText = "Active Sockets: 0";
         private Font _mehediPillFont;
 

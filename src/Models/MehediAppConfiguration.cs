@@ -104,6 +104,7 @@ namespace ShihabMehediIDM
         [DataMember] public string ShihabThemeName { get; set; }
         [DataMember] public int ShihabUiScalePercent { get; set; }
         [DataMember] public string ShihabLanguageCode { get; set; }
+        [DataMember] public string ShihabDefaultSpeedUnit { get; set; }
         [DataMember] public bool ShihabCaptureOpenedFiles { get; set; }
         [DataMember] public int ShihabCaptureMinSizeKb { get; set; }
         [DataMember] public bool ShihabCrashMonitorEnabled { get; set; }
@@ -219,6 +220,7 @@ namespace ShihabMehediIDM
             ShihabThemeName = "Obsidian Dark";
             ShihabUiScalePercent = 100;
             ShihabLanguageCode = "en";
+            ShihabDefaultSpeedUnit = ShihabFormatHelpers.SpeedUnitBytesPerSec;
             ShihabCaptureOpenedFiles = false;
             ShihabCaptureMinSizeKb = 0;
             ShihabCrashMonitorEnabled = true;
@@ -340,6 +342,7 @@ namespace ShihabMehediIDM
             mehediCfg.ShihabThemeName = "Obsidian Dark";
             mehediCfg.ShihabUiScalePercent = 100;
             mehediCfg.ShihabLanguageCode = "en";
+            mehediCfg.ShihabDefaultSpeedUnit = ShihabFormatHelpers.SpeedUnitBytesPerSec;
             mehediCfg.ShihabCaptureOpenedFiles = false;
             mehediCfg.ShihabCaptureMinSizeKb = 0;
             mehediCfg.ShihabCrashMonitorEnabled = true;

@@ -48,6 +48,7 @@ namespace ShihabMehediIDM
         private CheckBox _shihabCloseTrayChk;
         private ComboBox _shihabLangCombo;
         private ComboBox _shihabScaleCombo;
+        private ComboBox _shihabSpeedUnitCombo;
 
         // Tab 2: File types
         private TextBox _mehediTypesBox;
@@ -334,14 +335,14 @@ namespace ShihabMehediIDM
             GroupBox mehediBrowsersGrp = new GroupBox
             {
                 Text = "Capture downloads from the following browsers:",
-                Location = new Point(16, 128),
-                Size = new Size(592, 196),
+                Location = new Point(16, 126),
+                Size = new Size(592, 166),
                 ForeColor = ForeColor
             };
             _shihabBrowsersClb = new CheckedListBox
             {
-                Location = new Point(14, 22),
-                Size = new Size(564, 102),
+                Location = new Point(14, 20),
+                Size = new Size(564, 76),
                 CheckOnClick = true,
                 BackColor = _surfColor,
                 ForeColor = ForeColor,
@@ -379,7 +380,7 @@ namespace ShihabMehediIDM
 
             Button shihabAddBrowserBtn = ShihabThemePalette.CreateMehediStyledButton("Add browser...", _surfColor, ForeColor, 132);
             shihabAddBrowserBtn.Height = 26;
-            shihabAddBrowserBtn.Location = new Point(446, 128);
+            shihabAddBrowserBtn.Location = new Point(446, 100);
             shihabAddBrowserBtn.Click += delegate
             {
                 using (OpenFileDialog mehediOfd = new OpenFileDialog())
@@ -405,12 +406,12 @@ namespace ShihabMehediIDM
             Label mehediKeysLbl = new Label
             {
                 Text = "Customize keys to prevent or force downloading with MHS",
-                Location = new Point(14, 163),
+                Location = new Point(14, 134),
                 AutoSize = true
             };
             Button shihabKeysBtn = ShihabThemePalette.CreateMehediStyledButton("Keys...", _surfColor, ForeColor, 96);
             shihabKeysBtn.Height = 26;
-            shihabKeysBtn.Location = new Point(482, 158);
+            shihabKeysBtn.Location = new Point(482, 129);
             shihabKeysBtn.Click += delegate
             {
                 ShowShihabKeysModal(shihabDark, ref _shihabPendingPreventKey, ref _mehediPendingForceKey);
@@ -420,12 +421,12 @@ namespace ShihabMehediIDM
             Label shihabCtxMenuLbl = new Label
             {
                 Text = "Customize MHS menu items in context menu of browsers",
-                Location = new Point(30, 338),
+                Location = new Point(30, 303),
                 AutoSize = true
             };
             Button mehediCtxEditBtn = ShihabThemePalette.CreateMehediStyledButton("Edit...", _surfColor, ForeColor, 96);
             mehediCtxEditBtn.Height = 26;
-            mehediCtxEditBtn.Location = new Point(498, 333);
+            mehediCtxEditBtn.Location = new Point(498, 298);
             mehediCtxEditBtn.Click += delegate
             {
                 ShowMehediContextMenuModal(shihabDark, ref _shihabPendingCtxMenuCsv);
@@ -434,12 +435,12 @@ namespace ShihabMehediIDM
             Label mehediPanelsLbl = new Label
             {
                 Text = "Customize MHS Download panels in browsers",
-                Location = new Point(30, 372),
+                Location = new Point(30, 333),
                 AutoSize = true
             };
             Button shihabPanelsEditBtn = ShihabThemePalette.CreateMehediStyledButton("Edit...", _surfColor, ForeColor, 96);
             shihabPanelsEditBtn.Height = 26;
-            shihabPanelsEditBtn.Location = new Point(498, 367);
+            shihabPanelsEditBtn.Location = new Point(498, 328);
             shihabPanelsEditBtn.Click += delegate
             {
                 ShowShihabDownloadPanelsModal(
@@ -453,23 +454,24 @@ namespace ShihabMehediIDM
             _shihabMinTrayChk = new CheckBox
             {
                 Text = "Minimize to Tray",
-                Location = new Point(250, 74),
+                Location = new Point(278, 74),
                 AutoSize = true,
                 Checked = _shihabConfig.ShihabMinimizeToTray
             };
             _shihabCloseTrayChk = new CheckBox
             {
                 Text = "Close (X) to Tray",
-                Location = new Point(385, 74),
+                Location = new Point(404, 74),
                 AutoSize = true,
                 Checked = _shihabConfig.ShihabCloseToTray
             };
 
-            Label shihabLangLbl = new Label { Text = "Language:", Location = new Point(30, 398), AutoSize = true };
+            Label shihabLangLbl = new Label { Text = "Language:", Location = new Point(16, 364), AutoSize = true };
+            int langComboX = Math.Max(82, shihabLangLbl.Left + shihabLangLbl.PreferredWidth + 6);
             _shihabLangCombo = new ComboBox
             {
-                Location = new Point(98, 395),
-                Width = 175,
+                Location = new Point(langComboX, 360),
+                Width = 140,
                 DropDownStyle = ComboBoxStyle.DropDownList,
                 BackColor = _surfColor,
                 ForeColor = ForeColor
@@ -486,11 +488,13 @@ namespace ShihabMehediIDM
             }
             _shihabLangCombo.SelectedIndex = selLangIdx;
 
-            Label shihabScaleLbl = new Label { Text = "UI Scale:", Location = new Point(290, 398), AutoSize = true };
+            int scaleLblX = Math.Max(236, _shihabLangCombo.Right + 10);
+            Label shihabScaleLbl = new Label { Text = "UI Scale:", Location = new Point(scaleLblX, 364), AutoSize = true };
+            int scaleComboX = Math.Max(294, shihabScaleLbl.Left + shihabScaleLbl.PreferredWidth + 6);
             _shihabScaleCombo = new ComboBox
             {
-                Location = new Point(350, 395),
-                Width = 90,
+                Location = new Point(scaleComboX, 360),
+                Width = 64,
                 DropDownStyle = ComboBoxStyle.DropDownList,
                 BackColor = _surfColor,
                 ForeColor = ForeColor
@@ -504,12 +508,28 @@ namespace ShihabMehediIDM
             }
             _shihabScaleCombo.SelectedIndex = selScaleIdx;
 
+            int speedLblX = Math.Max(370, _shihabScaleCombo.Right + 10);
+            Label shihabSpeedUnitLbl = new Label { Text = "Speed Unit:", Location = new Point(speedLblX, 364), AutoSize = true };
+            int speedComboX = Math.Max(444, shihabSpeedUnitLbl.Left + shihabSpeedUnitLbl.PreferredWidth + 6);
+            int speedComboW = Math.Max(142, 608 - speedComboX);
+            _shihabSpeedUnitCombo = new ComboBox
+            {
+                Location = new Point(speedComboX, 360),
+                Width = speedComboW,
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                BackColor = _surfColor,
+                ForeColor = ForeColor
+            };
+            _shihabSpeedUnitCombo.Items.Add("MBps (Bytes/sec)");
+            _shihabSpeedUnitCombo.Items.Add("Mbps (Bits/sec)");
+            _shihabSpeedUnitCombo.SelectedIndex = ShihabFormatHelpers.IsBitsSpeedUnit(_shihabConfig.ShihabDefaultSpeedUnit) ? 1 : 0;
+
             shihabGenTab.Controls.AddRange(new Control[]
             {
                 _shihabBrowserChk, mehediRestartBridgeBtn, _mehediStartupChk, _shihabMinTrayChk, _shihabCloseTrayChk, _shihabClipChk,
                 shihabHotkeyLbl, _shihabGlobalHotkeyBox,
                 mehediBrowsersGrp, shihabCtxMenuLbl, mehediCtxEditBtn, mehediPanelsLbl, shihabPanelsEditBtn,
-                shihabLangLbl, _shihabLangCombo, shihabScaleLbl, _shihabScaleCombo
+                shihabLangLbl, _shihabLangCombo, shihabScaleLbl, _shihabScaleCombo, shihabSpeedUnitLbl, _shihabSpeedUnitCombo
             });
         }
 
@@ -1060,7 +1080,8 @@ namespace ShihabMehediIDM
             return new TabPage(shihabTitle)
             {
                 BackColor = ShihabThemePalette.GetMehediWindowBg(mehediDark),
-                ForeColor = ShihabThemePalette.GetShihabPrimaryText(mehediDark)
+                ForeColor = ShihabThemePalette.GetShihabPrimaryText(mehediDark),
+                AutoScroll = true
             };
         }
     }

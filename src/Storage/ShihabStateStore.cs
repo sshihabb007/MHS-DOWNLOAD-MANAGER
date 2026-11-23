@@ -94,6 +94,7 @@ namespace ShihabMehediIDM
                 }
 
                 MehediAppConfiguration mehediFresh = MehediAppConfiguration.CreateShihabDefault(MehediBaseDirectory);
+                ShihabFormatHelpers.SetDefaultSpeedUnit(mehediFresh.ShihabDefaultSpeedUnit);
                 Directory.CreateDirectory(mehediFresh.MehediTemporaryDirectory);
                 SaveMehediConfig(mehediFresh);
                 return mehediFresh;
@@ -229,6 +230,8 @@ namespace ShihabMehediIDM
             if (string.IsNullOrWhiteSpace(shihabLoaded.ShihabThemeName)) shihabLoaded.ShihabThemeName = "Obsidian Dark";
             if (shihabLoaded.ShihabUiScalePercent < 80 || shihabLoaded.ShihabUiScalePercent > 200) shihabLoaded.ShihabUiScalePercent = 100;
             if (string.IsNullOrWhiteSpace(shihabLoaded.ShihabLanguageCode)) shihabLoaded.ShihabLanguageCode = "en";
+            shihabLoaded.ShihabDefaultSpeedUnit = ShihabFormatHelpers.NormalizeSpeedUnit(shihabLoaded.ShihabDefaultSpeedUnit);
+            ShihabFormatHelpers.SetDefaultSpeedUnit(shihabLoaded.ShihabDefaultSpeedUnit);
             if (string.IsNullOrWhiteSpace(shihabLoaded.ShihabDnsMode)) shihabLoaded.ShihabDnsMode = "System";
             if (string.IsNullOrWhiteSpace(shihabLoaded.ShihabDnsProvider)) shihabLoaded.ShihabDnsProvider = "Cloudflare";
             if (string.IsNullOrWhiteSpace(shihabLoaded.ShihabExtractSubfolderMode)) shihabLoaded.ShihabExtractSubfolderMode = "Smart";
@@ -343,6 +346,8 @@ namespace ShihabMehediIDM
         public void SaveMehediConfig(MehediAppConfiguration shihabCfg)
         {
             if (shihabCfg == null) return;
+            shihabCfg.ShihabDefaultSpeedUnit = ShihabFormatHelpers.NormalizeSpeedUnit(shihabCfg.ShihabDefaultSpeedUnit);
+            ShihabFormatHelpers.SetDefaultSpeedUnit(shihabCfg.ShihabDefaultSpeedUnit);
             lock (_shihabSyncLock)
             {
                 string mehediTmp = ShihabConfigFilePath + "." + Path.GetRandomFileName() + ".tmp";

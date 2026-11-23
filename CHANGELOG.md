@@ -2,7 +2,30 @@
 
 All notable releases, new features, security enhancements, and bug fixes for **MHS Download Manager** (`mdm.exe` + Manifest V3 Browser Extension + Windows x64 Setup Wizard) are documented here in **reverse chronological order (newest first)**.
 
-> **Live GitHub Releases:** [All Releases (`v1.1.1` → `v1.0.0`)](https://github.com/sshihabb007/MHS-DOWNLOAD-MANAGER/releases)
+> **Live GitHub Releases:** [All Releases (`v1.2.0` → `v1.0.0`)](https://github.com/sshihabb007/MHS-DOWNLOAD-MANAGER/releases)
+
+---
+
+## [v1.2.0] — 2026-11-23
+
+### Highlights & New Features
+- **Live Inline `MBps ↔ Mbps` Speed Unit Switcher (`ShihabDownloadProgressForm`, `ShihabSpeedUnitSwitcher`, `ShihabFormatHelpers`)**:
+  - Added a theme- and high-DPI-aware segmented **`MBps | Mbps`** pill right beside **`Transfer rate:`** on the Download Progress dialog (**Download status** tab), supporting mouse clicks, hover highlights, keyboard navigation (`Left`/`Right`/`Space`/`Enter`), and instant live toggling between binary Bytes/sec (`B/sec`, `KB/sec`, `MB/sec`, `GB/sec`) and standard decimal networking bits/sec (`× 8`: `bps`, `Kbps`, `Mbps`, `Gbps`).
+  - Automatically formats the active transfer rate, speed-limit cap indicator (`(limit: ...)`), and BitTorrent upload speed in the selected unit, inheriting the user's configured default unit on open and syncing live when Options change.
+- **Persistent Default Speed Unit Setting Across the Entire App (`Options → General`)**:
+  - Added a **`Speed Unit:`** dropdown (`MBps (Bytes/sec)` / `Mbps (Bits/sec)`) in **Options → General** persisted as `ShihabDefaultSpeedUnit` in `shihab_config.json` (backward-compatible default `"MBps"` for existing configs).
+  - Applied the user's preferred speed unit consistently across the main transfers grid `SPEED` column, footer speed pill & speed-limit indicator, system tray tooltip, sidebar storage-card limit badge, floating Drop Target, Download Progress dialogs, and LAN Remote Control Web UI (`/api/status` & `/api/list`).
+- **Standard `C:\Program Files (x86)\MHS Download Manager` Windows Setup Installer & UAC Architecture (`ShihabSetupWizard`, `mdm.manifest`, `setup.manifest`, `ShihabAutoUpdater`)**:
+  - Updated `MHS-Download-Manager-Setup-1.2.0-x64.exe` to install cleanly into **`C:\Program Files (x86)\MHS Download Manager`** by default while keeping all writable runtime state (`shihab_config.json`, `mehedi_downloads.json`, `bridge.token`, `DwnlData\`, `tools\`, `updates\`) safely under `%LOCALAPPDATA%\ShihabMehediIDM`.
+  - Embedded dedicated Win32 application manifests (`asInvoker` + `PerMonitorV2` + `longPathAware` on `mdm.exe`; `requireAdministrator` + `PerMonitorV2` + `longPathAware` on `Setup.exe` & installed `Uninstall.exe`).
+  - Implemented Medium-IL de-elevation (`CreateProcessWithTokenW` with an Explorer COM `IShellWindows` → `ShellExecute` fallback) so elevated Setup launches `mdm.exe` at normal user integrity, preserving drag-and-drop, DPAPI user vault access, and single-instance behavior.
+  - Added machine-wide `HKLM` Installed Apps registration, dual 64-bit + 32-bit (`WOW6432Node`) `HKLM` Native Messaging host registration across 14 browsers, `HKLM\Software\Classes` `magnet:`/`.torrent` associations, Public Desktop & All-Users Start Menu shortcuts, and clean automatic migration from legacy `%LOCALAPPDATA%\Programs\MHS Download Manager` installs (clearing stale `HKCU` shadowing entries and displaying a Finish-screen extension reload notice when migrated).
+
+### Hardening & Bug Fixes
+- Hardened cross-IL mutex coordination (`MehediProgramEntry.TryCreateInstanceMutex` and `NativeMessagingHost.IsNamedMutexActive` using `MutexRights.Synchronize` + `UnauthorizedAccessException` guard) so Medium-IL `mdm.exe` / Native Host never crash or race against an elevated installer.
+- Hardened `ShihabAutoUpdater` for protected Program Files installs: detects both `HKLM` (64-bit/32-bit) and `HKCU` installs, refuses portable fallback for Setup installs, handles UAC decline (`Win32Exception` `1223`) cleanly before exiting `mdm.exe`, and guards portable self-replace with directory write probes.
+- Hardened deferred self-uninstall cleanup (`ScheduleDeferredSelfUninstallCleanup`) and `shihab_native_host_launcher.cmd` against special characters (`)`, `&`, `|`, `%`) using environment-variable indirection and explicit `%` batch escaping, retrying directory removal cleanly from `%TEMP%`.
+- Fixed **Options → General** tab vertical clipping and checkbox overlap (`Launch on startup` / `Minimize to Tray` / bottom `Language`, `UI Scale`, `Speed Unit` row) with dynamic horizontal spacing and `AutoScroll = true`, plus proper `Dispose(bool)` cleanup for progress dialog `ToolTip`, `Timer`, and DPI-scaled switcher font resources.
 
 ---
 

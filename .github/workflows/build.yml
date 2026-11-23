@@ -218,12 +218,12 @@ jobs:
             "- **``SHA256SUMS.txt``** — Official SHA-256 verification checksums.",
             "",
             "### How to Install & Load the Browser Extension from Your Installation Directory",
-            "1. Download and run **``$SetupExeName``** (default install folder: ``%LOCALAPPDATA%\Programs\MHS Download Manager``).",
+            "1. Download and run **``$SetupExeName``** (default install folder: ``C:\Program Files (x86)\MHS Download Manager``).",
             "2. On the final screen of Setup, the path ``<InstallDir>\extension`` is copied to your clipboard automatically (you can also click **Copy Path** / **Open Folder**, or open it anytime inside the app via **`☰` Menu -> Help -> Open Browser Extension Folder**).",
             "3. Open ``chrome://extensions`` (Chrome), ``brave://extensions`` (Brave), ``edge://extensions`` (Edge), or ``opera://extensions`` (Opera).",
             "4. Enable **Developer mode** (top-right toggle).",
             "5. Click **Load unpacked** and select the **``extension``** folder inside your installation directory:",
-            "   ``%LOCALAPPDATA%\Programs\MHS Download Manager\extension`` *(or ``<YourInstallDir>\extension``)*.",
+            "   ``C:\Program Files (x86)\MHS Download Manager\extension`` *(or ``<YourInstallDir>\extension``)*.",
             ""
           )
 

@@ -129,6 +129,229 @@ namespace ShihabMehediIDM
         }
     }
 
+    public sealed class ShihabSpeedUnitSwitcher : Control
+    {
+        private bool _darkMode = true;
+        private bool _useBitsPerSec = false;
+        private int _hoveredSegment = -1; // 0 = MBps, 1 = Mbps
+        private Font _cachedPillFont;
+        private float _cachedPillFontPx;
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && _cachedPillFont != null)
+            {
+                _cachedPillFont.Dispose();
+                _cachedPillFont = null;
+            }
+            base.Dispose(disposing);
+        }
+
+        public bool ShihabDarkMode
+        {
+            get { return _darkMode; }
+            set
+            {
+                if (_darkMode != value)
+                {
+                    _darkMode = value;
+                    Invalidate();
+                }
+            }
+        }
+
+        public bool UseBitsPerSec
+        {
+            get { return _useBitsPerSec; }
+            set
+            {
+                if (_useBitsPerSec != value)
+                {
+                    _useBitsPerSec = value;
+                    Invalidate();
+                }
+            }
+        }
+
+        public event EventHandler UnitChanged;
+
+        public ShihabSpeedUnitSwitcher()
+        {
+            SetStyle(
+                ControlStyles.AllPaintingInWmPaint |
+                ControlStyles.UserPaint |
+                ControlStyles.OptimizedDoubleBuffer |
+                ControlStyles.ResizeRedraw |
+                ControlStyles.Selectable,
+                true);
+            Size = new Size(106, 22);
+            Cursor = Cursors.Hand;
+            TabStop = true;
+        }
+
+        private void SelectSegment(bool bitsMode)
+        {
+            if (_useBitsPerSec != bitsMode)
+            {
+                _useBitsPerSec = bitsMode;
+                Invalidate();
+                EventHandler handler = UnitChanged;
+                if (handler != null)
+                {
+                    handler(this, EventArgs.Empty);
+                }
+            }
+        }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            int seg = e.X < (Width / 2) ? 0 : 1;
+            if (seg != _hoveredSegment)
+            {
+                _hoveredSegment = seg;
+                Invalidate();
+            }
+        }
+
+        protected override void OnMouseLeave(EventArgs e)
+        {
+            base.OnMouseLeave(e);
+            if (_hoveredSegment != -1)
+            {
+                _hoveredSegment = -1;
+                Invalidate();
+            }
+        }
+
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            base.OnMouseDown(e);
+            if (e.Button != MouseButtons.Left) return;
+            Focus();
+            bool clickedBits = e.X >= (Width / 2);
+            // Clicking active side toggles cleanly; clicking opposite side selects it directly
+            bool nextMode = (clickedBits == _useBitsPerSec) ? !_useBitsPerSec : clickedBits;
+            SelectSegment(nextMode);
+        }
+
+        protected override bool IsInputKey(Keys keyData)
+        {
+            if (keyData == Keys.Left || keyData == Keys.Right) return true;
+            return base.IsInputKey(keyData);
+        }
+
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            base.OnKeyDown(e);
+            if (e.KeyCode == Keys.Left)
+            {
+                SelectSegment(false);
+                e.Handled = true;
+            }
+            else if (e.KeyCode == Keys.Right)
+            {
+                SelectSegment(true);
+                e.Handled = true;
+            }
+            else if (e.KeyCode == Keys.Space || e.KeyCode == Keys.Enter)
+            {
+                SelectSegment(!_useBitsPerSec);
+                e.Handled = true;
+            }
+        }
+
+        protected override void OnGotFocus(EventArgs e)
+        {
+            base.OnGotFocus(e);
+            Invalidate();
+        }
+
+        protected override void OnLostFocus(EventArgs e)
+        {
+            base.OnLostFocus(e);
+            Invalidate();
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            if (Width < 8 || Height < 8) return;
+
+            Graphics g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+
+            Color parentBg = Parent != null ? Parent.BackColor : ShihabThemePalette.GetMehediWindowBg(_darkMode);
+            using (SolidBrush clearBr = new SolidBrush(parentBg))
+            {
+                g.FillRectangle(clearBr, ClientRectangle);
+            }
+
+            Rectangle outer = new Rectangle(0, 0, Math.Max(4, Width - 1), Math.Max(4, Height - 1));
+            Color trackBg = ShihabThemePalette.GetShihabSurfaceBg(_darkMode);
+            Color borderCol = Focused
+                ? ShihabThemePalette.GetShihabAccentBlue()
+                : ShihabThemePalette.GetShihabBorder(_darkMode);
+
+            using (GraphicsPath trackPath = ShihabThemePalette.CreateShihabRoundedRect(outer, Math.Min(10, Math.Max(4, Height / 2))))
+            using (SolidBrush trackBr = new SolidBrush(trackBg))
+            using (Pen borderPen = new Pen(borderCol, 1f))
+            {
+                g.FillPath(trackBr, trackPath);
+                g.DrawPath(borderPen, trackPath);
+            }
+
+            int halfW = Math.Max(4, (Width - 4) / 2);
+            int rightW = Math.Max(4, Width - 4 - halfW);
+            int pillH = Math.Max(4, Height - 4);
+            int innerRadius = Math.Min(8, Math.Max(3, pillH / 2));
+            Rectangle leftRect = new Rectangle(2, 2, halfW, pillH);
+            Rectangle rightRect = new Rectangle(2 + halfW, 2, rightW, pillH);
+            Rectangle activeRect = _useBitsPerSec ? rightRect : leftRect;
+            Rectangle inactiveRect = _useBitsPerSec ? leftRect : rightRect;
+            bool hoverInactive = (_useBitsPerSec && _hoveredSegment == 0) || (!_useBitsPerSec && _hoveredSegment == 1);
+
+            if (hoverInactive)
+            {
+                Color hoverCol = _darkMode
+                    ? ControlPaint.Light(trackBg, 0.14f)
+                    : ControlPaint.Dark(trackBg, 0.06f);
+                using (GraphicsPath hoverPath = ShihabThemePalette.CreateShihabRoundedRect(inactiveRect, innerRadius))
+                using (SolidBrush hoverBr = new SolidBrush(hoverCol))
+                {
+                    g.FillPath(hoverBr, hoverPath);
+                }
+            }
+
+            using (GraphicsPath activePath = ShihabThemePalette.CreateShihabRoundedRect(activeRect, innerRadius))
+            using (LinearGradientBrush pillGrad = new LinearGradientBrush(
+                activeRect,
+                Color.FromArgb(56, 189, 248),
+                Color.FromArgb(124, 92, 255),
+                0f))
+            {
+                g.FillPath(pillGrad, activePath);
+            }
+
+            Color activeText = Color.White;
+            Color inactiveText = hoverInactive
+                ? ShihabThemePalette.GetShihabPrimaryText(_darkMode)
+                : ShihabThemePalette.GetMehediMutedText(_darkMode);
+
+            // Pixel-sized font ensures "MBps" / "Mbps" never clip inside fixed-height pills under PerMonitorV2 125%–200% DPI
+            float targetPx = Math.Max(8.5f, Math.Min(11.0f, pillH * 0.62f));
+            if (_cachedPillFont == null || Math.Abs(_cachedPillFontPx - targetPx) > 0.1f)
+            {
+                if (_cachedPillFont != null) _cachedPillFont.Dispose();
+                _cachedPillFont = new Font("Segoe UI", targetPx, FontStyle.Bold, GraphicsUnit.Pixel);
+                _cachedPillFontPx = targetPx;
+            }
+
+            TextFormatFlags flags = TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine;
+            TextRenderer.DrawText(g, "MBps", _cachedPillFont, leftRect, _useBitsPerSec ? inactiveText : activeText, flags);
+            TextRenderer.DrawText(g, "Mbps", _cachedPillFont, rightRect, _useBitsPerSec ? activeText : inactiveText, flags);
+        }
+    }
+
     public class ShihabDownloadProgressForm : ShihabChromeForm
     {
         protected override bool ShihabResizableChrome
@@ -147,6 +370,11 @@ namespace ShihabMehediIDM
         private Label _mehediFileSizeVal;
         private Label _shihabDownloadedVal;
         private Label _mehediRateVal;
+        private ShihabSpeedUnitSwitcher _shihabSpeedUnitSwitcher;
+        private Label _shihabRateLimitVal;
+        private ToolTip _shihabProgressTip;
+        private bool _useBitsSpeedUnit;
+        private bool _lastConfigDefaultBitsUnit;
         private Label _shihabEtaVal;
         private Label _mehediResumeVal;
         private ShihabSegmentMapPanel _shihabOverallBar;
@@ -177,6 +405,8 @@ namespace ShihabMehediIDM
             _mehediEngine = mehediEngine;
             _shihabConfig = shihabConfig;
             bool mehediDark = shihabConfig.ShihabDarkMode;
+            _lastConfigDefaultBitsUnit = ShihabFormatHelpers.IsBitsSpeedUnit(shihabConfig != null ? shihabConfig.ShihabDefaultSpeedUnit : null);
+            _useBitsSpeedUnit = _lastConfigDefaultBitsUnit;
 
             Text = string.Format("{0:0.0}% — {1}", shihabItem.GetMehediPercent(), shihabItem.ShihabFileName);
             Size = new Size(596, 474);
@@ -259,11 +489,32 @@ namespace ShihabMehediIDM
 
             FormClosed += delegate
             {
-                _shihabUiRefreshTimer.Stop();
-                _shihabUiRefreshTimer.Dispose();
+                if (_shihabUiRefreshTimer != null)
+                {
+                    _shihabUiRefreshTimer.Stop();
+                }
             };
 
             RefreshShihabProgressView();
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                if (_shihabUiRefreshTimer != null)
+                {
+                    try { _shihabUiRefreshTimer.Stop(); } catch { }
+                    _shihabUiRefreshTimer.Dispose();
+                    _shihabUiRefreshTimer = null;
+                }
+                if (_shihabProgressTip != null)
+                {
+                    _shihabProgressTip.Dispose();
+                    _shihabProgressTip = null;
+                }
+            }
+            base.Dispose(disposing);
         }
 
         private void BuildMehediStatusTab(TabPage shihabPage, bool mehediDark)
@@ -284,6 +535,43 @@ namespace ShihabMehediIDM
             _mehediFileSizeVal = AddShihabMetricRow(shihabPage, "File size:", shihabLeftX, mehediValX, 60);
             _shihabDownloadedVal = AddShihabMetricRow(shihabPage, "Downloaded:", shihabLeftX, mehediValX, 82);
             _mehediRateVal = AddShihabMetricRow(shihabPage, "Transfer rate:", shihabLeftX, mehediValX, 104);
+            _mehediRateVal.Location = new Point(mehediValX, 102);
+            _mehediRateVal.Size = new Size(122, 22);
+            _mehediRateVal.TextAlign = ContentAlignment.MiddleLeft;
+            _mehediRateVal.AutoEllipsis = true;
+
+            _shihabSpeedUnitSwitcher = new ShihabSpeedUnitSwitcher
+            {
+                ShihabDarkMode = mehediDark,
+                UseBitsPerSec = _useBitsSpeedUnit,
+                Location = new Point(280, 102),
+                Size = new Size(106, 22)
+            };
+            _shihabSpeedUnitSwitcher.UnitChanged += delegate
+            {
+                _useBitsSpeedUnit = _shihabSpeedUnitSwitcher.UseBitsPerSec;
+                RefreshShihabProgressView();
+            };
+
+            _shihabRateLimitVal = new Label
+            {
+                Text = "",
+                Location = new Point(392, 102),
+                Size = new Size(158, 22),
+                TextAlign = ContentAlignment.MiddleLeft,
+                AutoEllipsis = true,
+                Font = ShihabThemePalette.UiRegular9Font,
+                ForeColor = ShihabThemePalette.GetMehediMutedText(mehediDark)
+            };
+
+            _shihabProgressTip = new ToolTip();
+            _shihabProgressTip.SetToolTip(
+                _shihabSpeedUnitSwitcher,
+                "Switch transfer speed unit between MBps (Bytes/sec) and Mbps (bits/sec). Change default anytime in Options > General.");
+
+            shihabPage.Controls.Add(_shihabSpeedUnitSwitcher);
+            shihabPage.Controls.Add(_shihabRateLimitVal);
+
             _shihabEtaVal = AddShihabMetricRow(shihabPage, "Time left:", shihabLeftX, mehediValX, 126);
             _mehediResumeVal = AddShihabMetricRow(shihabPage, "Resume capability:", shihabLeftX, mehediValX, 148);
 
@@ -587,7 +875,26 @@ namespace ShihabMehediIDM
                 ShihabFormatHelpers.FormatMehediBytes(_shihabItem.MehediDownloadedBytes),
                 _shihabItem.GetMehediPercent());
 
-            string shihabSpd = ShihabFormatHelpers.FormatShihabSpeed(_shihabItem.ShihabCurrentSpeedBps);
+            if (_shihabSpeedUnitSwitcher != null && _shihabConfig != null)
+            {
+                _shihabSpeedUnitSwitcher.ShihabDarkMode = _shihabConfig.ShihabDarkMode;
+            }
+            if (_shihabRateLimitVal != null && _shihabConfig != null)
+            {
+                _shihabRateLimitVal.ForeColor = ShihabThemePalette.GetMehediMutedText(_shihabConfig.ShihabDarkMode);
+            }
+            bool cfgDefaultBits = ShihabFormatHelpers.IsBitsSpeedUnit(_shihabConfig != null ? _shihabConfig.ShihabDefaultSpeedUnit : null);
+            if (cfgDefaultBits != _lastConfigDefaultBitsUnit)
+            {
+                _lastConfigDefaultBitsUnit = cfgDefaultBits;
+                _useBitsSpeedUnit = cfgDefaultBits;
+                if (_shihabSpeedUnitSwitcher != null)
+                {
+                    _shihabSpeedUnitSwitcher.UseBitsPerSec = _useBitsSpeedUnit;
+                }
+            }
+
+            string shihabSpd = ShihabFormatHelpers.FormatShihabSpeed(_shihabItem.ShihabCurrentSpeedBps, _useBitsSpeedUnit, false);
             int effectiveLimitKb = 0;
             if (_shihabItem.ShihabUseItemSpeedLimit && _shihabItem.MehediItemSpeedLimitKb > 0)
             {
@@ -599,9 +906,11 @@ namespace ShihabMehediIDM
                     ? Math.Min(effectiveLimitKb, _shihabConfig.ShihabGlobalSpeedLimitKb)
                     : _shihabConfig.ShihabGlobalSpeedLimitKb;
             }
-            if (!string.IsNullOrEmpty(shihabSpd) && effectiveLimitKb > 0)
+            if (_shihabRateLimitVal != null)
             {
-                shihabSpd += string.Format(" (limit: {0}/s)", ShihabFormatHelpers.FormatMehediBytes((long)effectiveLimitKb * 1024L));
+                _shihabRateLimitVal.Text = (!string.IsNullOrEmpty(shihabSpd) && effectiveLimitKb > 0)
+                    ? string.Format("(limit: {0})", ShihabFormatHelpers.FormatSpeedLimitCap(effectiveLimitKb, _useBitsSpeedUnit))
+                    : "";
             }
             bool mehediActive = _mehediEngine.IsMehediItemActive(_shihabItem.ShihabId);
             if (_shihabStopLiveBtn != null)
@@ -616,11 +925,11 @@ namespace ShihabMehediIDM
             if (_shihabItem.ShihabIsTorrent)
             {
                 ShihabTorrentLiveSnapshot tSnap = ShihabTorrentLiveTelemetry.GetSnapshot(_shihabItem.ShihabId);
-                string upStr = ShihabFormatHelpers.FormatShihabSpeed(_shihabItem.ShihabTorrentUploadSpeedBps);
+                string upStr = ShihabFormatHelpers.FormatShihabSpeed(_shihabItem.ShihabTorrentUploadSpeedBps, _useBitsSpeedUnit, false);
                 double ratio = _shihabItem.ShihabTotalBytes > 0 ? ((double)_shihabItem.ShihabTorrentUploadedBytes / (double)_shihabItem.ShihabTotalBytes) : 0.0;
                 _mehediResumeVal.Text = string.Format("Yes (SHA-1 Verified)  •  Peers: {0}  •  Up: {1}  •  Ratio: {2:0.00}",
                     _shihabItem.ShihabTorrentActivePeers,
-                    string.IsNullOrEmpty(upStr) ? "0 B/s" : upStr,
+                    string.IsNullOrEmpty(upStr) ? ShihabFormatHelpers.FormatZeroSpeed(_useBitsSpeedUnit, true) : upStr,
                     ratio);
                 _mehediResumeVal.ForeColor = ShihabThemePalette.GetMehediAccentGreen();
                 RefreshTorrentInspectorLists(tSnap);

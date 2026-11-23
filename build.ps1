@@ -2,7 +2,7 @@ param(
     [string]$OutDir = ''
 )
 $ErrorActionPreference = 'Stop'
-$shihabAppVersion = '1.1.1'
+$shihabAppVersion = '1.2.0'
 $shihabProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $mehediBinDir = if ([string]::IsNullOrWhiteSpace($OutDir)) { Join-Path $shihabProjectRoot 'bin' } else { $OutDir }
 $shihabObjDir = Join-Path $shihabProjectRoot 'obj'
@@ -32,6 +32,11 @@ if ($shihabSources.Count -lt 10) {
     throw "Expected modular C# sources under $shihabSrcRoot, found $($shihabSources.Count)"
 }
 
+$shihabAppManifest = Join-Path $shihabSrcRoot 'mdm.manifest'
+if (-not (Test-Path $shihabAppManifest)) {
+    throw "Required Win32 application manifest missing: $shihabAppManifest"
+}
+
 & $shihabCsc /nologo /target:winexe /platform:x64 /optimize+ /highentropyva+ /langversion:5 `
     /r:System.dll `
     /r:System.Core.dll `
@@ -43,6 +48,7 @@ if ($shihabSources.Count -lt 10) {
     /r:System.IO.Compression.FileSystem.dll `
     /r:System.Xml.dll `
     /r:Microsoft.VisualBasic.dll `
+    "/win32manifest:$shihabAppManifest" `
     "/win32icon:$mehediIconIco" `
     "/resource:$mehediIconIco,ShihabMehediIDM.mdm_icon.ico" `
     "/resource:$shihabIconPng,ShihabMehediIDM.mdm_icon.png" `
@@ -119,11 +125,15 @@ try {
     $mehediPayloadInspect.Dispose()
 }
 
-# 3. Compile x64 Setup Wizard (MHS-Download-Manager-Setup-1.1.1-x64.exe)
+# 3. Compile x64 Setup Wizard (MHS-Download-Manager-Setup-1.2.0-x64.exe)
 Get-ChildItem -Path $mehediBinDir -Filter 'MHS-Download-Manager-Setup-*-x64.exe' -ErrorAction SilentlyContinue | Remove-Item -Force
 $mehediSetupOutExe = Join-Path $mehediBinDir "MHS-Download-Manager-Setup-$shihabAppVersion-x64.exe"
 $shihabSharedSafetySrc = Join-Path $shihabProjectRoot 'src\Shared\ShihabProcessAndPathSafety.cs'
 $shihabInstallerSrc = Join-Path $shihabProjectRoot 'src\installer\ShihabSetupWizard.cs'
+$shihabSetupManifest = Join-Path $shihabProjectRoot 'src\installer\setup.manifest'
+if (-not (Test-Path $shihabSetupManifest)) {
+    throw "Required Setup UAC manifest missing: $shihabSetupManifest"
+}
 
 & $shihabCsc /nologo /target:winexe /platform:x64 /optimize+ /highentropyva+ /langversion:5 `
     /r:System.dll `
@@ -132,6 +142,7 @@ $shihabInstallerSrc = Join-Path $shihabProjectRoot 'src\installer\ShihabSetupWiz
     /r:System.Windows.Forms.dll `
     /r:System.IO.Compression.dll `
     /r:System.IO.Compression.FileSystem.dll `
+    "/win32manifest:$shihabSetupManifest" `
     "/win32icon:$mehediIconIco" `
     "/resource:$mehediIconIco,ShihabMehediInstaller.mdm_icon.ico" `
     "/resource:$shihabIconPng,ShihabMehediInstaller.mdm_icon.png" `

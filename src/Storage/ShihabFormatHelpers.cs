@@ -40,23 +40,121 @@ namespace ShihabMehediIDM
             return string.Format("{0:0.00} GB", mehediGb);
         }
 
+        public const string SpeedUnitBytesPerSec = "MBps";
+        public const string SpeedUnitBitsPerSec = "Mbps";
+
+        private static volatile bool _defaultUseBitsPerSec = false;
+
+        public static bool DefaultUseBitsPerSec
+        {
+            get { return _defaultUseBitsPerSec; }
+        }
+
+        public static string NormalizeSpeedUnit(string rawUnit)
+        {
+            if (!string.IsNullOrWhiteSpace(rawUnit))
+            {
+                string trimmed = rawUnit.Trim();
+                if (string.Equals(trimmed, "Mbps", StringComparison.Ordinal) ||
+                    string.Equals(trimmed, "mbps", StringComparison.Ordinal) ||
+                    string.Equals(trimmed, "bits", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(trimmed, "bps", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(trimmed, "bit/s", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(trimmed, "bits/sec", StringComparison.OrdinalIgnoreCase) ||
+                    trimmed.StartsWith("Mbps", StringComparison.Ordinal))
+                {
+                    return SpeedUnitBitsPerSec;
+                }
+            }
+            return SpeedUnitBytesPerSec;
+        }
+
+        public static bool IsBitsSpeedUnit(string rawUnit)
+        {
+            return string.Equals(NormalizeSpeedUnit(rawUnit), SpeedUnitBitsPerSec, StringComparison.Ordinal);
+        }
+
+        public static void SetDefaultSpeedUnit(string rawUnit)
+        {
+            _defaultUseBitsPerSec = IsBitsSpeedUnit(rawUnit);
+        }
+
         public static string FormatShihabSpeed(double mehediBytesPerSec)
+        {
+            return FormatShihabSpeed(mehediBytesPerSec, _defaultUseBitsPerSec, false);
+        }
+
+        public static string FormatShihabSpeed(double mehediBytesPerSec, bool useBitsPerSec, bool compactSuffix)
         {
             if (mehediBytesPerSec <= 1.0)
             {
                 return "";
             }
+            if (useBitsPerSec)
+            {
+                double bitsPerSec = mehediBytesPerSec * 8.0;
+                if (bitsPerSec < 1000.0)
+                {
+                    return string.Format("{0:0} bps", bitsPerSec);
+                }
+                double kbps = bitsPerSec / 1000.0;
+                if (kbps < 1000.0)
+                {
+                    return string.Format("{0:0.0} Kbps", kbps);
+                }
+                double mbps = kbps / 1000.0;
+                if (mbps < 1000.0)
+                {
+                    return string.Format("{0:0.00} Mbps", mbps);
+                }
+                double gbps = mbps / 1000.0;
+                return string.Format("{0:0.00} Gbps", gbps);
+            }
+
+            string suffix = compactSuffix ? "/s" : "/sec";
             if (mehediBytesPerSec < 1024.0)
             {
-                return string.Format("{0:0} B/sec", mehediBytesPerSec);
+                return string.Format("{0:0} B{1}", mehediBytesPerSec, suffix);
             }
             double shihabKb = mehediBytesPerSec / 1024.0;
             if (shihabKb < 1024.0)
             {
-                return string.Format("{0:0.0} KB/sec", shihabKb);
+                return string.Format("{0:0.0} KB{1}", shihabKb, suffix);
             }
             double mehediMb = shihabKb / 1024.0;
-            return string.Format("{0:0.00} MB/sec", mehediMb);
+            if (mehediMb < 1024.0)
+            {
+                return string.Format("{0:0.00} MB{1}", mehediMb, suffix);
+            }
+            double shihabGb = mehediMb / 1024.0;
+            return string.Format("{0:0.00} GB{1}", shihabGb, suffix);
+        }
+
+        public static string FormatZeroSpeed(bool useBitsPerSec, bool compactSuffix)
+        {
+            if (useBitsPerSec)
+            {
+                return "0 bps";
+            }
+            return compactSuffix ? "0 B/s" : "0 B/sec";
+        }
+
+        public static string FormatFooterZeroSpeed(bool useBitsPerSec)
+        {
+            return useBitsPerSec ? "0 Kbps" : "0 KB/s";
+        }
+
+        public static string FormatSpeedLimitCap(int limitKbPerSec, bool useBitsPerSec)
+        {
+            if (limitKbPerSec <= 0)
+            {
+                return "";
+            }
+            if (useBitsPerSec)
+            {
+                return FormatShihabSpeed((double)limitKbPerSec * 1024.0, true, true);
+            }
+            return FormatMehediBytes((long)limitKbPerSec * 1024L) + "/s";
         }
 
         public static string FormatMehediTimeLeft(long shihabSeconds)

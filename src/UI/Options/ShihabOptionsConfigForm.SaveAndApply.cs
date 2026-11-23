@@ -36,6 +36,13 @@ namespace ShihabMehediIDM
                         _shihabConfig.ShihabUiScalePercent = Math.Max(100, Math.Min(200, parsedScale));
                     }
                 }
+                if (_shihabSpeedUnitCombo != null)
+                {
+                    _shihabConfig.ShihabDefaultSpeedUnit = (_shihabSpeedUnitCombo.SelectedIndex == 1)
+                        ? ShihabFormatHelpers.SpeedUnitBitsPerSec
+                        : ShihabFormatHelpers.SpeedUnitBytesPerSec;
+                    ShihabFormatHelpers.SetDefaultSpeedUnit(_shihabConfig.ShihabDefaultSpeedUnit);
+                }
 
                 _shihabConfig.ShihabMonitorClipboard = _shihabClipChk.Checked;
                 _shihabConfig.ShihabGlobalHotkeySpec = (_shihabGlobalHotkeyBox != null ? _shihabGlobalHotkeyBox.Text : "").Trim();

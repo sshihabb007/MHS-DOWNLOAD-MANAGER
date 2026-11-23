@@ -8,6 +8,7 @@ using System.IO.Compression;
 using System.Net;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Security.AccessControl;
 using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Text;
@@ -18,13 +19,13 @@ using System.Windows.Forms;
 using Microsoft.Win32;
 using ShihabMehediShared;
 
-[assembly: AssemblyTitle("MHS Download Manager 1.1.1 Setup (Mehedi Hasan Shihab)")]
-[assembly: AssemblyDescription("Official Windows x64 Installer & Uninstaller for MHS Download Manager 1.1.1 (Mehedi Hasan Shihab)")]
+[assembly: AssemblyTitle("MHS Download Manager 1.2.0 Setup (Mehedi Hasan Shihab)")]
+[assembly: AssemblyDescription("Official Windows x64 Installer & Uninstaller for MHS Download Manager 1.2.0 (Mehedi Hasan Shihab)")]
 [assembly: AssemblyCompany("Mehedi Hasan Shihab")]
 [assembly: AssemblyProduct("MHS Download Manager Setup")]
 [assembly: AssemblyCopyright("Copyright (c) 2026 Mehedi Hasan Shihab")]
-[assembly: AssemblyVersion("1.1.1.0")]
-[assembly: AssemblyFileVersion("1.1.1.0")]
+[assembly: AssemblyVersion("1.2.0.0")]
+[assembly: AssemblyFileVersion("1.2.0.0")]
 
 namespace ShihabMehediInstaller
 {
@@ -40,11 +41,11 @@ namespace ShihabMehediInstaller
         public int ShihabWaitForPid { get; set; }
         public bool ShihabRelaunchAfterInstall { get; set; }
         public string ShihabUpdatedFromVersion { get; set; }
+        public bool ShihabMigratedFromLegacyDir { get; set; }
 
         public ShihabInstallOptions()
         {
-            string shihabLocalAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-            MehediInstallDirectory = Path.Combine(Path.Combine(shihabLocalAppData, "Programs"), "MHS Download Manager");
+            MehediInstallDirectory = MehediInstallerEngine.GetDefaultProgramFilesInstallDirectory();
             ShihabCreateDesktopShortcut = true;
             MehediCreateStartMenuShortcuts = true;
             ShihabLaunchOnStartup = true;
@@ -54,13 +55,14 @@ namespace ShihabMehediInstaller
             ShihabWaitForPid = 0;
             ShihabRelaunchAfterInstall = false;
             ShihabUpdatedFromVersion = "";
+            ShihabMigratedFromLegacyDir = false;
         }
     }
 
     public static class ShihabSetupTheme
     {
-        public const string ShihabProductTitle = "MHS Download Manager 1.1.1 (Mehedi Hasan Shihab)";
-        public const string MehediVersionText = "1.1.1";
+        public const string ShihabProductTitle = "MHS Download Manager 1.2.0 (Mehedi Hasan Shihab)";
+        public const string MehediVersionText = "1.2.0";
         public const string ShihabUninstallRegKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\MHSDownloadManager";
         public const string MehediRunRegKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
         public const string ShihabRunValueName = "MHSDownloadManager";
@@ -313,6 +315,364 @@ namespace ShihabMehediInstaller
 
     public static class MehediInstallerEngine
     {
+        private const int MOVEFILE_DELAY_UNTIL_REBOOT = 0x00000004;
+        private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000u;
+        private const uint TOKEN_ASSIGN_PRIMARY = 0x0001u;
+        private const uint TOKEN_DUPLICATE = 0x0002u;
+        private const uint TOKEN_QUERY = 0x0008u;
+        private const uint TOKEN_ADJUST_DEFAULT = 0x0080u;
+        private const uint TOKEN_ADJUST_SESSIONID = 0x0100u;
+        private const int SecurityImpersonation = 2;
+        private const int TokenPrimary = 1;
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct STARTUPINFOW
+        {
+            public int cb;
+            public string lpReserved;
+            public string lpDesktop;
+            public string lpTitle;
+            public int dwX;
+            public int dwY;
+            public int dwXSize;
+            public int dwYSize;
+            public int dwXCountChars;
+            public int dwYCountChars;
+            public int dwFillAttribute;
+            public int dwFlags;
+            public short wShowWindow;
+            public short cbReserved2;
+            public IntPtr lpReserved2;
+            public IntPtr hStdInput;
+            public IntPtr hStdOutput;
+            public IntPtr hStdError;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct PROCESS_INFORMATION
+        {
+            public IntPtr hProcess;
+            public IntPtr hThread;
+            public int dwProcessId;
+            public int dwThreadId;
+        }
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool MoveFileExW(string lpExistingFileName, string lpNewFileName, int dwFlags);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetShellWindow();
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern IntPtr OpenProcess(uint dwDesiredAccess, bool bInheritHandle, uint dwProcessId);
+
+        [DllImport("advapi32.dll", SetLastError = true)]
+        private static extern bool OpenProcessToken(IntPtr ProcessHandle, uint DesiredAccess, out IntPtr TokenHandle);
+
+        [DllImport("advapi32.dll", SetLastError = true)]
+        private static extern bool DuplicateTokenEx(
+            IntPtr hExistingToken,
+            uint dwDesiredAccess,
+            IntPtr lpTokenAttributes,
+            int ImpersonationLevel,
+            int TokenType,
+            out IntPtr phNewToken);
+
+        [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool CreateProcessWithTokenW(
+            IntPtr hToken,
+            uint dwLogonFlags,
+            string lpApplicationName,
+            StringBuilder lpCommandLine,
+            uint dwCreationFlags,
+            IntPtr lpEnvironment,
+            string lpCurrentDirectory,
+            ref STARTUPINFOW lpStartupInfo,
+            out PROCESS_INFORMATION lpProcessInformation);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool CloseHandle(IntPtr hObject);
+
+        public static string GetDefaultProgramFilesInstallDirectory()
+        {
+            string pf86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+            if (string.IsNullOrWhiteSpace(pf86))
+            {
+                pf86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+            }
+            if (string.IsNullOrWhiteSpace(pf86))
+            {
+                pf86 = @"C:\Program Files (x86)";
+            }
+            return Path.Combine(pf86, "MHS Download Manager");
+        }
+
+        public static string GetLegacyLocalAppDataInstallDirectory()
+        {
+            string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            if (string.IsNullOrWhiteSpace(localAppData)) return "";
+            return Path.Combine(Path.Combine(localAppData, "Programs"), "MHS Download Manager");
+        }
+
+        private static bool IsPathUnderDirectory(string candidatePath, string rootDir)
+        {
+            if (string.IsNullOrWhiteSpace(candidatePath) || string.IsNullOrWhiteSpace(rootDir)) return false;
+            try
+            {
+                string normCand = Path.GetFullPath(candidatePath).TrimEnd('\\', '/');
+                string normRoot = Path.GetFullPath(rootDir).TrimEnd('\\', '/');
+                if (string.Equals(normCand, normRoot, StringComparison.OrdinalIgnoreCase)) return true;
+                return normCand.StartsWith(normRoot + "\\", StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        public static bool IsPerMachineInstallDirectory(string installDir)
+        {
+            if (!IsShihabProcessElevated() || string.IsNullOrWhiteSpace(installDir)) return false;
+            string pf86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+            string pf64 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+            if (IsPathUnderDirectory(installDir, pf86) || IsPathUnderDirectory(installDir, pf64))
+            {
+                return true;
+            }
+            string userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            if (!string.IsNullOrWhiteSpace(userProfile) && !IsPathUnderDirectory(installDir, userProfile))
+            {
+                string tempRoot = Path.GetTempPath();
+                if (!IsPathUnderDirectory(installDir, tempRoot))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        public static string TryReadUninstallInstallLocation(RegistryHive hive, RegistryView view)
+        {
+            try
+            {
+                using (RegistryKey baseKey = RegistryKey.OpenBaseKey(hive, view))
+                using (RegistryKey rk = baseKey.OpenSubKey(ShihabSetupTheme.ShihabUninstallRegKey, false))
+                {
+                    if (rk != null)
+                    {
+                        object locObj = rk.GetValue("InstallLocation");
+                        if (locObj != null && !string.IsNullOrWhiteSpace(locObj.ToString()))
+                        {
+                            return Path.GetFullPath(locObj.ToString().Trim());
+                        }
+                    }
+                }
+            }
+            catch { }
+            return "";
+        }
+
+        public static bool LaunchProcessAsNonElevatedUser(string exePath, string arguments, string workingDir)
+        {
+            if (string.IsNullOrWhiteSpace(exePath) || !File.Exists(exePath)) return false;
+
+            if (!IsShihabProcessElevated())
+            {
+                try
+                {
+                    ProcessStartInfo psi = new ProcessStartInfo(exePath, arguments ?? "");
+                    psi.WorkingDirectory = !string.IsNullOrWhiteSpace(workingDir) ? workingDir : Path.GetDirectoryName(exePath);
+                    psi.UseShellExecute = true;
+                    Process.Start(psi);
+                    return true;
+                }
+                catch
+                {
+                    return false;
+                }
+            }
+
+            IntPtr hShellProc = IntPtr.Zero;
+            IntPtr hShellToken = IntPtr.Zero;
+            IntPtr hPrimaryToken = IntPtr.Zero;
+            try
+            {
+                IntPtr shellHwnd = GetShellWindow();
+                if (shellHwnd != IntPtr.Zero)
+                {
+                    uint shellPid = 0;
+                    GetWindowThreadProcessId(shellHwnd, out shellPid);
+                    if (shellPid != 0)
+                    {
+                        hShellProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, shellPid);
+                        uint dupRights = TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY | TOKEN_ADJUST_DEFAULT | TOKEN_ADJUST_SESSIONID;
+                        if (hShellProc != IntPtr.Zero &&
+                            OpenProcessToken(hShellProc, TOKEN_DUPLICATE | TOKEN_QUERY, out hShellToken) &&
+                            DuplicateTokenEx(hShellToken, dupRights, IntPtr.Zero, SecurityImpersonation, TokenPrimary, out hPrimaryToken))
+                        {
+                            string cmdLine = ShihabProcessAndPathSafety.QuoteWindowsArgument(exePath);
+                            if (!string.IsNullOrWhiteSpace(arguments))
+                            {
+                                cmdLine = cmdLine + " " + arguments;
+                            }
+                            StringBuilder cmdLineBuf = new StringBuilder(cmdLine);
+                            STARTUPINFOW si = new STARTUPINFOW();
+                            si.cb = Marshal.SizeOf(typeof(STARTUPINFOW));
+                            PROCESS_INFORMATION pi;
+                            string cwd = !string.IsNullOrWhiteSpace(workingDir) ? workingDir : Path.GetDirectoryName(exePath);
+                            if (CreateProcessWithTokenW(
+                                hPrimaryToken,
+                                0u,
+                                exePath,
+                                cmdLineBuf,
+                                0u,
+                                IntPtr.Zero,
+                                cwd,
+                                ref si,
+                                out pi))
+                            {
+                                if (pi.hThread != IntPtr.Zero) CloseHandle(pi.hThread);
+                                if (pi.hProcess != IntPtr.Zero) CloseHandle(pi.hProcess);
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            catch { }
+            finally
+            {
+                if (hPrimaryToken != IntPtr.Zero) CloseHandle(hPrimaryToken);
+                if (hShellToken != IntPtr.Zero) CloseHandle(hShellToken);
+                if (hShellProc != IntPtr.Zero) CloseHandle(hShellProc);
+            }
+
+            return TryLaunchViaExplorerShellCom(exePath, arguments, workingDir);
+        }
+
+        private static bool TryLaunchViaExplorerShellCom(string exePath, string arguments, string workingDir)
+        {
+            object shellWindows = null;
+            object desktopWindow = null;
+            object doc = null;
+            object shellDispatch = null;
+            try
+            {
+                // Explorer COM IShellWindows -> SWC_DESKTOP -> IShellDispatch2.ShellExecute launches at Medium IL even when seclogon is disabled
+                Type shellWindowsType = Type.GetTypeFromCLSID(new Guid("9BA05972-F6A8-11CF-A442-00A0C90A8F39"), false);
+                if (shellWindowsType == null) return false;
+                shellWindows = Activator.CreateInstance(shellWindowsType);
+                if (shellWindows == null) return false;
+
+                object[] findArgs = new object[] { 0, Type.Missing, 8 /* SWC_DESKTOP */, 0, 1 /* SWFO_NEEDDISPATCH */ };
+                ParameterModifier findMod = new ParameterModifier(5);
+                findMod[3] = true; // out pHWND
+                desktopWindow = shellWindowsType.InvokeMember(
+                    "FindWindowSW",
+                    BindingFlags.InvokeMethod,
+                    null,
+                    shellWindows,
+                    findArgs,
+                    new ParameterModifier[] { findMod },
+                    null,
+                    null);
+                if (desktopWindow == null) return false;
+
+                doc = desktopWindow.GetType().InvokeMember("Document", BindingFlags.GetProperty, null, desktopWindow, null);
+                if (doc == null) return false;
+
+                shellDispatch = doc.GetType().InvokeMember("Application", BindingFlags.GetProperty, null, doc, null);
+                if (shellDispatch == null) return false;
+
+                string cwd = !string.IsNullOrWhiteSpace(workingDir) ? workingDir : Path.GetDirectoryName(exePath);
+                shellDispatch.GetType().InvokeMember(
+                    "ShellExecute",
+                    BindingFlags.InvokeMethod,
+                    null,
+                    shellDispatch,
+                    new object[] { exePath, arguments ?? "", cwd ?? "", "open", 1 });
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+            finally
+            {
+                try { if (shellDispatch != null && Marshal.IsComObject(shellDispatch)) Marshal.FinalReleaseComObject(shellDispatch); } catch { }
+                try { if (doc != null && Marshal.IsComObject(doc)) Marshal.FinalReleaseComObject(doc); } catch { }
+                try { if (desktopWindow != null && Marshal.IsComObject(desktopWindow)) Marshal.FinalReleaseComObject(desktopWindow); } catch { }
+                try { if (shellWindows != null && Marshal.IsComObject(shellWindows)) Marshal.FinalReleaseComObject(shellWindows); } catch { }
+            }
+        }
+
+        private static Mutex CreateInstallerActiveMutex(out bool createdNew)
+        {
+            createdNew = false;
+            const string mutexName = "Local\\ShihabMehediIDM_InstallerActive";
+            try
+            {
+                MutexSecurity sec = new MutexSecurity();
+                sec.AddAccessRule(new MutexAccessRule(
+                    new SecurityIdentifier(WellKnownSidType.AuthenticatedUserSid, null),
+                    MutexRights.Synchronize | MutexRights.ReadPermissions,
+                    AccessControlType.Allow));
+                sec.AddAccessRule(new MutexAccessRule(
+                    new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null),
+                    MutexRights.FullControl,
+                    AccessControlType.Allow));
+                sec.AddAccessRule(new MutexAccessRule(
+                    new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null),
+                    MutexRights.FullControl,
+                    AccessControlType.Allow));
+                return new Mutex(true, mutexName, out createdNew, sec);
+            }
+            catch
+            {
+                try
+                {
+                    return new Mutex(true, mutexName, out createdNew);
+                }
+                catch
+                {
+                    return null;
+                }
+            }
+        }
+
+        private static void CleanStaleInstallTempAndOldFiles(string rootDir)
+        {
+            if (string.IsNullOrWhiteSpace(rootDir) || !Directory.Exists(rootDir)) return;
+            string[] dirs = new string[] { rootDir, Path.Combine(rootDir, "extension") };
+            string[] patterns = new string[] { "*.old", "*.shihab_stage_*.tmp", ".shihab_write_probe_*.tmp" };
+            for (int d = 0; d < dirs.Length; d++)
+            {
+                if (!Directory.Exists(dirs[d])) continue;
+                for (int p = 0; p < patterns.Length; p++)
+                {
+                    try
+                    {
+                        string[] matches = Directory.GetFiles(dirs[d], patterns[p], SearchOption.TopDirectoryOnly);
+                        for (int i = 0; i < matches.Length; i++)
+                        {
+                            try
+                            {
+                                File.Delete(matches[i]);
+                            }
+                            catch
+                            {
+                                try { MoveFileExW(matches[i], null, MOVEFILE_DELAY_UNTIL_REBOOT); } catch { }
+                            }
+                        }
+                    }
+                    catch { }
+                }
+            }
+        }
+
         public static bool IsShihabProcessElevated()
         {
             try
@@ -339,8 +699,7 @@ namespace ShihabMehediInstaller
                 }
                 if (string.IsNullOrEmpty(mehediProbeDir)) return false;
 
-                Directory.CreateDirectory(shihabFull);
-                string shihabProbeFile = Path.Combine(shihabFull, ".shihab_write_probe_" + Guid.NewGuid().ToString("N") + ".tmp");
+                string shihabProbeFile = Path.Combine(mehediProbeDir, ".shihab_write_probe_" + Guid.NewGuid().ToString("N") + ".tmp");
                 File.WriteAllText(shihabProbeFile, "ok");
                 File.Delete(shihabProbeFile);
                 return true;
@@ -495,13 +854,9 @@ namespace ShihabMehediInstaller
         {
             string shihabInstallRoot = Path.GetFullPath(mehediOpts.MehediInstallDirectory.Trim());
             string shihabInstalledExe = Path.Combine(shihabInstallRoot, "mdm.exe");
+            bool isPerMachineInstall = IsPerMachineInstallDirectory(shihabInstallRoot);
             bool createdInstallerMutex = false;
-            Mutex installerActiveMutex = null;
-            try
-            {
-                installerActiveMutex = new Mutex(true, "Local\\ShihabMehediIDM_InstallerActive", out createdInstallerMutex);
-            }
-            catch { }
+            Mutex installerActiveMutex = CreateInstallerActiveMutex(out createdInstallerMutex);
 
             try
             {
@@ -512,6 +867,26 @@ namespace ShihabMehediInstaller
                     shihabProgressCallback(shihabPct, mehediMsg);
                 }
             };
+
+            List<string> legacyDirsToMigrate = new List<string>();
+            if (!mehediOpts.ShihabSkipRegistryAndShortcuts)
+            {
+                HashSet<string> seenLegacyDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                string hkcuOldDir = TryReadUninstallInstallLocation(RegistryHive.CurrentUser, RegistryView.Default);
+                string defLocalDir = GetLegacyLocalAppDataInstallDirectory();
+                string[] candLegacy = new string[] { hkcuOldDir, defLocalDir };
+                for (int ci = 0; ci < candLegacy.Length; ci++)
+                {
+                    string c = candLegacy[ci];
+                    if (string.IsNullOrWhiteSpace(c)) continue;
+                    string normC = Path.GetFullPath(c).TrimEnd('\\', '/');
+                    if (string.Equals(normC, shihabInstallRoot.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase)) continue;
+                    if (File.Exists(Path.Combine(normC, "mdm.exe")) && seenLegacyDirs.Add(normC))
+                    {
+                        legacyDirsToMigrate.Add(normC);
+                    }
+                }
+            }
 
             mehediReport(5, "Preparing installation directory: " + shihabInstallRoot);
             Directory.CreateDirectory(shihabInstallRoot);
@@ -539,6 +914,10 @@ namespace ShihabMehediInstaller
             }
 
             StopOwnedShihabAppInDirectory(shihabInstallRoot, delegate(string shihabMsg) { mehediReport(10, shihabMsg); });
+            for (int li = 0; li < legacyDirsToMigrate.Count; li++)
+            {
+                StopOwnedShihabAppInDirectory(legacyDirsToMigrate[li], delegate(string shihabMsg) { mehediReport(11, shihabMsg); });
+            }
 
             string mehediExtensionDir = Path.Combine(shihabInstallRoot, "extension");
             Directory.CreateDirectory(mehediExtensionDir);
@@ -563,6 +942,8 @@ namespace ShihabMehediInstaller
                         mehediReport(shihabPct, "Extracting: " + mehediRelPath);
                     });
             }
+
+            CleanStaleInstallTempAndOldFiles(shihabInstallRoot);
 
             string shihabSelfExe = Process.GetCurrentProcess().MainModule.FileName;
             string mehediUninstallerPath = Path.Combine(shihabInstallRoot, "Uninstall.exe");
@@ -599,11 +980,21 @@ namespace ShihabMehediInstaller
             {
                 BackupExistingShihabRegistryState();
 
-                string shihabDesktopDir = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
-                string shihabDesktopLnk = Path.Combine(shihabDesktopDir, "MHS Download Manager.lnk");
+                string targetDesktopDir = isPerMachineInstall
+                    ? Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory)
+                    : Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+                if (string.IsNullOrWhiteSpace(targetDesktopDir))
+                {
+                    targetDesktopDir = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+                }
+                string shihabDesktopLnk = Path.Combine(targetDesktopDir, "MHS Download Manager.lnk");
+                string userDesktopDir = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+                string userDesktopLnk = Path.Combine(userDesktopDir, "MHS Download Manager.lnk");
+
+                bool hadAnyDesktopShortcut = File.Exists(shihabDesktopLnk) || File.Exists(userDesktopLnk);
                 bool refreshDesktopShortcut = !mehediOpts.ShihabInPlaceUpdateMode
                     ? mehediOpts.ShihabCreateDesktopShortcut
-                    : File.Exists(shihabDesktopLnk);
+                    : hadAnyDesktopShortcut;
                 if (refreshDesktopShortcut)
                 {
                     mehediReport(82, mehediOpts.ShihabInPlaceUpdateMode ? "Refreshing Desktop shortcut icon..." : "Creating Desktop shortcut...");
@@ -619,10 +1010,14 @@ namespace ShihabMehediInstaller
                         ShihabSetupTheme.ShihabProductTitle,
                         shihabInstalledExe + ",0");
                     updatedShellFiles.Add(shihabDesktopLnk);
-                    updatedShellDirs.Add(shihabDesktopDir);
+                    updatedShellDirs.Add(targetDesktopDir);
                 }
 
-                // Also refresh an existing OneDrive Desktop shortcut if present and targeting this exe
+                // Remove stale per-user Desktop / OneDrive Desktop shortcut when installing machine-wide to avoid duplicates
+                if (isPerMachineInstall && !string.Equals(userDesktopLnk, shihabDesktopLnk, StringComparison.OrdinalIgnoreCase))
+                {
+                    RemoveShortcutIfTargetingMdm(userDesktopLnk, updatedShellFiles, updatedShellDirs);
+                }
                 try
                 {
                     string userProfileDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
@@ -630,19 +1025,26 @@ namespace ShihabMehediInstaller
                     if (!string.Equals(oneDriveDesktopLnk, shihabDesktopLnk, StringComparison.OrdinalIgnoreCase) &&
                         File.Exists(oneDriveDesktopLnk))
                     {
-                        string existingTarget = TryGetShortcutTargetPath(oneDriveDesktopLnk);
-                        if (string.Equals(existingTarget, shihabInstalledExe, StringComparison.OrdinalIgnoreCase))
+                        if (isPerMachineInstall)
                         {
-                            try { File.Delete(oneDriveDesktopLnk); } catch { }
-                            CreateShihabShellShortcut(
-                                oneDriveDesktopLnk,
-                                shihabInstalledExe,
-                                "",
-                                shihabInstallRoot,
-                                ShihabSetupTheme.ShihabProductTitle,
-                                shihabInstalledExe + ",0");
-                            updatedShellFiles.Add(oneDriveDesktopLnk);
-                            updatedShellDirs.Add(Path.GetDirectoryName(oneDriveDesktopLnk));
+                            RemoveShortcutIfTargetingMdm(oneDriveDesktopLnk, updatedShellFiles, updatedShellDirs);
+                        }
+                        else
+                        {
+                            string existingTarget = TryGetShortcutTargetPath(oneDriveDesktopLnk);
+                            if (string.Equals(existingTarget, shihabInstalledExe, StringComparison.OrdinalIgnoreCase))
+                            {
+                                try { File.Delete(oneDriveDesktopLnk); } catch { }
+                                CreateShihabShellShortcut(
+                                    oneDriveDesktopLnk,
+                                    shihabInstalledExe,
+                                    "",
+                                    shihabInstallRoot,
+                                    ShihabSetupTheme.ShihabProductTitle,
+                                    shihabInstalledExe + ",0");
+                                updatedShellFiles.Add(oneDriveDesktopLnk);
+                                updatedShellDirs.Add(Path.GetDirectoryName(oneDriveDesktopLnk));
+                            }
                         }
                     }
                 }
@@ -651,9 +1053,14 @@ namespace ShihabMehediInstaller
                 if (mehediOpts.MehediCreateStartMenuShortcuts)
                 {
                     mehediReport(87, "Creating Start Menu shortcuts (App + Extension Folder + Uninstaller)...");
-                    string mehediStartPrograms = Path.Combine(
-                        Environment.GetFolderPath(Environment.SpecialFolder.Programs),
-                        "MHS Download Manager");
+                    string startRoot = isPerMachineInstall
+                        ? Environment.GetFolderPath(Environment.SpecialFolder.CommonPrograms)
+                        : Environment.GetFolderPath(Environment.SpecialFolder.Programs);
+                    if (string.IsNullOrWhiteSpace(startRoot))
+                    {
+                        startRoot = Environment.GetFolderPath(Environment.SpecialFolder.Programs);
+                    }
+                    string mehediStartPrograms = Path.Combine(startRoot, "MHS Download Manager");
                     Directory.CreateDirectory(mehediStartPrograms);
 
                     string startAppLnk = Path.Combine(mehediStartPrograms, "MHS Download Manager.lnk");
@@ -695,12 +1102,33 @@ namespace ShihabMehediInstaller
                     updatedShellFiles.Add(startExtLnk);
                     updatedShellFiles.Add(startUninstLnk);
                     updatedShellDirs.Add(mehediStartPrograms);
+
+                    if (isPerMachineInstall)
+                    {
+                        try
+                        {
+                            string userStartDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), "MHS Download Manager");
+                            if (!string.Equals(userStartDir, mehediStartPrograms, StringComparison.OrdinalIgnoreCase) &&
+                                Directory.Exists(userStartDir))
+                            {
+                                Directory.Delete(userStartDir, true);
+                            }
+                        }
+                        catch { }
+                    }
                 }
 
                 mehediReport(89, "Refreshing pinned Taskbar shortcut icons (if pinned)...");
-                RefreshPinnedTaskbarShortcuts(shihabInstalledExe, updatedShellFiles, updatedShellDirs);
+                List<string> previousExePaths = new List<string>();
+                for (int li = 0; li < legacyDirsToMigrate.Count; li++)
+                {
+                    previousExePaths.Add(Path.Combine(legacyDirsToMigrate[li], "mdm.exe"));
+                }
+                RefreshPinnedTaskbarShortcuts(shihabInstalledExe, previousExePaths, updatedShellFiles, updatedShellDirs);
 
-                if (mehediOpts.ShihabLaunchOnStartup && !mehediOpts.ShihabInPlaceUpdateMode)
+                bool hasExistingStartupEntry = HasExistingStartupRegistryEntry();
+                if ((mehediOpts.ShihabLaunchOnStartup && !mehediOpts.ShihabInPlaceUpdateMode) ||
+                    (mehediOpts.ShihabInPlaceUpdateMode && hasExistingStartupEntry))
                 {
                     mehediReport(91, "Configuring Windows startup entry...");
                     using (RegistryKey shihabRunKey = Registry.CurrentUser.CreateSubKey(ShihabSetupTheme.MehediRunRegKey))
@@ -714,24 +1142,48 @@ namespace ShihabMehediInstaller
                                 RegistryValueKind.String);
                         }
                     }
-                    SyncInstallerStartupConfigFlag(true);
+                    if (!mehediOpts.ShihabInPlaceUpdateMode)
+                    {
+                        SyncInstallerStartupConfigFlag(true);
+                    }
                 }
                 else if (!mehediOpts.ShihabInPlaceUpdateMode)
                 {
+                    try
+                    {
+                        using (RegistryKey shihabRunKey = Registry.CurrentUser.OpenSubKey(ShihabSetupTheme.MehediRunRegKey, true))
+                        {
+                            if (shihabRunKey != null)
+                            {
+                                shihabRunKey.DeleteValue(ShihabSetupTheme.ShihabRunValueName, false);
+                                shihabRunKey.DeleteValue("MHS_Download_Manager", false);
+                            }
+                        }
+                    }
+                    catch { }
                     SyncInstallerStartupConfigFlag(false);
                 }
 
                 mehediReport(93, "Registering magnet: URI & .torrent file associations...");
-                RegisterMagnetAndTorrentAssociations(shihabInstalledExe);
+                RegisterMagnetAndTorrentAssociations(shihabInstalledExe, isPerMachineInstall);
 
                 if (mehediOpts.MehediRegisterNativeHost && Directory.Exists(mehediExtensionDir))
                 {
                     mehediReport(95, "Registering 14-Browser Native Messaging host...");
-                    RegisterShihabNativeHostForInstalledExtension(shihabInstalledExe, mehediExtensionDir);
+                    RegisterShihabNativeHostForInstalledExtension(shihabInstallRoot, shihabInstalledExe, mehediExtensionDir, isPerMachineInstall);
                 }
 
-                mehediReport(98, "Registering Windows Installed Apps entry...");
-                RegisterMehediWindowsUninstaller(shihabInstallRoot, shihabInstalledExe, mehediUninstallerPath, mehediTotalExtractedBytes);
+                mehediReport(97, "Registering Windows Installed Apps entry...");
+                RegisterMehediWindowsUninstaller(shihabInstallRoot, shihabInstalledExe, mehediUninstallerPath, mehediTotalExtractedBytes, isPerMachineInstall);
+
+                // Clean up migrated legacy LocalAppData binaries so old mdm.exe cannot conflict with Program Files install
+                for (int li = 0; li < legacyDirsToMigrate.Count; li++)
+                {
+                    string legacyDir = legacyDirsToMigrate[li];
+                    mehediReport(98, "Cleaning up migrated legacy binaries in: " + legacyDir);
+                    CleanupMigratedLegacyInstallDir(legacyDir);
+                    mehediOpts.ShihabMigratedFromLegacyDir = true;
+                }
 
                 mehediReport(99, "Refreshing Windows Desktop & Taskbar icon cache...");
                 ShihabSetupTheme.RefreshWindowsShellIconCache(updatedShellFiles.ToArray(), updatedShellDirs.ToArray());
@@ -747,6 +1199,64 @@ namespace ShihabMehediInstaller
                     try { installerActiveMutex.Dispose(); } catch { }
                 }
             }
+        }
+
+        private static bool HasExistingStartupRegistryEntry()
+        {
+            try
+            {
+                using (RegistryKey rk = Registry.CurrentUser.OpenSubKey(ShihabSetupTheme.MehediRunRegKey, false))
+                {
+                    if (rk == null) return false;
+                    return rk.GetValue(ShihabSetupTheme.ShihabRunValueName) != null ||
+                           rk.GetValue("MHS_Download_Manager") != null;
+                }
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static void RemoveShortcutIfTargetingMdm(string lnkPath, List<string> updatedFiles, List<string> updatedDirs)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(lnkPath) || !File.Exists(lnkPath)) return;
+                string target = TryGetShortcutTargetPath(lnkPath);
+                if (!string.IsNullOrEmpty(target) &&
+                    string.Equals(Path.GetFileName(target), "mdm.exe", StringComparison.OrdinalIgnoreCase))
+                {
+                    File.Delete(lnkPath);
+                    if (updatedFiles != null) updatedFiles.Add(lnkPath);
+                    if (updatedDirs != null) updatedDirs.Add(Path.GetDirectoryName(lnkPath));
+                }
+            }
+            catch { }
+        }
+
+        private static void CleanupMigratedLegacyInstallDir(string legacyDir)
+        {
+            if (string.IsNullOrWhiteSpace(legacyDir) || !Directory.Exists(legacyDir)) return;
+            string[] legacyFiles = new string[]
+            {
+                "mdm.exe", "Uninstall.exe", "README.md", "LICENSE",
+                "shihab_native_host_launcher.cmd", "com.shihab.mehedi.idm.json", "com.shihab.mehedi.idm.firefox.json"
+            };
+            for (int i = 0; i < legacyFiles.Length; i++)
+            {
+                string f = Path.Combine(legacyDir, legacyFiles[i]);
+                try { if (File.Exists(f)) File.Delete(f); } catch { }
+            }
+            CleanStaleInstallTempAndOldFiles(legacyDir);
+            try
+            {
+                if (Directory.GetFiles(legacyDir).Length == 0 && Directory.GetDirectories(legacyDir).Length == 0)
+                {
+                    Directory.Delete(legacyDir, false);
+                }
+            }
+            catch { }
         }
 
         private static void BackupExistingShihabRegistryState()
@@ -797,8 +1307,57 @@ namespace ShihabMehediInstaller
             @"Software\Waterfox\NativeMessagingHosts\com.shihab.mehedi.idm"
         };
 
-        private static void WriteNativeHostRegistryKeys(string[] keys, string manifestPath)
+        private static void WriteNativeHostRegistryKeys(string[] keys, string manifestPath, bool perMachine)
         {
+            if (perMachine)
+            {
+                // Chromium on 64-bit Windows reads HKLM\SOFTWARE\WOW6432Node\...\NativeMessagingHosts (32-bit view),
+                // while Firefox reads 64-bit/32-bit HKLM; write both views cleanly.
+                RegistryView[] views = new RegistryView[] { RegistryView.Registry64, RegistryView.Registry32 };
+                for (int v = 0; v < views.Length; v++)
+                {
+                    try
+                    {
+                        using (RegistryKey baseKey = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, views[v]))
+                        {
+                            for (int i = 0; i < keys.Length; i++)
+                            {
+                                using (RegistryKey mehediKey = baseKey.CreateSubKey(keys[i]))
+                                {
+                                    if (mehediKey != null)
+                                    {
+                                        mehediKey.SetValue("", manifestPath, RegistryValueKind.String);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    catch { }
+                }
+
+                // Clear stale HKCU entries pointing to legacy LocalAppData manifests so they don't shadow HKLM
+                string legacyDir = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "ShihabMehediIDM");
+                for (int i = 0; i < keys.Length; i++)
+                {
+                    try
+                    {
+                        using (RegistryKey cur = Registry.CurrentUser.OpenSubKey(keys[i], false))
+                        {
+                            string existingVal = cur != null ? Convert.ToString(cur.GetValue("") ?? "") : "";
+                            if (!string.IsNullOrEmpty(existingVal) &&
+                                existingVal.IndexOf(legacyDir, StringComparison.OrdinalIgnoreCase) >= 0)
+                            {
+                                Registry.CurrentUser.DeleteSubKeyTree(keys[i], false);
+                            }
+                        }
+                    }
+                    catch { }
+                }
+                return;
+            }
+
             for (int i = 0; i < keys.Length; i++)
             {
                 using (RegistryKey mehediKey = Registry.CurrentUser.CreateSubKey(keys[i]))
@@ -817,6 +1376,24 @@ namespace ShihabMehediInstaller
             {
                 try { Registry.CurrentUser.DeleteSubKeyTree(keys[i], false); } catch { }
             }
+            if (IsShihabProcessElevated())
+            {
+                RegistryView[] views = new RegistryView[] { RegistryView.Registry64, RegistryView.Registry32 };
+                for (int v = 0; v < views.Length; v++)
+                {
+                    try
+                    {
+                        using (RegistryKey baseKey = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, views[v]))
+                        {
+                            for (int i = 0; i < keys.Length; i++)
+                            {
+                                try { baseKey.DeleteSubKeyTree(keys[i], false); } catch { }
+                            }
+                        }
+                    }
+                    catch { }
+                }
+            }
         }
 
         private static string EscapeJsonLiteral(string value)
@@ -834,39 +1411,50 @@ namespace ShihabMehediInstaller
             return sb.ToString();
         }
 
-        private static void RegisterShihabNativeHostForInstalledExtension(string mehediExePath, string shihabExtensionDir)
+        private static void CollectExistingManifestOrigins(string manifestPath, HashSet<string> targetOrigins)
         {
             try
             {
-                string mehediAppDataDir = Path.Combine(
+                if (string.IsNullOrWhiteSpace(manifestPath) || !File.Exists(manifestPath)) return;
+                string prevRaw = File.ReadAllText(manifestPath, Encoding.UTF8);
+                MatchCollection prevMatches = Regex.Matches(prevRaw, @"chrome-extension://([a-p]{32})/?", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+                for (int mi = 0; mi < prevMatches.Count; mi++)
+                {
+                    string prevId = prevMatches[mi].Groups[1].Value.ToLowerInvariant();
+                    targetOrigins.Add("chrome-extension://" + prevId + "/");
+                }
+            }
+            catch { }
+        }
+
+        private static void RegisterShihabNativeHostForInstalledExtension(
+            string shihabInstallRoot,
+            string mehediExePath,
+            string shihabExtensionDir,
+            bool perMachine)
+        {
+            try
+            {
+                string legacyAppDataDir = Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                     "ShihabMehediIDM");
-                Directory.CreateDirectory(mehediAppDataDir);
+                string manifestDir = perMachine ? shihabInstallRoot : legacyAppDataDir;
+                Directory.CreateDirectory(manifestDir);
 
-                string shihabLauncherCmd = Path.Combine(mehediAppDataDir, "shihab_native_host_launcher.cmd");
+                string shihabLauncherCmd = Path.Combine(manifestDir, "shihab_native_host_launcher.cmd");
+                string batchSafeExe = "\"" + (mehediExePath ?? "").Replace("\"", "").Replace("%", "%%") + "\"";
                 File.WriteAllText(
                     shihabLauncherCmd,
-                    "@echo off\r\n" + ShihabProcessAndPathSafety.QuoteWindowsArgument(mehediExePath) + " --shihab-native-messaging-host\r\n",
+                    "@echo off\r\n" + batchSafeExe + " --shihab-native-messaging-host\r\n",
                     Encoding.ASCII);
 
                 string mehediComputedExtId = ComputeShihabChromiumUnpackedExtensionId(shihabExtensionDir);
-                string shihabManifestPath = Path.Combine(mehediAppDataDir, "com.shihab.mehedi.idm.json");
+                string shihabManifestPath = Path.Combine(manifestDir, "com.shihab.mehedi.idm.json");
                 HashSet<string> mergedOrigins = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 mergedOrigins.Add("chrome-extension://" + EscapeJsonLiteral(mehediComputedExtId) + "/");
-                try
-                {
-                    if (File.Exists(shihabManifestPath))
-                    {
-                        string prevRaw = File.ReadAllText(shihabManifestPath, Encoding.UTF8);
-                        MatchCollection prevMatches = Regex.Matches(prevRaw, @"chrome-extension://([a-p]{32})/?", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-                        for (int mi = 0; mi < prevMatches.Count; mi++)
-                        {
-                            string prevId = prevMatches[mi].Groups[1].Value.ToLowerInvariant();
-                            mergedOrigins.Add("chrome-extension://" + prevId + "/");
-                        }
-                    }
-                }
-                catch { }
+                CollectExistingManifestOrigins(shihabManifestPath, mergedOrigins);
+                CollectExistingManifestOrigins(Path.Combine(legacyAppDataDir, "com.shihab.mehedi.idm.json"), mergedOrigins);
+
                 StringBuilder originLines = new StringBuilder();
                 int oi = 0;
                 foreach (string orig in mergedOrigins)
@@ -888,9 +1476,9 @@ namespace ShihabMehediInstaller
                     "  ]\r\n" +
                     "}\r\n";
                 File.WriteAllText(shihabManifestPath, shihabManifestJson, new UTF8Encoding(false));
-                WriteNativeHostRegistryKeys(ChromiumNativeHostRegistryKeys, shihabManifestPath);
+                WriteNativeHostRegistryKeys(ChromiumNativeHostRegistryKeys, shihabManifestPath, perMachine);
 
-                string shihabFirefoxManifestPath = Path.Combine(mehediAppDataDir, "com.shihab.mehedi.idm.firefox.json");
+                string shihabFirefoxManifestPath = Path.Combine(manifestDir, "com.shihab.mehedi.idm.firefox.json");
                 string shihabFirefoxManifestJson =
                     "{\r\n" +
                     "  \"name\": \"com.shihab.mehedi.idm\",\r\n" +
@@ -902,81 +1490,75 @@ namespace ShihabMehediInstaller
                     "  ]\r\n" +
                     "}\r\n";
                 File.WriteAllText(shihabFirefoxManifestPath, shihabFirefoxManifestJson, new UTF8Encoding(false));
-                WriteNativeHostRegistryKeys(FirefoxNativeHostRegistryKeys, shihabFirefoxManifestPath);
+                WriteNativeHostRegistryKeys(FirefoxNativeHostRegistryKeys, shihabFirefoxManifestPath, perMachine);
             }
             catch { }
         }
 
-        private static void RegisterMagnetAndTorrentAssociations(string installedExePath)
+        private static void WriteMagnetAndTorrentToRoot(RegistryKey hiveRoot, string installedExePath)
         {
-            try
+            string quotedExe = ShihabProcessAndPathSafety.QuoteWindowsArgument(installedExePath);
+            string openCmd = quotedExe + " \"%1\"";
+
+            using (RegistryKey magKey = hiveRoot.CreateSubKey(@"Software\Classes\magnet"))
             {
-                string quotedExe = ShihabProcessAndPathSafety.QuoteWindowsArgument(installedExePath);
-                string openCmd = quotedExe + " \"%1\"";
-
-                // 1. Register HKCU magnet: URL Protocol
-                using (RegistryKey magKey = Registry.CurrentUser.CreateSubKey(@"Software\Classes\magnet"))
+                if (magKey != null)
                 {
-                    if (magKey != null)
+                    magKey.SetValue("", "URL:Magnet Protocol (MHS Download Manager)", RegistryValueKind.String);
+                    magKey.SetValue("URL Protocol", "", RegistryValueKind.String);
+                    using (RegistryKey icoKey = magKey.CreateSubKey("DefaultIcon"))
                     {
-                        magKey.SetValue("", "URL:Magnet Protocol (MHS Download Manager)", RegistryValueKind.String);
-                        magKey.SetValue("URL Protocol", "", RegistryValueKind.String);
-                        using (RegistryKey icoKey = magKey.CreateSubKey("DefaultIcon"))
-                        {
-                            if (icoKey != null) icoKey.SetValue("", quotedExe + ",0", RegistryValueKind.String);
-                        }
-                        using (RegistryKey cmdKey = magKey.CreateSubKey(@"shell\open\command"))
-                        {
-                            if (cmdKey != null) cmdKey.SetValue("", openCmd, RegistryValueKind.String);
-                        }
+                        if (icoKey != null) icoKey.SetValue("", quotedExe + ",0", RegistryValueKind.String);
                     }
-                }
-
-                // 2. Register HKCU .torrent file association -> MHSDownloadManager.Torrent
-                using (RegistryKey extKey = Registry.CurrentUser.CreateSubKey(@"Software\Classes\.torrent"))
-                {
-                    if (extKey != null)
+                    using (RegistryKey cmdKey = magKey.CreateSubKey(@"shell\open\command"))
                     {
-                        extKey.SetValue("", "MHSDownloadManager.Torrent", RegistryValueKind.String);
-                        extKey.SetValue("Content Type", "application/x-bittorrent", RegistryValueKind.String);
-                    }
-                }
-                using (RegistryKey progKey = Registry.CurrentUser.CreateSubKey(@"Software\Classes\MHSDownloadManager.Torrent"))
-                {
-                    if (progKey != null)
-                    {
-                        progKey.SetValue("", "BitTorrent Metadata File (MHS Download Manager)", RegistryValueKind.String);
-                        using (RegistryKey icoKey = progKey.CreateSubKey("DefaultIcon"))
-                        {
-                            if (icoKey != null) icoKey.SetValue("", quotedExe + ",0", RegistryValueKind.String);
-                        }
-                        using (RegistryKey cmdKey = progKey.CreateSubKey(@"shell\open\command"))
-                        {
-                            if (cmdKey != null) cmdKey.SetValue("", openCmd, RegistryValueKind.String);
-                        }
+                        if (cmdKey != null) cmdKey.SetValue("", openCmd, RegistryValueKind.String);
                     }
                 }
             }
-            catch { }
+
+            using (RegistryKey extKey = hiveRoot.CreateSubKey(@"Software\Classes\.torrent"))
+            {
+                if (extKey != null)
+                {
+                    extKey.SetValue("", "MHSDownloadManager.Torrent", RegistryValueKind.String);
+                    extKey.SetValue("Content Type", "application/x-bittorrent", RegistryValueKind.String);
+                }
+            }
+            using (RegistryKey progKey = hiveRoot.CreateSubKey(@"Software\Classes\MHSDownloadManager.Torrent"))
+            {
+                if (progKey != null)
+                {
+                    progKey.SetValue("", "BitTorrent Metadata File (MHS Download Manager)", RegistryValueKind.String);
+                    using (RegistryKey icoKey = progKey.CreateSubKey("DefaultIcon"))
+                    {
+                        if (icoKey != null) icoKey.SetValue("", quotedExe + ",0", RegistryValueKind.String);
+                    }
+                    using (RegistryKey cmdKey = progKey.CreateSubKey(@"shell\open\command"))
+                    {
+                        if (cmdKey != null) cmdKey.SetValue("", openCmd, RegistryValueKind.String);
+                    }
+                }
+            }
         }
 
-        private static void UnregisterMagnetAndTorrentAssociations()
+        private static void DeleteMagnetAndTorrentFromRoot(RegistryKey hiveRoot)
         {
             try
             {
-                using (RegistryKey magCmd = Registry.CurrentUser.OpenSubKey(@"Software\Classes\magnet\shell\open\command", false))
+                using (RegistryKey magCmd = hiveRoot.OpenSubKey(@"Software\Classes\magnet\shell\open\command", false))
                 {
                     string val = magCmd != null ? Convert.ToString(magCmd.GetValue("") ?? "") : "";
                     if (val.IndexOf("mdm.exe", StringComparison.OrdinalIgnoreCase) >= 0)
                     {
-                        try { Registry.CurrentUser.DeleteSubKeyTree(@"Software\Classes\magnet", false); } catch { }
+                        try { hiveRoot.DeleteSubKeyTree(@"Software\Classes\magnet", false); } catch { }
                     }
                 }
             }
             catch { }
             try
             {
-                using (RegistryKey extKey = Registry.CurrentUser.OpenSubKey(@"Software\Classes\.torrent", true))
+                using (RegistryKey extKey = hiveRoot.OpenSubKey(@"Software\Classes\.torrent", true))
                 {
                     if (extKey != null)
                     {
@@ -989,7 +1571,34 @@ namespace ShihabMehediInstaller
                 }
             }
             catch { }
-            try { Registry.CurrentUser.DeleteSubKeyTree(@"Software\Classes\MHSDownloadManager.Torrent", false); } catch { }
+            try { hiveRoot.DeleteSubKeyTree(@"Software\Classes\MHSDownloadManager.Torrent", false); } catch { }
+        }
+
+        private static void RegisterMagnetAndTorrentAssociations(string installedExePath, bool perMachine)
+        {
+            try
+            {
+                if (perMachine)
+                {
+                    WriteMagnetAndTorrentToRoot(Registry.LocalMachine, installedExePath);
+                    // Remove legacy HKCU shadowing entries pointing to old mdm.exe paths
+                    DeleteMagnetAndTorrentFromRoot(Registry.CurrentUser);
+                }
+                else
+                {
+                    WriteMagnetAndTorrentToRoot(Registry.CurrentUser, installedExePath);
+                }
+            }
+            catch { }
+        }
+
+        private static void UnregisterMagnetAndTorrentAssociations()
+        {
+            DeleteMagnetAndTorrentFromRoot(Registry.CurrentUser);
+            if (IsShihabProcessElevated())
+            {
+                DeleteMagnetAndTorrentFromRoot(Registry.LocalMachine);
+            }
         }
 
         private static void SyncInstallerStartupConfigFlag(bool enabled)
@@ -1018,11 +1627,16 @@ namespace ShihabMehediInstaller
             string shihabInstallDir,
             string mehediExePath,
             string shihabUninstallExePath,
-            long mehediSizeBytes)
+            long mehediSizeBytes,
+            bool perMachine)
         {
+            RegistryKey baseRoot = null;
             try
             {
-                using (RegistryKey shihabUninst = Registry.CurrentUser.CreateSubKey(ShihabSetupTheme.ShihabUninstallRegKey))
+                baseRoot = perMachine
+                    ? RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64)
+                    : Registry.CurrentUser;
+                using (RegistryKey shihabUninst = baseRoot.CreateSubKey(ShihabSetupTheme.ShihabUninstallRegKey))
                 {
                     if (shihabUninst == null) return;
                     shihabUninst.SetValue("DisplayName", ShihabSetupTheme.ShihabProductTitle, RegistryValueKind.String);
@@ -1038,8 +1652,20 @@ namespace ShihabMehediInstaller
                     int mehediSizeKb = (int)Math.Max(512L, mehediSizeBytes / 1024L);
                     shihabUninst.SetValue("EstimatedSize", mehediSizeKb, RegistryValueKind.DWord);
                 }
+                if (perMachine)
+                {
+                    // Prevent duplicate Installed Apps entry from a previous per-user LocalAppData install
+                    try { Registry.CurrentUser.DeleteSubKeyTree(ShihabSetupTheme.ShihabUninstallRegKey, false); } catch { }
+                }
             }
             catch { }
+            finally
+            {
+                if (perMachine && baseRoot != null)
+                {
+                    try { baseRoot.Dispose(); } catch { }
+                }
+            }
         }
 
         public static string TryGetShortcutTargetPath(string lnkPath)
@@ -1063,6 +1689,7 @@ namespace ShihabMehediInstaller
 
         private static void RefreshPinnedTaskbarShortcuts(
             string targetExePath,
+            List<string> previousExePaths,
             List<string> updatedShellFiles,
             List<string> updatedShellDirs)
         {
@@ -1080,7 +1707,20 @@ namespace ShihabMehediInstaller
                 {
                     string lnk = lnks[i];
                     string existingTarget = TryGetShortcutTargetPath(lnk);
-                    if (string.Equals(existingTarget, normExe, StringComparison.OrdinalIgnoreCase))
+                    bool matched = string.Equals(existingTarget, normExe, StringComparison.OrdinalIgnoreCase);
+                    if (!matched && previousExePaths != null)
+                    {
+                        for (int p = 0; p < previousExePaths.Count; p++)
+                        {
+                            if (!string.IsNullOrWhiteSpace(previousExePaths[p]) &&
+                                string.Equals(existingTarget, Path.GetFullPath(previousExePaths[p]), StringComparison.OrdinalIgnoreCase))
+                            {
+                                matched = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (matched)
                     {
                         CreateShihabShellShortcut(
                             lnk,
@@ -1156,21 +1796,12 @@ namespace ShihabMehediInstaller
             {
                 return mehediSelfDir;
             }
-            try
-            {
-                using (RegistryKey shihabUninst = Registry.CurrentUser.OpenSubKey(ShihabSetupTheme.ShihabUninstallRegKey, false))
-                {
-                    if (shihabUninst != null)
-                    {
-                        object mehediLoc = shihabUninst.GetValue("InstallLocation");
-                        if (mehediLoc != null && !string.IsNullOrWhiteSpace(mehediLoc.ToString()))
-                        {
-                            return Path.GetFullPath(mehediLoc.ToString());
-                        }
-                    }
-                }
-            }
-            catch { }
+            string fromHklm64 = TryReadUninstallInstallLocation(RegistryHive.LocalMachine, RegistryView.Registry64);
+            if (!string.IsNullOrWhiteSpace(fromHklm64)) return fromHklm64;
+            string fromHklm32 = TryReadUninstallInstallLocation(RegistryHive.LocalMachine, RegistryView.Registry32);
+            if (!string.IsNullOrWhiteSpace(fromHklm32)) return fromHklm32;
+            string fromHkcu = TryReadUninstallInstallLocation(RegistryHive.CurrentUser, RegistryView.Default);
+            if (!string.IsNullOrWhiteSpace(fromHkcu)) return fromHkcu;
             return "";
         }
 
@@ -1183,46 +1814,66 @@ namespace ShihabMehediInstaller
             string mehediFullDir = Path.GetFullPath(shihabInstallDir);
             StopOwnedShihabAppInDirectory(mehediFullDir, null);
 
-            string[] shihabKnownFiles = new string[] { "mdm.exe", "README.md", "LICENSE" };
+            string[] shihabKnownFiles = new string[]
+            {
+                "mdm.exe",
+                "README.md",
+                "LICENSE",
+                "shihab_native_host_launcher.cmd",
+                "com.shihab.mehedi.idm.json",
+                "com.shihab.mehedi.idm.firefox.json"
+            };
             for (int mehediI = 0; mehediI < shihabKnownFiles.Length; mehediI++)
             {
                 string shihabFile = Path.Combine(mehediFullDir, shihabKnownFiles[mehediI]);
                 try { if (File.Exists(shihabFile)) File.Delete(shihabFile); } catch { }
             }
+            CleanStaleInstallTempAndOldFiles(mehediFullDir);
 
             string mehediExtDir = Path.Combine(mehediFullDir, "extension");
             try { if (Directory.Exists(mehediExtDir)) Directory.Delete(mehediExtDir, true); } catch { }
 
             if (!mehediSkipRegistryAndShortcuts)
             {
-                string deletedDesktopLnk = "";
+                List<string> deletedFiles = new List<string>();
+                List<string> touchedDirs = new List<string>();
+
+                string[] desktopDirs = new string[]
+                {
+                    Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory),
+                    Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
+                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "OneDrive\\Desktop")
+                };
+                for (int d = 0; d < desktopDirs.Length; d++)
+                {
+                    if (string.IsNullOrWhiteSpace(desktopDirs[d])) continue;
+                    string lnk = Path.Combine(desktopDirs[d], "MHS Download Manager.lnk");
+                    RemoveShortcutIfTargetingMdm(lnk, deletedFiles, touchedDirs);
+                }
                 try
                 {
-                    string shihabDesktopDir = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
-                    string shihabDesktopLnk = Path.Combine(shihabDesktopDir, "MHS Download Manager.lnk");
-                    if (File.Exists(shihabDesktopLnk))
+                    if (touchedDirs.Count > 0)
                     {
-                        File.Delete(shihabDesktopLnk);
-                        deletedDesktopLnk = shihabDesktopLnk;
+                        ShihabSetupTheme.RefreshWindowsShellIconCache(deletedFiles.ToArray(), touchedDirs.ToArray());
                     }
                 }
                 catch { }
 
-                try
+                string[] startRoots = new string[]
                 {
-                    string shihabDesktopDir = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
-                    ShihabSetupTheme.RefreshWindowsShellIconCache(
-                        string.IsNullOrEmpty(deletedDesktopLnk) ? null : new string[] { deletedDesktopLnk },
-                        new string[] { shihabDesktopDir });
-                }
-                catch { }
-
-                try
+                    Environment.GetFolderPath(Environment.SpecialFolder.CommonPrograms),
+                    Environment.GetFolderPath(Environment.SpecialFolder.Programs)
+                };
+                for (int s = 0; s < startRoots.Length; s++)
                 {
-                    string mehediStartMenuDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), "MHS Download Manager");
-                    if (Directory.Exists(mehediStartMenuDir)) Directory.Delete(mehediStartMenuDir, true);
+                    if (string.IsNullOrWhiteSpace(startRoots[s])) continue;
+                    try
+                    {
+                        string dir = Path.Combine(startRoots[s], "MHS Download Manager");
+                        if (Directory.Exists(dir)) Directory.Delete(dir, true);
+                    }
+                    catch { }
                 }
-                catch { }
 
                 try
                 {
@@ -1238,6 +1889,21 @@ namespace ShihabMehediInstaller
                 catch { }
 
                 try { Registry.CurrentUser.DeleteSubKeyTree(ShihabSetupTheme.ShihabUninstallRegKey, false); } catch { }
+                if (IsShihabProcessElevated())
+                {
+                    RegistryView[] views = new RegistryView[] { RegistryView.Registry64, RegistryView.Registry32 };
+                    for (int v = 0; v < views.Length; v++)
+                    {
+                        try
+                        {
+                            using (RegistryKey baseKey = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, views[v]))
+                            {
+                                baseKey.DeleteSubKeyTree(ShihabSetupTheme.ShihabUninstallRegKey, false);
+                            }
+                        }
+                        catch { }
+                    }
+                }
 
                 UnregisterMagnetAndTorrentAssociations();
                 RemoveNativeHostRegistryKeys(ChromiumNativeHostRegistryKeys);
@@ -1264,34 +1930,47 @@ namespace ShihabMehediInstaller
 
             string shihabSelfExe = Path.GetFullPath(Process.GetCurrentProcess().MainModule.FileName);
             string mehediUninstExe = Path.Combine(mehediFullDir, "Uninstall.exe");
-            if (string.Equals(shihabSelfExe, mehediUninstExe, StringComparison.OrdinalIgnoreCase))
-            {
-                try
-                {
-                    string cmdExePath = ShihabProcessAndPathSafety.ResolveSystem32ToolPath("cmd.exe");
-                    string cleanupArgs = "/c ping 127.0.0.1 -n 2 > nul & del /f /q " +
-                        ShihabProcessAndPathSafety.QuoteWindowsArgument(mehediUninstExe) +
-                        " & rmdir " +
-                        ShihabProcessAndPathSafety.QuoteWindowsArgument(mehediFullDir);
-                    ProcessStartInfo shihabCleanupPsi = new ProcessStartInfo(cmdExePath, cleanupArgs);
-                    shihabCleanupPsi.CreateNoWindow = true;
-                    shihabCleanupPsi.UseShellExecute = false;
-                    Process.Start(shihabCleanupPsi);
-                }
-                catch { }
-            }
-            else
+            if (!string.Equals(shihabSelfExe, mehediUninstExe, StringComparison.OrdinalIgnoreCase))
             {
                 try { if (File.Exists(mehediUninstExe)) File.Delete(mehediUninstExe); } catch { }
                 try
                 {
-                    if (Directory.GetFiles(mehediFullDir).Length == 0 && Directory.GetDirectories(mehediFullDir).Length == 0)
+                    if (Directory.Exists(mehediFullDir) &&
+                        Directory.GetFiles(mehediFullDir).Length == 0 &&
+                        Directory.GetDirectories(mehediFullDir).Length == 0)
                     {
                         Directory.Delete(mehediFullDir, false);
                     }
                 }
                 catch { }
             }
+        }
+
+        public static void ScheduleDeferredSelfUninstallCleanup(string shihabInstallDir)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(shihabInstallDir)) return;
+                string mehediFullDir = Path.GetFullPath(shihabInstallDir);
+                string shihabSelfExe = Path.GetFullPath(Process.GetCurrentProcess().MainModule.FileName);
+                string mehediUninstExe = Path.Combine(mehediFullDir, "Uninstall.exe");
+                if (!string.Equals(shihabSelfExe, mehediUninstExe, StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+                string cmdExePath = ShihabProcessAndPathSafety.ResolveSystem32ToolPath("cmd.exe");
+                // Pass paths strictly via environment variables so special characters like ), &, |, ^, !, or % in custom paths
+                // can never break cmd.exe parsing or cause elevated shell command injection.
+                string cleanupArgs = "/c for /L %i in (1,1,6) do (ping 127.0.0.1 -n 2 > nul & del /f /q \"%MHS_UNINST_EXE%\" > nul 2>&1 & rmdir \"%MHS_UNINST_DIR%\" > nul 2>&1 & if not exist \"%MHS_UNINST_DIR%\" exit /b 0)";
+                ProcessStartInfo shihabCleanupPsi = new ProcessStartInfo(cmdExePath, cleanupArgs);
+                shihabCleanupPsi.WorkingDirectory = Path.GetTempPath();
+                shihabCleanupPsi.EnvironmentVariables["MHS_UNINST_EXE"] = mehediUninstExe;
+                shihabCleanupPsi.EnvironmentVariables["MHS_UNINST_DIR"] = mehediFullDir;
+                shihabCleanupPsi.CreateNoWindow = true;
+                shihabCleanupPsi.UseShellExecute = false;
+                Process.Start(shihabCleanupPsi);
+            }
+            catch { }
         }
     }
 
@@ -1319,6 +1998,7 @@ namespace ShihabMehediInstaller
         private TextBox _mehediFinalExtPathBox;
         private CheckBox _shihabLaunchAppCheck;
         private CheckBox _mehediOpenExtFolderCheck;
+        private Label _mehediMigrationNoticeLbl;
 
         private Button _shihabBackBtn;
         private Button _mehediNextBtn;
@@ -1431,14 +2111,14 @@ namespace ShihabMehediInstaller
             _mehediStepWelcome = new Panel { Bounds = shihabBodyBounds, BackColor = BackColor };
             Label shihabWelHead = new Label
             {
-                Text = "Welcome to MHS Download Manager 1.1.1 Setup",
+                Text = "Welcome to MHS Download Manager 1.2.0 Setup",
                 Location = new Point(22, 16),
                 AutoSize = true,
                 Font = new Font("Segoe UI Semibold", 11f)
             };
             Label mehediWelDesc = new Label
             {
-                Text = "This wizard will install MHS Download Manager 1.1.1 (Mehedi Hasan Shihab) on your computer,\n" +
+                Text = "This wizard will install MHS Download Manager 1.2.0 (Mehedi Hasan Shihab) on your computer,\n" +
                        "keeping the unpacked 'extension' folder inside your installation directory ready to load in Chrome, Brave, Edge, and Firefox.",
                 Location = new Point(22, 44),
                 Size = new Size(595, 42),
@@ -1456,11 +2136,11 @@ namespace ShihabMehediInstaller
                 BorderStyle = BorderStyle.FixedSingle,
                 Font = new Font("Consolas", 8.8f),
                 Text =
-                    "Planned Installation Components (<InstallDir>):\r\n" +
-                    "  • mdm.exe          — x64 Download Accelerator (1-128 Sparse Dynamic Segments)\r\n" +
+                    "Planned Installation Components (" + MehediInstallerEngine.GetDefaultProgramFilesInstallDirectory() + "):\r\n" +
+                    "  • mdm.exe          — x64 Download Accelerator (1-128 Sparse Dynamic Segments + MBps/Mbps Switcher)\r\n" +
                     "  • extension\\       — Ready-to-load Unpacked MV3 Extension (Chromium & Firefox)\r\n" +
                     "  • Uninstall.exe    — Clean Windows Uninstaller\r\n\r\n" +
-                    "Included v1.1.1 Capabilities:\r\n" +
+                    "Included v1.2.0 Capabilities:\r\n" +
                     "  • Full BitTorrent P2P & Magnet Engine (BEP-3/5 DHT/6/7/9/11 PEX/14 LSD/15/19/27/53 + Real Seeding)\r\n" +
                     "  • 3-Tab Torrent Inspector (Files/Peers/Trackers) + OS magnet:/.torrent Associations\r\n" +
                     "  • Parallel 8-Worker HLS + Managed Deno JS Runtime + Codec/FPS/HDR + H.264/AAC + Chapters + Live MP4\r\n" +
@@ -1477,6 +2157,7 @@ namespace ShihabMehediInstaller
             Label mehediLocTitle = new Label
             {
                 Text = "Choose Installation Location & Integration Options",
+                UseMnemonic = false,
                 Location = new Point(22, 16),
                 AutoSize = true,
                 Font = new Font("Segoe UI Semibold", 11f)
@@ -1559,6 +2240,7 @@ namespace ShihabMehediInstaller
             _shihabNativeHostCheck = new CheckBox
             {
                 Text = "Register Chrome, Brave & Edge Native Messaging integration (com.shihab.mehedi.idm)",
+                UseMnemonic = false,
                 Location = new Point(24, 236),
                 AutoSize = true,
                 Checked = _shihabOptions.MehediRegisterNativeHost
@@ -1573,7 +2255,7 @@ namespace ShihabMehediInstaller
             _mehediStepProgress = new Panel { Bounds = shihabBodyBounds, BackColor = BackColor };
             Label shihabProgTitle = new Label
             {
-                Text = "Installing MHS Download Manager 1.1.1...",
+                Text = "Installing MHS Download Manager 1.2.0...",
                 Location = new Point(22, 16),
                 AutoSize = true,
                 Font = new Font("Segoe UI Semibold", 11f)
@@ -1666,7 +2348,7 @@ namespace ShihabMehediInstaller
 
             _shihabLaunchAppCheck = new CheckBox
             {
-                Text = "Launch MHS Download Manager 1.1.1 now",
+                Text = "Launch MHS Download Manager 1.2.0 now",
                 Location = new Point(24, 152),
                 AutoSize = true,
                 Checked = true,
@@ -1679,10 +2361,20 @@ namespace ShihabMehediInstaller
                 AutoSize = true,
                 Checked = true
             };
+            _mehediMigrationNoticeLbl = new Label
+            {
+                Text = "Migrated from your previous AppData install: your downloads and settings were preserved. " +
+                       "Please re-select the new 'extension' folder above via Load unpacked in your browser.",
+                Location = new Point(22, 220),
+                Size = new Size(592, 46),
+                ForeColor = Color.FromArgb(251, 191, 36),
+                Font = new Font("Segoe UI Semibold", 8.6f),
+                Visible = false
+            };
             _shihabStepFinish.Controls.AddRange(new Control[]
             {
                 mehediFinTitle, shihabExtGuideLbl, _mehediFinalExtPathBox, shihabCopyExtBtn, mehediOpenExtBtn, shihabExtKeptNote,
-                _shihabLaunchAppCheck, _mehediOpenExtFolderCheck
+                _shihabLaunchAppCheck, _mehediOpenExtFolderCheck, _mehediMigrationNoticeLbl
             });
 
             Controls.AddRange(new Control[] { _mehediStepWelcome, _shihabStepLocation, _mehediStepProgress, _shihabStepFinish });
@@ -1786,14 +2478,16 @@ namespace ShihabMehediInstaller
                 }
                 if (_shihabLaunchAppCheck.Checked && File.Exists(mehediExePath))
                 {
-                    try
+                    // Launch mdm.exe de-elevated (Medium IL) so Drag & Drop, DPAPI user vault, and Single-Instance Mutex work safely
+                    if (!MehediInstallerEngine.LaunchProcessAsNonElevatedUser(mehediExePath, "", mehediInstDir))
                     {
-                        ProcessStartInfo shihabPsi = new ProcessStartInfo(mehediExePath);
-                        shihabPsi.WorkingDirectory = mehediInstDir;
-                        shihabPsi.UseShellExecute = true;
-                        Process.Start(shihabPsi);
+                        MessageBox.Show(
+                            this,
+                            "Installation succeeded! Please launch MHS Download Manager from your Desktop or Start Menu shortcut.",
+                            "MHS Setup",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Information);
                     }
-                    catch { }
                 }
                 Close();
             }
@@ -1865,6 +2559,10 @@ namespace ShihabMehediInstaller
                         _shihabInstallingBusy = false;
                         string mehediExtPath = Path.Combine(_shihabOptions.MehediInstallDirectory, "extension");
                         _mehediFinalExtPathBox.Text = mehediExtPath;
+                        if (_mehediMigrationNoticeLbl != null)
+                        {
+                            _mehediMigrationNoticeLbl.Visible = _shihabOptions.ShihabMigratedFromLegacyDir;
+                        }
                         try { Clipboard.SetText(mehediExtPath); } catch { }
                         ShowShihabWizardStep(3);
                     });
@@ -1907,21 +2605,15 @@ namespace ShihabMehediInstaller
             string shihabSelfLeaf = Path.GetFileNameWithoutExtension(Process.GetCurrentProcess().MainModule.FileName) ?? "";
             bool mehediUninstallMode = shihabSelfLeaf.StartsWith("Uninstall", StringComparison.OrdinalIgnoreCase);
 
-            try
+            string existingHklmDir = MehediInstallerEngine.TryReadUninstallInstallLocation(RegistryHive.LocalMachine, RegistryView.Registry64);
+            if (string.IsNullOrWhiteSpace(existingHklmDir))
             {
-                using (RegistryKey existingUninst = Registry.CurrentUser.OpenSubKey(ShihabSetupTheme.ShihabUninstallRegKey, false))
-                {
-                    if (existingUninst != null)
-                    {
-                        object existingLoc = existingUninst.GetValue("InstallLocation");
-                        if (existingLoc != null && !string.IsNullOrWhiteSpace(existingLoc.ToString()))
-                        {
-                            mehediOpts.MehediInstallDirectory = Path.GetFullPath(existingLoc.ToString().Trim());
-                        }
-                    }
-                }
+                existingHklmDir = MehediInstallerEngine.TryReadUninstallInstallLocation(RegistryHive.LocalMachine, RegistryView.Registry32);
             }
-            catch { }
+            if (!string.IsNullOrWhiteSpace(existingHklmDir))
+            {
+                mehediOpts.MehediInstallDirectory = existingHklmDir;
+            }
 
             if (shihabArgs != null)
             {
@@ -2039,6 +2731,7 @@ namespace ShihabMehediInstaller
                         MessageBoxButtons.OK,
                         MessageBoxIcon.Information);
                 }
+                MehediInstallerEngine.ScheduleDeferredSelfUninstallCleanup(shihabTargetDir);
                 return 0;
             }
 
@@ -2054,18 +2747,17 @@ namespace ShihabMehediInstaller
                             string shihabInstalledExe = Path.Combine(Path.GetFullPath(mehediOpts.MehediInstallDirectory.Trim()), "mdm.exe");
                             if (File.Exists(shihabInstalledExe))
                             {
-                                ProcessStartInfo shihabRelaunchPsi = new ProcessStartInfo(shihabInstalledExe);
+                                string relaunchArgs = "";
                                 if (!string.IsNullOrWhiteSpace(mehediOpts.ShihabUpdatedFromVersion))
                                 {
-                                    shihabRelaunchPsi.Arguments = ShihabProcessAndPathSafety.BuildWindowsArgumentString(
+                                    relaunchArgs = ShihabProcessAndPathSafety.BuildWindowsArgumentString(
                                         "--shihab-updated-from",
                                         mehediOpts.ShihabUpdatedFromVersion);
                                 }
-                                shihabRelaunchPsi.WorkingDirectory = Path.GetDirectoryName(shihabInstalledExe);
-                                // CRITICAL: UseShellExecute = true prevents child mdm.exe from inheriting any open socket handle
-                                // passed down if Setup.exe itself was launched by an older pre-v1.1.1 auto-updater!
-                                shihabRelaunchPsi.UseShellExecute = true;
-                                Process.Start(shihabRelaunchPsi);
+                                MehediInstallerEngine.LaunchProcessAsNonElevatedUser(
+                                    shihabInstalledExe,
+                                    relaunchArgs,
+                                    Path.GetDirectoryName(shihabInstalledExe));
                             }
                         }
                         catch { }

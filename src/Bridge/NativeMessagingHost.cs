@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Security.AccessControl;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -152,11 +153,16 @@ namespace ShihabMehediIDM
             try
             {
                 Mutex existing;
-                if (Mutex.TryOpenExisting(mutexName, out existing))
+                if (Mutex.TryOpenExisting(mutexName, MutexRights.Synchronize, out existing))
                 {
                     try { existing.Dispose(); } catch { }
                     return true;
                 }
+            }
+            catch (UnauthorizedAccessException)
+            {
+                // Exists and is owned by an elevated process (e.g., elevated Setup running in Program Files)
+                return true;
             }
             catch { }
             return false;
@@ -220,9 +226,10 @@ namespace ShihabMehediIDM
             Directory.CreateDirectory(shihabDataDir);
             string shihabExePath = Process.GetCurrentProcess().MainModule.FileName;
             string mehediWrapperBat = Path.Combine(shihabDataDir, "shihab_native_host_launcher.cmd");
+            string batchSafeExe = "\"" + (shihabExePath ?? "").Replace("\"", "").Replace("%", "%%") + "\"";
             File.WriteAllText(
                 mehediWrapperBat,
-                "@echo off\r\n" + ShihabProcessAndPathSafety.QuoteWindowsArgument(shihabExePath) + " --shihab-native-messaging-host\r\n",
+                "@echo off\r\n" + batchSafeExe + " --shihab-native-messaging-host\r\n",
                 Encoding.ASCII);
             ShihabSecretsVault.ApplyRestrictedUserFileAcl(mehediWrapperBat);
 

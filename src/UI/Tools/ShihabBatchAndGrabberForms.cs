@@ -934,7 +934,9 @@ namespace ShihabMehediIDM
 
         public void UpdateShihabLiveSpeed(double mehediTotalBps)
         {
-            string shihabNext = mehediTotalBps > 5.0 ? ShihabFormatHelpers.FormatShihabSpeed(mehediTotalBps) : "Drop URL";
+            string shihabNext = mehediTotalBps > 5.0
+                ? ShihabFormatHelpers.FormatShihabSpeed(mehediTotalBps, ShihabFormatHelpers.DefaultUseBitsPerSec, true)
+                : "Drop URL";
             if (shihabNext != _mehediSpeedLabel)
             {
                 _mehediSpeedLabel = shihabNext;

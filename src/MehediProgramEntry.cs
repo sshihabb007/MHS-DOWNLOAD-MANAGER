@@ -7,14 +7,14 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
-[assembly: AssemblyTitle("MHS Download Manager 1.1.1 (Mehedi Hasan Shihab)")]
-[assembly: AssemblyDescription("MHS Download Manager 1.1.1 (Mehedi Hasan Shihab) — Multi-Segment Download Accelerator, BitTorrent P2P & Browser Video Suite")]
+[assembly: AssemblyTitle("MHS Download Manager 1.2.0 (Mehedi Hasan Shihab)")]
+[assembly: AssemblyDescription("MHS Download Manager 1.2.0 (Mehedi Hasan Shihab) — Multi-Segment Download Accelerator, BitTorrent P2P & Browser Video Suite")]
 [assembly: AssemblyCompany("Mehedi Hasan Shihab (sshihabb007)")]
-[assembly: AssemblyProduct("MHS Download Manager 1.1.1 (Mehedi Hasan Shihab)")]
+[assembly: AssemblyProduct("MHS Download Manager 1.2.0 (Mehedi Hasan Shihab)")]
 [assembly: AssemblyCopyright("Copyright © Mehedi Hasan Shihab — https://sshihabb007.github.io/")]
-[assembly: AssemblyVersion("1.1.1.0")]
-[assembly: AssemblyFileVersion("1.1.1.0")]
-[assembly: AssemblyInformationalVersion("1.1.1")]
+[assembly: AssemblyVersion("1.2.0.0")]
+[assembly: AssemblyFileVersion("1.2.0.0")]
+[assembly: AssemblyInformationalVersion("1.2.0")]
 
 namespace ShihabMehediIDM
 {
@@ -46,6 +46,21 @@ namespace ShihabMehediIDM
                 }
             }
             catch { }
+        }
+
+        private static Mutex TryCreateInstanceMutex(string mutexName, out bool createdNew)
+        {
+            createdNew = false;
+            try
+            {
+                return new Mutex(true, mutexName, out createdNew);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                // Owned by an instance in another integrity level — treat as already running
+                createdNew = false;
+                return null;
+            }
         }
 
         [STAThread]
@@ -116,7 +131,7 @@ namespace ShihabMehediIDM
 
             bool shihabCreatedNewMutex = false;
             string mehediMutexName = "Local\\ShihabMehediIDM_Instance_" + mehediConfig.MehediLocalBridgePort;
-            Mutex shihabSingleMutex = new Mutex(true, mehediMutexName, out shihabCreatedNewMutex);
+            Mutex shihabSingleMutex = TryCreateInstanceMutex(mehediMutexName, out shihabCreatedNewMutex);
             try
             {
                 // When relaunching immediately after an Auto-Update, wait up to 20s for the previous process to release Mutex
@@ -124,9 +139,13 @@ namespace ShihabMehediIDM
                 {
                     for (int retry = 0; retry < 40 && !shihabCreatedNewMutex; retry++)
                     {
-                        shihabSingleMutex.Dispose();
+                        if (shihabSingleMutex != null)
+                        {
+                            try { shihabSingleMutex.Dispose(); } catch { }
+                            shihabSingleMutex = null;
+                        }
                         Thread.Sleep(500);
-                        shihabSingleMutex = new Mutex(true, mehediMutexName, out shihabCreatedNewMutex);
+                        shihabSingleMutex = TryCreateInstanceMutex(mehediMutexName, out shihabCreatedNewMutex);
                     }
                 }
 

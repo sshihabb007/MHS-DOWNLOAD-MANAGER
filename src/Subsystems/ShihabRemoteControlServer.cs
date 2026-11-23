@@ -468,7 +468,10 @@ namespace ShihabMehediIDM
                                 row["size"] = ShihabFormatHelpers.FormatMehediBytes(it.ShihabTotalBytes);
                                 row["pct"] = Math.Round(it.GetMehediPercent(), 1);
                                 row["status"] = it.ShihabStatusText ?? "";
-                                row["speed"] = ShihabFormatHelpers.FormatShihabSpeed(it.ShihabCurrentSpeedBps);
+                                row["speed"] = ShihabFormatHelpers.FormatShihabSpeed(
+                                    it.ShihabCurrentSpeedBps,
+                                    ShihabFormatHelpers.IsBitsSpeedUnit(cfg.ShihabDefaultSpeedUnit),
+                                    false);
                                 arr.Add(row);
                             }
                             Dictionary<string, object> payload = new Dictionary<string, object>();

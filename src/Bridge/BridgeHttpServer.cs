@@ -160,6 +160,9 @@ namespace ShihabMehediIDM
                         {
                             ids.Add(ShihabProcessAndPathSafety.ComputeChromiumUnpackedExtensionId(directExtDir));
                         }
+                        TryCollectAllowedOriginIdsFromManifest(
+                            Path.Combine(exeDir, "com.shihab.mehedi.idm.json"),
+                            ids);
                         string parentDir = Path.GetDirectoryName(exeDir);
                         if (!string.IsNullOrEmpty(parentDir))
                         {
