@@ -956,20 +956,20 @@ namespace ShihabMehediIDM
             GroupBox mehediAvGrp = new GroupBox
             {
                 Text = "Virus checking on download completion",
-                Location = new Point(16, 216),
-                Size = new Size(592, 114),
+                Location = new Point(16, 214),
+                Size = new Size(592, 106),
                 ForeColor = ForeColor
             };
             _shihabAvEnableChk = new CheckBox
             {
                 Text = "Automatically check downloaded files with virus scanner:",
-                Location = new Point(14, 21),
+                Location = new Point(14, 19),
                 AutoSize = true,
                 Checked = _shihabConfig.ShihabEnableVirusCheck
             };
             _mehediAvExeBox = new TextBox
             {
-                Location = new Point(14, 48),
+                Location = new Point(14, 44),
                 Width = 460,
                 Text = _shihabConfig.MehediVirusScannerExe ?? "",
                 BackColor = _surfColor,
@@ -977,7 +977,7 @@ namespace ShihabMehediIDM
             };
             Button shihabAvBrowseBtn = ShihabThemePalette.CreateMehediStyledButton("Browse", _surfColor, ForeColor, 94);
             shihabAvBrowseBtn.Height = 25;
-            shihabAvBrowseBtn.Location = new Point(484, 46);
+            shihabAvBrowseBtn.Location = new Point(484, 42);
             shihabAvBrowseBtn.Click += delegate
             {
                 using (OpenFileDialog mehediOfd = new OpenFileDialog())
@@ -986,10 +986,10 @@ namespace ShihabMehediIDM
                     if (mehediOfd.ShowDialog(this) == DialogResult.OK) _mehediAvExeBox.Text = mehediOfd.FileName;
                 }
             };
-            Label mehediAvArgsLbl = new Label { Text = "Command line parameters (%1 = downloaded file):", Location = new Point(14, 82), AutoSize = true };
+            Label mehediAvArgsLbl = new Label { Text = "Command line parameters (%1 = downloaded file):", Location = new Point(14, 77), AutoSize = true };
             _shihabAvArgsBox = new TextBox
             {
-                Location = new Point(315, 79),
+                Location = new Point(315, 74),
                 Width = 263,
                 Text = string.IsNullOrWhiteSpace(_shihabConfig.ShihabVirusScannerArgs) ? "\"%1\"" : _shihabConfig.ShihabVirusScannerArgs,
                 BackColor = _surfColor,
@@ -1000,15 +1000,15 @@ namespace ShihabMehediIDM
             GroupBox mehediNativeGrp = new GroupBox
             {
                 Text = "Optional Chrome / Edge Native Messaging Host (com.shihab.mehedi.idm)",
-                Location = new Point(16, 336),
-                Size = new Size(592, 64),
+                Location = new Point(16, 326),
+                Size = new Size(592, 58),
                 ForeColor = ForeColor
             };
-            Label shihabExtIdLbl = new Label { Text = "Extension ID:", Location = new Point(12, 27), AutoSize = true };
-            TextBox mehediExtIdBox = new TextBox { Location = new Point(98, 24), Width = 305, BackColor = _surfColor, ForeColor = ForeColor };
+            Label shihabExtIdLbl = new Label { Text = "Extension ID:", Location = new Point(12, 24), AutoSize = true };
+            TextBox mehediExtIdBox = new TextBox { Location = new Point(98, 21), Width = 305, BackColor = _surfColor, ForeColor = ForeColor };
             Button shihabRegNativeBtn = ShihabThemePalette.CreateMehediStyledButton("Register Native Host", ShihabThemePalette.GetShihabAccentBlue(), Color.White, 165);
             shihabRegNativeBtn.Height = 26;
-            shihabRegNativeBtn.Location = new Point(413, 22);
+            shihabRegNativeBtn.Location = new Point(413, 19);
             shihabRegNativeBtn.Click += delegate
             {
                 try
@@ -1040,6 +1040,7 @@ namespace ShihabMehediIDM
             Label shihabHdr = new Label
             {
                 Text = shihabHeaderText,
+                UseMnemonic = false,
                 Location = new Point(16, 10),
                 Size = new Size(592, 20),
                 TextAlign = ContentAlignment.MiddleRight,

@@ -2,12 +2,19 @@ using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Text;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 namespace ShihabMehediIDM
 {
     public sealed class ShihabDarkTabControl : TabControl
     {
+        private const int WM_SETCURSOR = 0x0020;
+        private const int HTCLIENT = 1;
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr SetCursor(IntPtr hCursor);
+
         public bool ShihabDarkMode { get; set; }
         private int _mehediHoveredTabIndex = -1;
 
@@ -29,25 +36,52 @@ namespace ShihabMehediIDM
             }
         }
 
-        protected override void OnMouseMove(MouseEventArgs shihabE)
+        private int HitTestTabIndex(Point clientPoint)
         {
-            base.OnMouseMove(shihabE);
-            int mehediHit = -1;
+            if (!IsHandleCreated || TabCount <= 0) return -1;
             for (int shihabI = 0; shihabI < TabCount; shihabI++)
             {
-                if (GetTabRect(shihabI).Contains(shihabE.Location))
+                if (GetTabRect(shihabI).Contains(clientPoint))
                 {
-                    mehediHit = shihabI;
-                    break;
+                    return shihabI;
                 }
             }
+            return -1;
+        }
+
+        private void UpdateHoverStateFromPoint(Point clientPoint, bool invalidateChanged)
+        {
+            int mehediHit = ClientRectangle.Contains(clientPoint) ? HitTestTabIndex(clientPoint) : -1;
             if (mehediHit != _mehediHoveredTabIndex)
             {
                 int prev = _mehediHoveredTabIndex;
                 _mehediHoveredTabIndex = mehediHit;
-                InvalidateTabIndex(prev);
-                InvalidateTabIndex(_mehediHoveredTabIndex);
+                if (invalidateChanged)
+                {
+                    InvalidateTabIndex(prev);
+                    InvalidateTabIndex(_mehediHoveredTabIndex);
+                }
             }
+        }
+
+        protected override void WndProc(ref Message m)
+        {
+            if (m.Msg == WM_SETCURSOR && (m.LParam.ToInt64() & 0xFFFFL) == HTCLIENT)
+            {
+                if (m.WParam == Handle && HitTestTabIndex(PointToClient(Cursor.Position)) >= 0)
+                {
+                    SetCursor(Cursors.Hand.Handle);
+                    m.Result = new IntPtr(1);
+                    return;
+                }
+            }
+            base.WndProc(ref m);
+        }
+
+        protected override void OnMouseMove(MouseEventArgs shihabE)
+        {
+            base.OnMouseMove(shihabE);
+            UpdateHoverStateFromPoint(shihabE.Location, true);
         }
 
         protected override void OnMouseLeave(EventArgs mehediE)
@@ -61,26 +95,18 @@ namespace ShihabMehediIDM
             }
         }
 
-        protected override void OnMouseDown(MouseEventArgs shihabE)
-        {
-            base.OnMouseDown(shihabE);
-            if (shihabE.Button == MouseButtons.Left)
-            {
-                for (int mehediI = 0; mehediI < TabCount; mehediI++)
-                {
-                    if (GetTabRect(mehediI).Contains(shihabE.Location))
-                    {
-                        SelectedIndex = mehediI;
-                        Invalidate();
-                        break;
-                    }
-                }
-            }
-        }
-
+        // NOTE: Do NOT override OnMouseDown to re-hit-test GetTabRect() and set SelectedIndex.
+        // Win32 SysTabControl32 handles WM_LBUTTONDOWN in DefWndProc BEFORE OnMouseDown fires;
+        // on Multiline TabControls, SysTabControl32 swaps the selected tab's row to the bottom row
+        // during DefWndProc, so re-hit-testing shihabE.Location against post-swap GetTabRect()
+        // immediately overwrites SelectedIndex back onto the tab that shifted into the top row.
         protected override void OnSelectedIndexChanged(EventArgs mehediE)
         {
             base.OnSelectedIndexChanged(mehediE);
+            if (IsHandleCreated)
+            {
+                UpdateHoverStateFromPoint(PointToClient(Cursor.Position), false);
+            }
             Invalidate();
         }
 

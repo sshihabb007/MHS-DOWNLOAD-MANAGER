@@ -2,7 +2,20 @@
 
 All notable releases, new features, security enhancements, and bug fixes for **MHS Download Manager** (`mdm.exe` + Manifest V3 Browser Extension + Windows x64 Setup Wizard) are documented here in **reverse chronological order (newest first)**.
 
-> **Live GitHub Releases:** [All Releases (`v1.2.0` → `v1.0.0`)](https://github.com/sshihabb007/MHS-DOWNLOAD-MANAGER/releases)
+> **Live GitHub Releases:** [All Releases (`v1.2.1` → `v1.0.0`)](https://github.com/sshihabb007/MHS-DOWNLOAD-MANAGER/releases)
+
+---
+
+## [v1.2.1] — 2026-11-24
+
+### Options UI & Multiline Tab Fixes
+- **Fixed First-Row Options Tabs Requiring Multiple Clicks (`ShihabDarkTabControl`)**:
+  - Removed the redundant post-`DefWndProc` `OnMouseDown` hit-test loop that re-queried `GetTabRect()` *after* Win32 `SysTabControl32` had already selected the clicked tab and swapped the multiline rows — which immediately bounced `SelectedIndex` back onto whichever bottom-row tab shifted into that top-row slot.
+  - All 11 Options tabs (`General`, `File types`, `Save to`, `Downloads`, `Connection`, `Proxy / Socks`, `Sites Logins`, `Dial Up / VPN`, `Sounds`, `Debrid & Vault`, `Updates & P2P`) now switch reliably on the **first single click** from any tab or focused child control.
+  - Synchronized hover highlighting in `OnSelectedIndexChanged` right after multiline row swaps and added a 64-bit-safe `WM_SETCURSOR` handler (`m.WParam == Handle`) so tab headers display a hand cursor without leaking an ambient hand cursor onto child `TabPage` controls.
+- **Options Dialog Polish (`ShihabOptionsConfigForm`)**:
+  - Set `UseMnemonic = false` on `AddShihabSectionBanner` so `&` characters render cleanly in section banners (`Download dialogs, duplicates & virus protection`, `Multi-Host Debrid Accounts & DPAPI Encrypted Secret Vault`, `GitHub Releases Auto-Updater, BitTorrent P2P & Watchdog`).
+  - Tightened the bottom two GroupBoxes on **Options → Downloads** so the tab fits cleanly at 100% DPI without an unnecessary vertical scrollbar.
 
 ---
 

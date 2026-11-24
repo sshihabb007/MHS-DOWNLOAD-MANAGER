@@ -73,7 +73,7 @@ namespace ShihabMehediIDM
                 }
             }
             catch { }
-            return "1.2.0";
+            return "1.2.1";
         }
 
         public static string NormalizeVersionString(string rawTagOrVer)
