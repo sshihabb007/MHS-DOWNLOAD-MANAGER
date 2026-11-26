@@ -217,21 +217,25 @@ document.addEventListener("DOMContentLoaded", async () => {
     }, 3500);
     mehediRenderUpdateBanner(shihabRes);
 
-    if (!shihabRes || shihabRes.__shihabDisconnected || shihabRes.__shihabTimedOut || !shihabRes.mehediOnline) {
+    if (!shihabRes || shihabRes.__shihabDisconnected || shihabRes.__shihabTimedOut) {
       shihabDot.classList.remove("online");
-      mehediSub.textContent = (shihabRes && (shihabRes.__shihabDisconnected || shihabRes.__shihabTimedOut))
-        ? "Worker busy — Reload extension or launch mdm.exe"
-        : "Offline — Launch mdm.exe v1.2.1";
+      mehediSub.textContent = "Worker busy — Reload extension or launch mdm.exe";
       shihabToggleBtn.textContent = "Offline";
       return;
     }
 
-    const mehediBridgeVer = (shihabRes.shihabBridgeInfo && shihabRes.shihabBridgeInfo.version) || "1.2.1";
-    shihabDot.classList.add("online");
-    mehediSub.textContent = shihabRes.shihabEnabled
-      ? `Connected · mdm.exe v${mehediBridgeVer}`
-      : "Integration Paused";
-    shihabToggleBtn.textContent = shihabRes.shihabEnabled ? "Enabled" : "Paused";
+    if (!shihabRes.mehediOnline) {
+      shihabDot.classList.remove("online");
+      mehediSub.textContent = "Offline — Launch mdm.exe v1.2.2";
+      shihabToggleBtn.textContent = "Offline";
+    } else {
+      const mehediBridgeVer = (shihabRes.shihabBridgeInfo && shihabRes.shihabBridgeInfo.version) || "1.2.2";
+      shihabDot.classList.add("online");
+      mehediSub.textContent = shihabRes.shihabEnabled
+        ? `Connected · mdm.exe v${mehediBridgeVer}`
+        : "Integration Paused";
+      shihabToggleBtn.textContent = shihabRes.shihabEnabled ? "Enabled" : "Paused";
+    }
 
     const mehediStreams = await mehediResolveIsolatedSelectedStreams(shihabRes.mehediStreams);
     mehediCountBadge.textContent = String(mehediStreams.length);
@@ -300,6 +304,7 @@ document.addEventListener("DOMContentLoaded", async () => {
             shihabCmd: "mehedi_send_download_now",
             shihabUrl: shihabStream.shihabStreamUrl,
             shihabFileName: shihabRealFileName,
+            mehediMimeType: shihabStream.mehediMimeType || (shihabStream.shihabExt === "m3u8" ? "application/vnd.apple.mpegurl" : ""),
             mehediReferrer: shihabStream.mehediCapturedReferer || (mehediActiveTab ? mehediActiveTab.url : ""),
             shihabFileSize: shihabStream.shihabSizeBytes || -1,
             mehediTabTitle: mehediCleanTitle,

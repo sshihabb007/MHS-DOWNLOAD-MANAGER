@@ -19,13 +19,13 @@ using System.Windows.Forms;
 using Microsoft.Win32;
 using ShihabMehediShared;
 
-[assembly: AssemblyTitle("MHS Download Manager 1.2.1 Setup (Mehedi Hasan Shihab)")]
-[assembly: AssemblyDescription("Official Windows x64 Installer & Uninstaller for MHS Download Manager 1.2.1 (Mehedi Hasan Shihab)")]
+[assembly: AssemblyTitle("MHS Download Manager 1.2.2 Setup (Mehedi Hasan Shihab)")]
+[assembly: AssemblyDescription("Official Windows x64 Installer & Uninstaller for MHS Download Manager 1.2.2 (Mehedi Hasan Shihab)")]
 [assembly: AssemblyCompany("Mehedi Hasan Shihab")]
 [assembly: AssemblyProduct("MHS Download Manager Setup")]
 [assembly: AssemblyCopyright("Copyright (c) 2026 Mehedi Hasan Shihab")]
-[assembly: AssemblyVersion("1.2.1.0")]
-[assembly: AssemblyFileVersion("1.2.1.0")]
+[assembly: AssemblyVersion("1.2.2.0")]
+[assembly: AssemblyFileVersion("1.2.2.0")]
 
 namespace ShihabMehediInstaller
 {
@@ -61,8 +61,8 @@ namespace ShihabMehediInstaller
 
     public static class ShihabSetupTheme
     {
-        public const string ShihabProductTitle = "MHS Download Manager 1.2.1 (Mehedi Hasan Shihab)";
-        public const string MehediVersionText = "1.2.1";
+        public const string ShihabProductTitle = "MHS Download Manager 1.2.2 (Mehedi Hasan Shihab)";
+        public const string MehediVersionText = "1.2.2";
         public const string ShihabUninstallRegKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\MHSDownloadManager";
         public const string MehediRunRegKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
         public const string ShihabRunValueName = "MHSDownloadManager";
@@ -2111,14 +2111,14 @@ namespace ShihabMehediInstaller
             _mehediStepWelcome = new Panel { Bounds = shihabBodyBounds, BackColor = BackColor };
             Label shihabWelHead = new Label
             {
-                Text = "Welcome to MHS Download Manager 1.2.1 Setup",
+                Text = "Welcome to MHS Download Manager 1.2.2 Setup",
                 Location = new Point(22, 16),
                 AutoSize = true,
                 Font = new Font("Segoe UI Semibold", 11f)
             };
             Label mehediWelDesc = new Label
             {
-                Text = "This wizard will install MHS Download Manager 1.2.1 (Mehedi Hasan Shihab) on your computer,\n" +
+                Text = "This wizard will install MHS Download Manager 1.2.2 (Mehedi Hasan Shihab) on your computer,\n" +
                        "keeping the unpacked 'extension' folder inside your installation directory ready to load in Chrome, Brave, Edge, and Firefox.",
                 Location = new Point(22, 44),
                 Size = new Size(595, 42),
@@ -2140,7 +2140,7 @@ namespace ShihabMehediInstaller
                     "  • mdm.exe          — x64 Download Accelerator (1-128 Sparse Dynamic Segments + MBps/Mbps Switcher)\r\n" +
                     "  • extension\\       — Ready-to-load Unpacked MV3 Extension (Chromium & Firefox)\r\n" +
                     "  • Uninstall.exe    — Clean Windows Uninstaller\r\n\r\n" +
-                    "Included v1.2.1 Capabilities:\r\n" +
+                    "Included v1.2.2 Capabilities:\r\n" +
                     "  • Full BitTorrent P2P & Magnet Engine (BEP-3/5 DHT/6/7/9/11 PEX/14 LSD/15/19/27/53 + Real Seeding)\r\n" +
                     "  • 3-Tab Torrent Inspector (Files/Peers/Trackers) + OS magnet:/.torrent Associations\r\n" +
                     "  • Parallel 8-Worker HLS + Managed Deno JS Runtime + Codec/FPS/HDR + H.264/AAC + Chapters + Live MP4\r\n" +
@@ -2255,7 +2255,7 @@ namespace ShihabMehediInstaller
             _mehediStepProgress = new Panel { Bounds = shihabBodyBounds, BackColor = BackColor };
             Label shihabProgTitle = new Label
             {
-                Text = "Installing MHS Download Manager 1.2.1...",
+                Text = "Installing MHS Download Manager 1.2.2...",
                 Location = new Point(22, 16),
                 AutoSize = true,
                 Font = new Font("Segoe UI Semibold", 11f)
@@ -2348,7 +2348,7 @@ namespace ShihabMehediInstaller
 
             _shihabLaunchAppCheck = new CheckBox
             {
-                Text = "Launch MHS Download Manager 1.2.1 now",
+                Text = "Launch MHS Download Manager 1.2.2 now",
                 Location = new Point(24, 152),
                 AutoSize = true,
                 Checked = true,

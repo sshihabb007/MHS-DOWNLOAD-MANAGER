@@ -908,6 +908,11 @@ namespace ShihabMehediIDM
                 shihabNewItem.ShihabAudioCompanionBytes = mehediDto.MehediAudioSize > 0 ? mehediDto.MehediAudioSize : -1L;
                 shihabNewItem.ShihabSourceTabId = mehediDto.ShihabTabId >= 0 ? mehediDto.ShihabTabId : -1;
                 shihabNewItem.ShihabQualityLabel = mehediDto.MehediQualityLabel ?? "";
+                if (!string.IsNullOrWhiteSpace(mehediDto.MehediMimeType) &&
+                    mehediDto.MehediMimeType.IndexOf("mpegurl", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    shihabNewItem.MehediIsHlsStream = true;
+                }
                 shihabNewItem.ShihabPostBody = mehediDto.ShihabPostBody ?? "";
                 shihabNewItem.ShihabExpectedChecksum = mehediDto.ShihabExpectedChecksum ?? "";
                 shihabNewItem.ShihabIsPrivateIncognito = mehediDto.ShihabIncognito;

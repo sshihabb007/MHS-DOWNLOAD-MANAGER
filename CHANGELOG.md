@@ -2,7 +2,25 @@
 
 All notable releases, new features, security enhancements, and bug fixes for **MHS Download Manager** (`mdm.exe` + Manifest V3 Browser Extension + Windows x64 Setup Wizard) are documented here in **reverse chronological order (newest first)**.
 
-> **Live GitHub Releases:** [All Releases (`v1.2.1` → `v1.0.0`)](https://github.com/sshihabb007/MHS-DOWNLOAD-MANAGER/releases)
+> **Live GitHub Releases:** [All Releases (`v1.2.2` → `v1.0.0`)](https://github.com/sshihabb007/MHS-DOWNLOAD-MANAGER/releases)
+
+---
+
+## [v1.2.2] — 2026-11-26
+
+### Universal Multi-Site Video Stream Sniffing & LinkedIn Stability Fixes
+- **Fixed `webRequest.onHeadersReceived` Crash on All `206 Partial Content` Videos (`shihab_background.js`)**:
+  - Fixed a silent `ReferenceError` (`shihabHVal` → `mehediHVal`) inside `shihabParseResponseHeadersMeta` that crashed stream sniffing on every ranged HTTP `206` media response with `Content-Range` across non-YouTube/FB/IG sites (X/Twitter, LinkedIn, Vimeo, streaming embeds, HTML5 players).
+- **Universal Non-FB/YT/IG Stream Detection, In-Page HLS Parsing & Sandboxed Iframe Coverage (`mehedi_page_hook.js`, `shihab_background.js`, `mehedi_content.js`, `manifest*.json`)**:
+  - Added byte-capped (`<= 512 KB`) in-page `#EXTM3U` master & media playlist parsing with segment→playlist MSE `blob:` lineage tracking (supporting hotlink/Referer-protected embeds and disguised `.txt`/extensionless HLS playlists) and DASH `<BaseURL>` inheritance.
+  - Added and upgraded extractors for **X/Twitter** (`rest_id` + `video_info.variants` with 25k JSON node budget, poster thumb ID, and bidirectional `tw:<tweetId>` ↔ `twv:<videoId>` group unification), **LinkedIn** (`[data-sources]`, Voyager `progressiveStreams`/`adaptiveStreams`, per-video `li:<assetId>` grouping, `640p` labels, and `/hls-manifest` detection), **TikTok**, **Vimeo**, **Video.js**, **JWPlayer**, and HTML5 `src`/`srcObject`/`ManagedMediaSource`.
+  - Enabled `match_about_blank` / `match_origin_as_fallback` for sandboxed player iframes, persisted tab streams across MV3 Service Worker restarts via `chrome.storage.session` with top-level navigation cleanup, preserved third-party signed CDN query parameters and media `Referer`/`Origin` headers, and made `shihab_query_tab_streams` & toolbar popup non-blocking when `mdm.exe` is offline.
+  - Fixed WebM/MKV binary header parsing (scanning real `Tracks` before `Cluster` while ignoring `SeekHead` `SeekID` refs and payload `0x6D 0x80` false-positive DRM bytes), added MP4 `tkhd` 90°/270° portrait rotation matrix decoding, and fixed false-positive EME DRM capability-probe triggers while strictly enforcing real `setMediaKeys` / `video.mediaKeys` / `#EXT-X-KEY` / `#EXT-X-SESSION-KEY` DRM compliance.
+- **Fixed Fast-Blinking `Download` Button & Dropped Clicks on LinkedIn (`mehedi_content.js`, `shihab_background.js`)**:
+  - Mounted the floating dropdown header (`↻`, `×`) and persistent rows container once inside Shadow DOM with a single delegated click handler, content-signature diffing (zero DOM churn when unchanged), in-place row patching, and a click-protection lock (`pointerdown` + 80 ms post-`pointerup` grace window) so hover states never blink and clicks register on the first press.
+  - Scoped `shihabDomObserver` to ignore 60 fps Video.js progress-bar `style`/`class` mutations, replaced full-DOM `querySelectorAll("*")` video scans with targeted Shadow DOM player host queries (`shreddit-player`, `shreddit-player-2`, `media-player`, `mux-player`, `vimeo-player`, etc.), prevented cross-post group bleed on LinkedIn/X feeds, and coalesced `shihabPushUpdatedStreamsToTab` with 120 ms debouncing and delivery-confirmed metadata signature diffing.
+- **Disguised HLS Desktop Routing (`BridgeHttpServer.cs`, `ShihabMainIdmWindow.RibbonAndEvents.cs`, `MehediDynamicSegmentEngine.cs`, `MehediHlsDownloader.cs`)**:
+  - Propagated `mehediMimeType` (`application/vnd.apple.mpegurl`) from extension to desktop so extensionless/disguised HLS streams route cleanly into the 8-worker parallel HLS downloader, with per-line `#EXT-X-KEY` / `#EXT-X-SESSION-KEY` DRM enforcement and comment-tolerant `#EXT-X-STREAM-INF` variant parsing.
 
 ---
 

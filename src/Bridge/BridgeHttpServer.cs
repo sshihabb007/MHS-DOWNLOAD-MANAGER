@@ -971,6 +971,11 @@ namespace ShihabMehediIDM
             item.ShihabAudioCompanionBytes = dto.MehediAudioSize;
             item.ShihabSourceTabId = dto.ShihabTabId;
             item.ShihabQualityLabel = dto.MehediQualityLabel ?? "";
+            if (!string.IsNullOrWhiteSpace(dto.MehediMimeType) &&
+                dto.MehediMimeType.IndexOf("mpegurl", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                item.MehediIsHlsStream = true;
+            }
             return item;
         }
 

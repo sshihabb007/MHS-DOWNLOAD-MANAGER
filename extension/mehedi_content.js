@@ -58,10 +58,20 @@
   let shihabConfiguredPreventKey = "Alt";
   let mehediConfiguredForceKey = "Ins";
   let shihabPanelDismissedUrl = "";
+  const SHIHAB_SHADOW_VIDEO_HOSTS_SELECTOR =
+    "shreddit-player, shreddit-player-2, video-player, media-player, mux-player, vimeo-player, videojs-player, ytd-player, amp-video, faceplate-video, brightcove-player, jw-player, plyr-player";
+
   let mehediShadowHost = null;
   let shihabRefs = null;
   let shihabDropdownOpen = false;
   let mehediLockedDropdownVideoEl = null;
+  let shihabLastRenderedMenuSig = "";
+  let shihabRenderedMenuRows = [];
+  let shihabRenderedMenuTargetVideo = null;
+  let mehediPointerDownInMenuAtMs = 0;
+  let shihabPointerReleaseTimerId = null;
+  let shihabDeferredMenuRender = false;
+  let shihabHasHiddenVideoInDom = false;
   let mehediHoveredVideoEl = null;
   let mehediLastSelectedVideoEl = null;
   let shihabHoveredUntilMs = 0;
@@ -69,6 +79,8 @@
   let shihabLastMeasuredFullBarW = 178;
   let mehediSubframeHoveredUntilMs = 0;
   let shihabTopFrameActiveUntilMs = 0;
+  let shihabTopFrameVideoArea = 0;
+  let mehediMyFrameId = window === window.top ? 0 : -1;
   let mehediLastTopFrameNotifyMs = 0;
   let mehediLastBgSyncMs = 0;
   let shihabToastClearTimer = null;
@@ -117,6 +129,26 @@
     return "144p";
   }
 
+  function shihabSafeHttpRef() {
+    try {
+      const shihabH = String(location.href || "");
+      if (/^https?:\/\//i.test(shihabH)) return shihabH;
+      const mehediRef = String(document.referrer || "");
+      if (/^https?:\/\//i.test(mehediRef)) return mehediRef;
+    } catch (_) {}
+    return "";
+  }
+
+  function shihabSafeHttpOrg() {
+    try {
+      const shihabO = String(location.origin || "");
+      if (/^https?:\/\//i.test(shihabO)) return shihabO;
+      const mehediRef = String(document.referrer || "");
+      if (/^https?:\/\//i.test(mehediRef)) return new URL(mehediRef).origin;
+    } catch (_) {}
+    return "";
+  }
+
   function shihabNumericResRank(mehediLabel) {
     const shihabMatch = String(mehediLabel || "").match(/(\d{3,4})p/i);
     return shihabMatch ? parseInt(shihabMatch[1], 10) : 0;
@@ -129,13 +161,26 @@
       if (mehediUrlObj.protocol !== "http:" && mehediUrlObj.protocol !== "https:") {
         return "";
       }
-      for (const shihabParam of ["bytestart", "byteend", "alr", "rn", "rbuf"]) {
-        mehediUrlObj.searchParams.delete(shihabParam);
+      const shihabHostLower = (mehediUrlObj.hostname || "").toLowerCase();
+      const mehediIsGv = shihabHostLower.endsWith(".googlevideo.com") || mehediUrlObj.pathname.includes("/videoplayback");
+      const shihabIsFbIg =
+        mehediUrlObj.searchParams.has("efg") ||
+        shihabHostLower.includes("fbcdn.net") ||
+        shihabHostLower.includes("cdninstagram.com");
+
+      if (mehediIsGv || shihabIsFbIg) {
+        for (const shihabParam of ["bytestart", "byteend", "alr"]) {
+          mehediUrlObj.searchParams.delete(shihabParam);
+        }
       }
-      if (mehediUrlObj.searchParams.has("range")) {
-        const mehediSigned = (mehediUrlObj.searchParams.get("sparams") || "").split(",");
-        if (!mehediSigned.includes("range")) {
-          mehediUrlObj.searchParams.delete("range");
+      if (mehediIsGv) {
+        mehediUrlObj.searchParams.delete("rn");
+        mehediUrlObj.searchParams.delete("rbuf");
+        if (mehediUrlObj.searchParams.has("range")) {
+          const mehediSigned = (mehediUrlObj.searchParams.get("sparams") || "").split(",");
+          if (!mehediSigned.includes("range")) {
+            mehediUrlObj.searchParams.delete("range");
+          }
         }
       }
       return mehediUrlObj.toString();
@@ -155,6 +200,22 @@
         if (mehediDocId) {
           mehediGroupKey = `yt:${mehediDocId}`;
           shihabAltIds.push(mehediDocId, mehediGroupKey);
+          return { mehediGroupKey, shihabAltIds };
+        }
+      }
+      if (shihabParsed.hostname.includes("licdn.com")) {
+        const shihabLiMatch = shihabParsed.pathname.match(/\/playlist\/vid\/(?:v\d+\/)?([A-Za-z0-9_-]{6,})\//i);
+        if (shihabLiMatch && shihabLiMatch[1]) {
+          mehediGroupKey = `li:${shihabLiMatch[1]}`;
+          shihabAltIds.push(shihabLiMatch[1], mehediGroupKey);
+          return { mehediGroupKey, shihabAltIds };
+        }
+      }
+      if (shihabParsed.hostname.includes("twimg.com")) {
+        const mehediTwMatch = shihabParsed.pathname.match(/\/(?:ext_tw_video|amplify_video|tweet_video)\/([A-Za-z0-9_-]+)\//i);
+        if (mehediTwMatch && mehediTwMatch[1]) {
+          mehediGroupKey = `twv:${mehediTwMatch[1]}`;
+          shihabAltIds.push(mehediTwMatch[1], mehediGroupKey);
           return { mehediGroupKey, shihabAltIds };
         }
       }
@@ -289,9 +350,7 @@
     if (shihabEvent.data.__shihabMehediTopPanelActive === true && window !== window.top) {
       if (shihabEvent.source === window.top) {
         shihabTopFrameActiveUntilMs = Date.now() + 2200;
-        if (Date.now() >= shihabHoveredUntilMs && mehediShadowHost && mehediShadowHost.style.display !== "none") {
-          mehediShadowHost.style.display = "none";
-        }
+        shihabTopFrameVideoArea = Number(shihabEvent.data.shihabTopVideoArea || 0);
       }
       return;
     }
@@ -359,7 +418,7 @@
             mehediIndexIdentifierToGroup(shihabAlt, mehediGrp, shihabTitleHint);
           }
         }
-        shihabRenderFloatingIdmVideoPanel();
+        shihabScheduleFloatingPanelRender();
       }
       return;
     }
@@ -394,7 +453,7 @@
           }
           mehediUrlSet.add(shihabStreamClean);
         }
-        shihabRenderFloatingIdmVideoPanel();
+        shihabScheduleFloatingPanelRender();
       }
       return;
     }
@@ -502,23 +561,53 @@
     return mehediTxt;
   }
 
-  // Locate the single-post / single-player DOM card enclosing a specific <video> (strictly 1 <video> max so adjacent feed posts NEVER bleed!)
+  function shihabCountVideosInSubtree(mehediEl) {
+    if (!mehediEl || typeof mehediEl.querySelectorAll !== "function") return 0;
+    let shihabTotal = mehediEl.querySelectorAll("video").length;
+    try {
+      const mehediShadowHosts = mehediEl.querySelectorAll(SHIHAB_SHADOW_VIDEO_HOSTS_SELECTOR);
+      for (const shihabH of mehediShadowHosts) {
+        if (shihabH && shihabH.shadowRoot && typeof shihabH.shadowRoot.querySelectorAll === "function") {
+          shihabTotal += shihabH.shadowRoot.querySelectorAll("video").length;
+        }
+      }
+    } catch (_) {}
+    return shihabTotal;
+  }
+
+  // Locate the single-post / single-player DOM card enclosing a specific <video> (pierces Shadow DOM cleanly!)
   function shihabFindScopedCardForVideo(mehediVid, shihabMaxVideosAllowed) {
     if (!mehediVid) return null;
     const mehediAllowed = shihabMaxVideosAllowed || 1;
-    const shihabSemanticArticle = mehediVid.closest("article, shreddit-post, ytd-reel-video-renderer, [data-testid='tweet'], [role='article']");
-    if (shihabSemanticArticle && shihabSemanticArticle.querySelectorAll("video").length <= mehediAllowed) {
-      return shihabSemanticArticle;
+    const shihabStepParent = (shihabEl) => {
+      if (!shihabEl) return null;
+      if (shihabEl.parentElement) return shihabEl.parentElement;
+      const mehediRoot = shihabEl.getRootNode && shihabEl.getRootNode();
+      if (mehediRoot && mehediRoot.host && mehediRoot.host !== shihabEl) {
+        return mehediRoot.host;
+      }
+      return null;
+    };
+
+    let shihabSemWalk = mehediVid;
+    for (let shihabD = 0; shihabSemWalk && shihabD < 18; shihabD++) {
+      if (shihabSemWalk.matches && shihabSemWalk.matches("article, shreddit-post, ytd-reel-video-renderer, [data-testid='tweet'], [role='article'], .feed-shared-update-v2, [data-urn^='urn:li:activity'], [data-id^='urn:li:activity']")) {
+        if (shihabCountVideosInSubtree(shihabSemWalk) <= mehediAllowed) {
+          return shihabSemWalk;
+        }
+        break;
+      }
+      shihabSemWalk = shihabStepParent(shihabSemWalk);
     }
 
     let mehediBestCard = null;
-    let shihabCur = mehediVid.parentElement;
+    let shihabCur = shihabStepParent(mehediVid);
     for (let mehediDepth = 0; shihabCur && shihabCur !== document.body && shihabCur !== document.documentElement && mehediDepth < 16; mehediDepth++) {
       if (shihabCur.tagName === "MAIN" || shihabCur.getAttribute("role") === "feed" || shihabCur.getAttribute("role") === "main") break;
-      const shihabVidCount = shihabCur.querySelectorAll("video").length;
+      const shihabVidCount = shihabCountVideosInSubtree(shihabCur);
       if (shihabVidCount > mehediAllowed) break;
       mehediBestCard = shihabCur;
-      shihabCur = shihabCur.parentElement;
+      shihabCur = shihabStepParent(shihabCur);
     }
     return mehediBestCard;
   }
@@ -527,6 +616,7 @@
     if (!shihabUrlIterable) return;
     for (const mehediBoundUrl of shihabUrlIterable) {
       shihabTargetUrlSet.add(mehediBoundUrl);
+      const mehediBoundPathKey = mehediBoundUrl.split("?")[0].split("#")[0];
       const shihabExtracted = shihabExtractUrlGroupAndAltIds(mehediBoundUrl);
       if (shihabExtracted.mehediGroupKey) {
         mehediTargetGroupSet.add(shihabExtracted.mehediGroupKey);
@@ -537,9 +627,19 @@
           mehediTargetGroupSet.add(shihabMapped.mehediGroupKey);
         }
       }
+      const shihabDirectMap = mehediShortcodeMetaMap.get(mehediBoundUrl) || mehediShortcodeMetaMap.get(mehediBoundPathKey);
+      if (shihabDirectMap && shihabDirectMap.mehediGroupKey) {
+        mehediTargetGroupSet.add(shihabDirectMap.mehediGroupKey);
+      }
       for (const shihabCached of shihabTabStreamsCache) {
         if (!shihabCached) continue;
-        if (shihabCached.shihabStreamUrl === mehediBoundUrl && shihabCached.shihabGroupKey) {
+        if (
+          (shihabCached.shihabStreamUrl === mehediBoundUrl ||
+           shihabCached.mehediParentMasterUrl === mehediBoundUrl ||
+           (Array.isArray(shihabCached.mehediAltIds) &&
+            (shihabCached.mehediAltIds.includes(mehediBoundUrl) || shihabCached.mehediAltIds.includes(mehediBoundPathKey)))) &&
+          shihabCached.shihabGroupKey
+        ) {
           mehediTargetGroupSet.add(shihabCached.shihabGroupKey);
         } else if (shihabExtracted.shihabAltIds.length > 0 && shihabCached.shihabGroupKey) {
           if (shihabExtracted.shihabAltIds.includes(shihabCached.shihabGroupKey) ||
@@ -617,9 +717,37 @@
           shihabBoundUrls.add(mehediCleanDirect);
         }
       }
+
+      // 1b. Extract X/Twitter poster thumb video ID (e.g. ext_tw_video_thumb/<id>) & LinkedIn poster/data-sources asset ID
+      const mehediPosterUrl = mehediVid.getAttribute("poster") || mehediVid.poster || "";
+      if (mehediPosterUrl) {
+        const shihabTwThumbM = mehediPosterUrl.match(/\/(?:ext_tw_video_thumb|amplify_video_thumb|tweet_video_thumb)\/([A-Za-z0-9_-]+)/i);
+        if (shihabTwThumbM && shihabTwThumbM[1]) {
+          shihabShortcodes.add(shihabTwThumbM[1]);
+          shihabShortcodes.add(`twv:${shihabTwThumbM[1]}`);
+        }
+        const mehediLiPosterM = mehediPosterUrl.match(/\/playlist\/vid\/(?:v\d+\/)?([A-Za-z0-9_-]{6,})\//i);
+        if (mehediLiPosterM && mehediLiPosterM[1]) {
+          shihabShortcodes.add(mehediLiPosterM[1]);
+          shihabShortcodes.add(`li:${mehediLiPosterM[1]}`);
+          shihabDirectDomGroupKeys.add(`li:${mehediLiPosterM[1]}`);
+        }
+      }
+      const shihabCtxDsHolder = mehediVid.hasAttribute("data-sources")
+        ? mehediVid
+        : (mehediVid.parentElement && typeof mehediVid.parentElement.closest === "function" ? mehediVid.parentElement.closest("[data-sources]") : null);
+      if (shihabCtxDsHolder && shihabCountVideosInSubtree(shihabCtxDsHolder) <= 1) {
+        const mehediCtxDsRaw = shihabCtxDsHolder.getAttribute("data-sources") || "";
+        const shihabCtxLiM = mehediCtxDsRaw.match(/\\?\/playlist\\?\/vid\\?\/(?:v\d+\\?\/)?([A-Za-z0-9_-]{6,})\\?\//i);
+        if (shihabCtxLiM && shihabCtxLiM[1]) {
+          shihabShortcodes.add(shihabCtxLiM[1]);
+          shihabShortcodes.add(`li:${shihabCtxLiM[1]}`);
+          shihabDirectDomGroupKeys.add(`li:${shihabCtxLiM[1]}`);
+        }
+      }
     }
 
-    // 2. Single-video page route parameters (YouTube Watch/Shorts/Embed/Live, Instagram Reel/Post, Facebook Reel/Watch/Videos, X Status)
+    // 2. Single-video page route parameters (YouTube Watch/Shorts/Embed/Live, Instagram Reel/Post, Facebook Reel/Watch/Videos, X Status, TikTok Video)
     if (mehediHost.includes("youtube.com") || mehediHost.includes("youtu.be") || mehediHost.includes("youtube-nocookie.com")) {
       const mehediPageYtId = shihabExtractCurrentPageYouTubeVideoId();
       if (mehediPageYtId) {
@@ -627,11 +755,13 @@
         mehediRouteAndCardGroupKeys.add(`yt:${mehediPageYtId}`);
       }
     } else {
-      const mehediRouteMatch = shihabPath.match(/\/(?:reel|reels|p|tv|videos|status)\/([A-Za-z0-9_-]+)/i);
+      const mehediRouteMatch = shihabPath.match(/\/(?:reel|reels|p|tv|video|videos|status)\/([A-Za-z0-9_-]+)/i);
       if (mehediRouteMatch && mehediRouteMatch[1] && !/^(?:home|feed|for_you|following)$/i.test(mehediRouteMatch[1])) {
         shihabShortcodes.add(mehediRouteMatch[1]);
         if (mehediHost.includes("x.com") || mehediHost.includes("twitter.com")) {
           mehediRouteAndCardGroupKeys.add(`tw:${mehediRouteMatch[1]}`);
+        } else if (mehediHost.includes("tiktok.com")) {
+          mehediRouteAndCardGroupKeys.add(`tt:${mehediRouteMatch[1]}`);
         }
       }
       if (mehediHost.includes("facebook.com")) {
@@ -649,7 +779,7 @@
       const shihabCardAnchors = mehediCardRoot.querySelectorAll("a[href]");
       for (const mehediAnchor of shihabCardAnchors) {
         const shihabHref = mehediAnchor.getAttribute("href") || "";
-        const mehediCodeMatch = shihabHref.match(/\/(?:reel|reels|p|tv|videos|status|shorts)\/([A-Za-z0-9_-]+)/i);
+        const mehediCodeMatch = shihabHref.match(/\/(?:reel|reels|p|tv|video|videos|status|shorts)\/([A-Za-z0-9_-]+)/i);
         if (mehediCodeMatch && mehediCodeMatch[1] && !/^(?:home|feed|audio)$/i.test(mehediCodeMatch[1])) {
           shihabShortcodes.add(mehediCodeMatch[1]);
           if (/^\d{5,}$/.test(mehediCodeMatch[1])) {
@@ -657,6 +787,8 @@
           }
           if (mehediHost.includes("x.com") || mehediHost.includes("twitter.com")) {
             mehediRouteAndCardGroupKeys.add(`tw:${mehediCodeMatch[1]}`);
+          } else if (mehediHost.includes("tiktok.com")) {
+            mehediRouteAndCardGroupKeys.add(`tt:${mehediCodeMatch[1]}`);
           }
         }
         const shihabWatchHrefMatch = shihabHref.match(/[?&]v=(\d{5,})/);
@@ -938,6 +1070,21 @@
       if (mehediTwHint) return mehediTwHint;
     }
 
+    // 4b. LinkedIn Feed & Posts
+    if (shihabHost.includes("linkedin.com")) {
+      const mehediLiCard = shihabCtx.mehediCardRoot || (mehediVid && mehediVid.closest(".feed-shared-update-v2, article, [data-urn]"));
+      if (mehediLiCard) {
+        const shihabLiTextEl = mehediLiCard.querySelector('.feed-shared-update-v2__description, .update-components-text, [data-test-id="main-feed-activity-card__commentary"]');
+        const mehediLiClean = mehediCleanCaptionText(shihabLiTextEl ? shihabLiTextEl.textContent : "");
+        if (mehediLiClean) return mehediLiClean;
+        const shihabLiAuthorEl = mehediLiCard.querySelector('.update-components-actor__title, .feed-shared-actor__name');
+        const mehediLiAuthor = mehediCleanCaptionText(shihabLiAuthorEl ? shihabLiAuthorEl.textContent : "");
+        if (mehediLiAuthor) return `${mehediLiAuthor} - LinkedIn Video`;
+      }
+      const mehediLiHint = mehediCleanCaptionText(shihabCtx.shihabManifestTitleHint);
+      if (mehediLiHint) return mehediLiHint;
+    }
+
     // 5. TikTok
     if (shihabHost.includes("tiktok.com")) {
       const mehediTtScope = shihabCtx.mehediCardRoot || (!shihabIsMultiVideoFeed ? document : null);
@@ -1139,9 +1286,9 @@
       for (const shihabVid of mehediDirect) {
         shihabList.push(shihabVid);
       }
-      const mehediAllElems = mehediRoot.querySelectorAll("*");
-      for (const shihabEl of mehediAllElems) {
-        if (shihabEl.shadowRoot && shihabEl !== mehediShadowHost) {
+      const mehediShadowHosts = mehediRoot.querySelectorAll(SHIHAB_SHADOW_VIDEO_HOSTS_SELECTOR);
+      for (const shihabEl of mehediShadowHosts) {
+        if (shihabEl && shihabEl.shadowRoot && shihabEl !== mehediShadowHost) {
           shihabCollectAllVideosDeep(shihabEl.shadowRoot, shihabList);
         }
       }
@@ -1172,8 +1319,19 @@
     }
 
     const mehediIsAud = Boolean(shihabEntryObj.shihabIsAudioOnly || shihabEntryObj.mehediMediaKind === "AUDIO");
+    const mehediMimeLower = String(shihabEntryObj.mehediMimeType || "").toLowerCase();
     const shihabExtGuess = shihabEntryObj.shihabExt ||
-      (/\.m3u8(\?|$)/i.test(mehediClean) ? "m3u8" : (/\.webm(\?|$)/i.test(mehediClean) ? "webm" : (mehediIsAud ? "m4a" : "mp4")));
+      (mehediMimeLower.includes("mpegurl") || /\.m3u8(\?|#|$)/i.test(mehediClean)
+        ? "m3u8"
+        : (mehediMimeLower.includes("webm") || /\.webm(\?|#|$)/i.test(mehediClean)
+            ? "webm"
+            : (mehediMimeLower.includes("matroska") || /\.mkv(\?|#|$)/i.test(mehediClean)
+                ? "mkv"
+                : (mehediMimeLower.includes("quicktime") || /\.mov(\?|#|$)/i.test(mehediClean)
+                    ? "mov"
+                    : (/\.m4v(\?|#|$)/i.test(mehediClean)
+                        ? "m4v"
+                        : (mehediIsAud ? "m4a" : "mp4"))))));
     const mehediRes = shihabEntryObj.shihabResolution || "";
     const shihabFmtUpper = (shihabExtGuess === "m3u8" ? "MP4" : shihabExtGuess).toUpperCase();
     const mehediDefaultBadge = mehediIsAud
@@ -1187,6 +1345,7 @@
 
     mehediTargetArray.push({
       shihabStreamUrl: mehediClean,
+      mehediMimeType: shihabEntryObj.mehediMimeType || (shihabExtGuess === "m3u8" ? "application/vnd.apple.mpegurl" : ""),
       shihabExt: shihabExtGuess,
       mehediMediaKind: mehediIsAud ? "AUDIO" : "VIDEO",
       mehediTrackRole: shihabEntryObj.mehediTrackRole || (mehediIsAud ? "audio" : "progressive"),
@@ -1206,6 +1365,8 @@
       mehediAltIds: Array.isArray(shihabEntryObj.mehediAltIds) ? shihabEntryObj.mehediAltIds : [],
       mehediAudioCompanionUrl: shihabEntryObj.mehediAudioCompanionUrl || "",
       shihabAudioCompanionBytes: typeof shihabEntryObj.shihabAudioCompanionBytes === "number" ? shihabEntryObj.shihabAudioCompanionBytes : -1,
+      mehediParentMasterUrl: shihabEntryObj.mehediParentMasterUrl || "",
+      shihabFrameId: typeof shihabEntryObj.shihabFrameId === "number" ? shihabEntryObj.shihabFrameId : mehediMyFrameId,
       shihabOrigin: shihabEntryObj.shihabOrigin || "",
       mehediCapturedReferer: shihabEntryObj.mehediCapturedReferer || "",
       mehediOmitCookies: Boolean(shihabEntryObj.mehediOmitCookies),
@@ -1234,7 +1395,8 @@
         shihabBestGroup = shihabGrp;
       }
     }
-    return shihabBestGroup || mehediCandidateSet.values().next().value || "";
+    // CRITICAL: NEVER return a phantom groupKey that has 0 entries in shihabTabStreamsCache!
+    return shihabBestGroup;
   }
 
   function mehediIsStreamCompatibleWithVideoElement(shihabStreamItem, mehediVidEl) {
@@ -1270,25 +1432,31 @@
   }
 
   // Resolve ONE winning shihabGroupKey for mehediActiveVideo so unrelated preloaded/earlier videos NEVER mix!
-  function mehediResolveWinningGroupForVideo(mehediActiveVideo, shihabCtx, mehediIsMultiVideoFeed) {
+  function mehediResolveWinningGroupForVideo(mehediActiveVideo, shihabCtx, mehediIsMultiVideoFeed, mehediHasDirectDomItems) {
     // Priority 0: Direct DOM <video> React Fiber / YouTube #movie_player binding on this exact <video> node!
     if (shihabCtx.shihabDirectDomGroupKeys && shihabCtx.shihabDirectDomGroupKeys.size > 0) {
+      const shihabDirectExactSet = new Set();
       for (const mehediDirGrp of shihabCtx.shihabDirectDomGroupKeys) {
         if (shihabCtx.shihabExactGroupKeys.has(mehediDirGrp)) {
-          return mehediDirGrp;
+          shihabDirectExactSet.add(mehediDirGrp);
         }
       }
+      const mehediPickedDirectExact = shihabPickFreshestMatchingGroup(shihabDirectExactSet);
+      if (mehediPickedDirectExact) return mehediPickedDirectExact;
       const shihabPickedDirect = shihabPickFreshestMatchingGroup(shihabCtx.shihabDirectDomGroupKeys);
       if (shihabPickedDirect) return shihabPickedDirect;
     }
 
     // Priority 1: Byte-exact FNV-1a ftyp/moof MSE SourceBuffer.appendBuffer match
     if (shihabCtx.shihabExactGroupKeys.size > 0) {
+      const shihabExactRouteSet = new Set();
       for (const mehediExGrp of shihabCtx.shihabExactGroupKeys) {
         if (shihabCtx.mehediRouteAndCardGroupKeys.has(mehediExGrp)) {
-          return mehediExGrp;
+          shihabExactRouteSet.add(mehediExGrp);
         }
       }
+      const mehediPickedExactRoute = shihabPickFreshestMatchingGroup(shihabExactRouteSet);
+      if (mehediPickedExactRoute) return mehediPickedExactRoute;
       const shihabPickedExact = shihabPickFreshestMatchingGroup(shihabCtx.shihabExactGroupKeys);
       if (shihabPickedExact) return shihabPickedExact;
     }
@@ -1321,15 +1489,51 @@
       }
     }
 
-    // NEVER guess a random/newest stream group on multi-video feeds (Facebook/Instagram/X/TikTok feeds)!
-    if (mehediIsMultiVideoFeed) {
+    const shihabHostLower = (location.hostname || "").toLowerCase();
+    const shihabIsStrictSocialFeedHost =
+      shihabHostLower.includes("facebook.com") ||
+      shihabHostLower.includes("fb.watch") ||
+      shihabHostLower.includes("instagram.com") ||
+      shihabHostLower.includes("youtube.com");
+
+    // NEVER guess a random/newest stream group on strict Facebook/Instagram/YouTube feeds,
+    // or when this video ALREADY has direct DOM streams (e.g. LinkedIn data-sources) or an explicit feed identity not yet in cache!
+    const shihabHasExplicitIdentity = Boolean(
+      (shihabCtx.shihabDirectDomGroupKeys && shihabCtx.shihabDirectDomGroupKeys.size > 0) ||
+      (shihabCtx.shihabExactGroupKeys && shihabCtx.shihabExactGroupKeys.size > 0) ||
+      (shihabCtx.mehediRouteAndCardGroupKeys && shihabCtx.mehediRouteAndCardGroupKeys.size > 0)
+    );
+    if (mehediHasDirectDomItems) {
+      return "";
+    }
+    if (mehediIsMultiVideoFeed && (shihabIsStrictSocialFeedHost || shihabHasExplicitIdentity)) {
       return "";
     }
 
-    // Priority 5 (Single-video pages ONLY): Aspect/duration-compatible newest group in shihabTabStreamsCache
+    // Priority 5: Aspect/duration-compatible newest group in shihabTabStreamsCache (preferring streams from THIS frame!)
+    // On non-FB/IG/YT multi-video feeds (X, LinkedIn, Reddit, Vimeo, movie grids), allow Priority 5 when this <video>
+    // is actively playing or MSE blob:-backed or explicitly selected, so real streams are never dropped to 0!
+    const mehediAllowMultiFeedMatch =
+      !mehediIsMultiVideoFeed ||
+      Boolean(
+        mehediActiveVideo &&
+        ((!mehediActiveVideo.paused && !mehediActiveVideo.ended) ||
+         String(mehediActiveVideo.currentSrc || mehediActiveVideo.src || "").startsWith("blob:") ||
+         mehediActiveVideo === mehediHoveredVideoEl ||
+         mehediActiveVideo === mehediLockedDropdownVideoEl)
+      );
+    if (!mehediAllowMultiFeedMatch) {
+      return "";
+    }
+
+    const mehediSameFramePool = mehediMyFrameId >= 0
+      ? shihabTabStreamsCache.filter((shihabR) => shihabR && typeof shihabR.shihabFrameId === "number" && shihabR.shihabFrameId === mehediMyFrameId)
+      : [];
+    const shihabSearchPool = mehediSameFramePool.length > 0 ? mehediSameFramePool : shihabTabStreamsCache;
+
     let shihabNewestCompatGroup = "";
     let mehediNewestCompatTs = -1;
-    for (const shihabRec of shihabTabStreamsCache) {
+    for (const shihabRec of shihabSearchPool) {
       if (!shihabRec || !shihabRec.shihabGroupKey) continue;
       if (!mehediIsStreamCompatibleWithVideoElement(shihabRec, mehediActiveVideo)) continue;
       const mehediTs = shihabRec.shihabDetectedAt || 0;
@@ -1341,20 +1545,116 @@
     return shihabNewestCompatGroup;
   }
 
-  // Collect streams with Strict Single-Video Isolation so Facebook/Instagram Reels & feeds NEVER mix videos!
+  function shihabCountSubstantiveDomVideos(mehediVidList) {
+    if (!Array.isArray(mehediVidList) || mehediVidList.length <= 1) {
+      return Array.isArray(mehediVidList) ? mehediVidList.length : 0;
+    }
+    let shihabCount = 0;
+    for (const shihabV of mehediVidList) {
+      if (!shihabV || !shihabV.isConnected) continue;
+      try {
+        const mehediSt = window.getComputedStyle(shihabV);
+        if (mehediSt.display === "none" || mehediSt.visibility === "hidden" || parseFloat(mehediSt.opacity || "1") < 0.05) {
+          continue;
+        }
+        const shihabR = shihabV.getBoundingClientRect();
+        if ((shihabR.width >= 100 && shihabR.height >= 60) || shihabV.readyState >= 1) {
+          shihabCount++;
+        }
+      } catch (_) {
+        shihabCount++;
+      }
+    }
+    return shihabCount;
+  }
+
+  // Collect streams with Strict Single-Video Isolation on FB/IG/YT and accurate universal matching on ALL other sites!
   function shihabCollectMediaFromDomAndSniffer(mehediActiveVideo) {
     const mehediCombined = [];
+    // Strict DRM/EME compliance: NEVER expose streams for a video element with active EME mediaKeys!
+    if (mehediActiveVideo && mehediActiveVideo.mediaKeys) {
+      mehediCombined.mehediRawSniffed = [];
+      return mehediCombined;
+    }
     const shihabAllDomVideos = shihabCollectAllVideosDeep(document, []);
-    const mehediIsMultiVideoFeed = shihabAllDomVideos.length > 1;
+    const mehediIsMultiVideoFeed = shihabCountSubstantiveDomVideos(shihabAllDomVideos) > 1;
+    const shihabHostLower = (location.hostname || "").toLowerCase();
+    const shihabIsStrictSocialFeedHost =
+      shihabHostLower.includes("facebook.com") ||
+      shihabHostLower.includes("fb.watch") ||
+      shihabHostLower.includes("instagram.com") ||
+      shihabHostLower.includes("youtube.com");
     const shihabCtx = shihabResolveVideoContext(mehediActiveVideo);
 
     const mehediIntrinsicRes = (mehediActiveVideo && mehediActiveVideo.videoWidth > 0 && mehediActiveVideo.videoHeight > 0)
       ? mehediHeightToQualityLabel(mehediActiveVideo.videoWidth, mehediActiveVideo.videoHeight)
       : "";
 
-    // 1. Strict Single-Group Isolation across background-sniffed & manifest-extracted streams
+    // 1. Direct HTML5 <video src="https://...">, <source> children, and LinkedIn / generic data-sources JSON on mehediActiveVideo
+    const mehediDirectDomItems = [];
+    if (mehediActiveVideo) {
+      const shihabDirectSrc = mehediActiveVideo.currentSrc || mehediActiveVideo.src || "";
+      if (shihabDirectSrc.startsWith("http://") || shihabDirectSrc.startsWith("https://")) {
+        mehediDirectDomItems.push({
+          shihabStreamUrl: shihabDirectSrc,
+          shihabResolution: mehediIntrinsicRes,
+          mehediTrackRole: "progressive"
+        });
+      }
+      const mehediSourceTags = mehediActiveVideo.querySelectorAll("source[src]");
+      for (const shihabSrcTag of mehediSourceTags) {
+        const mehediRawLbl = shihabSrcTag.getAttribute("label") || shihabSrcTag.getAttribute("res") || shihabSrcTag.getAttribute("size") || "";
+        const shihabParsedRes = mehediRawLbl.match(/^\d{3,4}$/)
+          ? `${mehediRawLbl}p`
+          : ((mehediRawLbl.match(/(\d{3,4}p)/i) || [])[1] || "");
+        mehediDirectDomItems.push({
+          shihabStreamUrl: shihabSrcTag.src || "",
+          mehediMimeType: shihabSrcTag.getAttribute("type") || "",
+          shihabResolution: shihabParsedRes ? shihabParsedRes.toLowerCase() : "",
+          mehediTrackRole: "progressive"
+        });
+      }
+      // LinkedIn / generic HTML5 data-sources JSON directly attached to this exact <video> or its single-video wrapper
+      const shihabDsHolder = mehediActiveVideo.hasAttribute("data-sources")
+        ? mehediActiveVideo
+        : (mehediActiveVideo.parentElement && typeof mehediActiveVideo.parentElement.closest === "function" ? mehediActiveVideo.parentElement.closest("[data-sources]") : null);
+      if (shihabDsHolder && shihabCountVideosInSubtree(shihabDsHolder) <= 1) {
+        const mehediDsRaw = shihabDsHolder.getAttribute("data-sources") || "";
+        if (mehediDsRaw.trim().startsWith("[")) {
+          try {
+            const shihabDsArr = JSON.parse(mehediDsRaw);
+            const mehediDsRef = shihabSafeHttpRef();
+            const shihabDsOrg = shihabSafeHttpOrg();
+            for (const mehediDsItem of shihabDsArr) {
+              if (!mehediDsItem || typeof mehediDsItem.src !== "string" || !mehediDsItem.src.startsWith("http")) continue;
+              const mehediDsType = String(mehediDsItem.type || "video/mp4").toLowerCase();
+              const shihabDsResM = mehediDsItem.src.match(/(?:mp4-|\/)(\d{3,4}p)(?:[^0-9]|$)/i);
+              const mehediDsLiM = mehediDsItem.src.match(/\/playlist\/vid\/(?:v\d+\/)?([A-Za-z0-9_-]{6,})\//i);
+              const mehediDsIsHls = mehediDsType.includes("mpegurl") || /\.m3u8(\?|#|$)|\/hls-manifest\b/i.test(mehediDsItem.src);
+              mehediDirectDomItems.push({
+                shihabStreamUrl: mehediDsItem.src,
+                mehediMimeType: mehediDsIsHls ? "application/vnd.apple.mpegurl" : mehediDsType,
+                shihabExt: mehediDsIsHls ? "m3u8" : "mp4",
+                shihabResolution: shihabDsResM ? shihabDsResM[1].toLowerCase() : mehediHeightToQualityLabel(mehediDsItem.width, mehediDsItem.height),
+                shihabGroupKey: mehediDsLiM ? `li:${mehediDsLiM[1]}` : "",
+                mehediTrackRole: "progressive",
+                mehediCapturedReferer: mehediDsRef,
+                shihabOrigin: shihabDsOrg
+              });
+            }
+          } catch (_) {}
+        }
+      }
+    }
+
+    // 2. Strict Single-Group Isolation across background-sniffed & manifest-extracted streams
     let shihabScopedBgStreams = [];
-    const mehediWinningGroupKey = mehediResolveWinningGroupForVideo(mehediActiveVideo, shihabCtx, mehediIsMultiVideoFeed);
+    const mehediWinningGroupKey = mehediResolveWinningGroupForVideo(
+      mehediActiveVideo,
+      shihabCtx,
+      mehediIsMultiVideoFeed,
+      mehediDirectDomItems.length > 0
+    );
 
     if (mehediWinningGroupKey) {
       shihabScopedBgStreams = shihabTabStreamsCache.filter((mehediItem) => {
@@ -1369,63 +1669,106 @@
         if (!mehediItem || !mehediItem.shihabStreamUrl) return false;
         if (!mehediIsStreamCompatibleWithVideoElement(mehediItem, mehediActiveVideo)) return false;
         if (shihabCtx.shihabBoundUrls.has(mehediItem.shihabStreamUrl)) return true;
+        if (mehediItem.mehediParentMasterUrl && shihabCtx.shihabBoundUrls.has(mehediItem.mehediParentMasterUrl)) return true;
         if (mehediItem.mehediShortcode && shihabCtx.shihabShortcodes.has(mehediItem.mehediShortcode)) return true;
         if (Array.isArray(mehediItem.mehediAltIds) && mehediItem.mehediAltIds.some((shihabId) => shihabCtx.shihabShortcodes.has(String(shihabId)))) {
           return true;
+        }
+        // Also match video asset ID substring in stream URL (e.g. X poster ext_tw_video_thumb/<id> vs video.twimg.com/ext_tw_video/<id>/...)
+        for (const shihabCode of shihabCtx.shihabShortcodes) {
+          if (shihabCode.length >= 8 && !shihabCode.includes(":") && mehediItem.shihabStreamUrl.includes(shihabCode)) {
+            return true;
+          }
         }
         return false;
       });
     }
 
-    // Only include ungrouped streams on single-video pages when no grouped streams exist in cache
-    if (shihabScopedBgStreams.length === 0 && shihabTabStreamsCache.length > 0 && !mehediIsMultiVideoFeed) {
-      const shihabAnyGroupedInCache = shihabTabStreamsCache.some((mehediIt) => Boolean(mehediIt && mehediIt.shihabGroupKey));
-      if (!shihabAnyGroupedInCache) {
-        shihabScopedBgStreams = shihabTabStreamsCache.filter(
-          (mehediIt) => mehediIt && !mehediIt.shihabGroupKey && mehediIsStreamCompatibleWithVideoElement(mehediIt, mehediActiveVideo)
-        );
+    // Fallback for ungrouped sniffed streams (preferring streams from THIS frame; NEVER blocked by unrelated stale groups!)
+    const shihabCtxHasExplicitId = Boolean(
+      (shihabCtx.shihabDirectDomGroupKeys && shihabCtx.shihabDirectDomGroupKeys.size > 0) ||
+      (shihabCtx.shihabExactGroupKeys && shihabCtx.shihabExactGroupKeys.size > 0) ||
+      (shihabCtx.mehediRouteAndCardGroupKeys && shihabCtx.mehediRouteAndCardGroupKeys.size > 0)
+    );
+    const mehediAllowMultiFeedFallback =
+      !mehediIsMultiVideoFeed ||
+      Boolean(
+        !shihabIsStrictSocialFeedHost &&
+        !shihabCtxHasExplicitId &&
+        mehediActiveVideo &&
+        ((!mehediActiveVideo.paused && !mehediActiveVideo.ended) ||
+         String(mehediActiveVideo.currentSrc || mehediActiveVideo.src || "").startsWith("blob:") ||
+         mehediActiveVideo === mehediHoveredVideoEl ||
+         mehediActiveVideo === mehediLockedDropdownVideoEl)
+      );
+
+    const mehediCanUseUngroupedFallback =
+      !shihabPageHasDrmProtectedMedia &&
+      shihabScopedBgStreams.length === 0 &&
+      mehediDirectDomItems.length === 0 &&
+      shihabTabStreamsCache.length > 0 &&
+      mehediAllowMultiFeedFallback;
+
+    if (mehediCanUseUngroupedFallback) {
+      const mehediSameFramePool = mehediMyFrameId >= 0
+        ? shihabTabStreamsCache.filter((mehediIt) => mehediIt && typeof mehediIt.shihabFrameId === "number" && mehediIt.shihabFrameId === mehediMyFrameId)
+        : [];
+      const shihabPool = mehediSameFramePool.length > 0 ? mehediSameFramePool : shihabTabStreamsCache;
+
+      const mehediCompatUngrouped = shihabPool.filter(
+        (mehediIt) => mehediIt && !mehediIt.shihabGroupKey && mehediIsStreamCompatibleWithVideoElement(mehediIt, mehediActiveVideo)
+      );
+      if (mehediCompatUngrouped.length > 0) {
+        shihabScopedBgStreams = mehediCompatUngrouped;
+      } else if (!shihabIsStrictSocialFeedHost) {
+        // Last resort on non-FB/IG/YT pages: pick ONE single freshest compatible group (NEVER flatten multiple groups together!)
+        let shihabBestGrp = "";
+        let mehediBestTs = -1;
+        for (const mehediIt of shihabPool) {
+          if (!mehediIt || !mehediIt.shihabGroupKey) continue;
+          if (!mehediIsStreamCompatibleWithVideoElement(mehediIt, mehediActiveVideo)) continue;
+          const shihabTs = mehediIt.shihabDetectedAt || 0;
+          if (shihabTs >= mehediBestTs) {
+            mehediBestTs = shihabTs;
+            shihabBestGrp = mehediIt.shihabGroupKey;
+          }
+        }
+        if (shihabBestGrp) {
+          shihabScopedBgStreams = shihabPool.filter(
+            (mehediIt) => mehediIt && mehediIt.shihabGroupKey === shihabBestGrp && mehediIsStreamCompatibleWithVideoElement(mehediIt, mehediActiveVideo)
+          );
+        }
       }
     }
 
     for (const shihabBgItem of shihabScopedBgStreams) {
       shihabPushRichStreamEntry(mehediCombined, shihabBgItem);
     }
-
-    // 2. Direct HTML5 <video src="https://..."> and <source> children on mehediActiveVideo
-    if (mehediActiveVideo) {
-      const shihabDirectSrc = mehediActiveVideo.currentSrc || mehediActiveVideo.src || "";
-      if (shihabDirectSrc.startsWith("http://") || shihabDirectSrc.startsWith("https://")) {
-        shihabPushRichStreamEntry(mehediCombined, {
-          shihabStreamUrl: shihabDirectSrc,
-          shihabResolution: mehediIntrinsicRes,
-          mehediTrackRole: "progressive"
-        });
-      }
-      const mehediSourceTags = mehediActiveVideo.querySelectorAll("source[src]");
-      for (const shihabSrcTag of mehediSourceTags) {
-        const mehediRawLbl = shihabSrcTag.getAttribute("label") || shihabSrcTag.getAttribute("res") || shihabSrcTag.getAttribute("size") || "";
-        const shihabParsedRes = mehediRawLbl.match(/^\d{3,4}$/)
-          ? `${mehediRawLbl}p`
-          : ((mehediRawLbl.match(/(\d{3,4}p)/i) || [])[1] || "");
-        shihabPushRichStreamEntry(mehediCombined, {
-          shihabStreamUrl: shihabSrcTag.src || "",
-          shihabResolution: shihabParsedRes ? shihabParsedRes.toLowerCase() : "",
-          mehediTrackRole: "progressive"
-        });
-      }
+    for (const mehediDomItem of mehediDirectDomItems) {
+      shihabPushRichStreamEntry(mehediCombined, mehediDomItem);
     }
 
-    // 3. Single-video page fallbacks (Performance Resource Timing + OpenGraph video meta)
-    if (!mehediIsMultiVideoFeed && mehediCombined.length === 0) {
+    // 3. Single-video / iframe page fallbacks (Performance Resource Timing + OpenGraph video meta)
+    if ((!mehediIsMultiVideoFeed || window !== window.top) && !shihabIsStrictSocialFeedHost && !shihabPageHasDrmProtectedMedia && mehediCombined.length === 0) {
       try {
         const mehediPerfEntries = performance.getEntriesByType("resource") || [];
         for (let shihabIdx = mehediPerfEntries.length - 1; shihabIdx >= 0 && mehediCombined.length < 8; shihabIdx--) {
           const mehediRes = mehediPerfEntries[shihabIdx];
           const shihabResName = mehediRes && mehediRes.name ? mehediRes.name : "";
-          if (/\.(mp4|mkv|webm|mov|m4v|m3u8)(\?|$)/i.test(shihabResName)) {
-            const shihabTransferBytes = mehediRes.encodedBodySize > 250000 ? mehediRes.encodedBodySize : -1;
+          if (/\.(ts|m4s|cmfv|cmfa|vtt|srt|js|css|png|jpg|jpeg|webp|svg|woff2?)(\?|#|$)/i.test(shihabResName)) continue;
+          if (/(?:thumbnail|poster|sprite|vtt|caption)/i.test(shihabResName)) continue;
+          const shihabLooksLikeMediaRes =
+            /\.(mp4|mkv|webm|mov|m4v|m3u8)(\?|#|$)/i.test(shihabResName) ||
+            /dms\.licdn\.com\/playlist\/vid\/.*(?:mp4-|hls-manifest)/i.test(shihabResName) ||
+            /video\.twimg\.com\/.*\.(mp4|m3u8)/i.test(shihabResName) ||
+            /mime_type=video/i.test(shihabResName);
+          if (shihabLooksLikeMediaRes) {
+            const shihabTransferBytes = mehediRes.encodedBodySize > 65536 ? mehediRes.encodedBodySize : -1;
+            const mehediIsHlsPerf = /\.m3u8(\?|#|$)|hls-manifest/i.test(shihabResName);
             shihabPushRichStreamEntry(mehediCombined, {
               shihabStreamUrl: shihabResName,
+              mehediMimeType: mehediIsHlsPerf ? "application/vnd.apple.mpegurl" : "",
+              shihabExt: mehediIsHlsPerf ? "m3u8" : "",
               shihabSizeBytes: shihabTransferBytes,
               shihabResolution: mehediIntrinsicRes
             });
@@ -1444,7 +1787,7 @@
       for (const shihabSel of mehediMetaSelectors) {
         const mehediMeta = document.querySelector(shihabSel);
         const shihabContent = mehediMeta ? (mehediMeta.getAttribute("content") || "") : "";
-        if (/\.(mp4|mkv|webm|mov|m3u8)(\?|$)/i.test(shihabContent)) {
+        if (/\.(mp4|mkv|webm|mov|m3u8)(\?|#|$)/i.test(shihabContent)) {
           shihabPushRichStreamEntry(mehediCombined, {
             shihabStreamUrl: shihabContent,
             shihabResolution: mehediIntrinsicRes
@@ -1538,13 +1881,18 @@
     }
 
     const shihabVideos = shihabCollectAllVideosDeep(document, []);
+    if (mehediLastSelectedVideoEl && mehediLastSelectedVideoEl.isConnected && !shihabVideos.includes(mehediLastSelectedVideoEl)) {
+      shihabVideos.push(mehediLastSelectedVideoEl);
+    }
     let mehediPlayingCandidate = null;
     let shihabPlayingArea = 0;
     let mehediLargestCandidate = null;
     let shihabLargestArea = 0;
+    let mehediSawHidden = false;
 
     for (const mehediVid of shihabVideos) {
       if (!mehediIsVideoVisibleInViewport(mehediVid)) {
+        if (mehediVid && mehediVid.isConnected) mehediSawHidden = true;
         continue;
       }
       const shihabRect = mehediVid.getBoundingClientRect();
@@ -1564,6 +1912,7 @@
         mehediLargestCandidate = mehediVid;
       }
     }
+    shihabHasHiddenVideoInDom = mehediSawHidden;
 
     const shihabChosen = mehediPlayingCandidate || mehediLargestCandidate;
     if (shihabChosen) {
@@ -1589,6 +1938,9 @@
         new Promise((resolve) => setTimeout(() => resolve(null), 2500))
       ]).then((mehediState) => {
         if (mehediState) {
+          if (typeof mehediState.shihabSenderFrameId === "number") {
+            mehediMyFrameId = mehediState.shihabSenderFrameId;
+          }
           if (Array.isArray(mehediState.mehediStreams)) {
             shihabTabStreamsCache = mehediState.mehediStreams;
           }
@@ -1665,7 +2017,7 @@
         mehediEnsureVideoUidAndInspect(mehediActiveVid, true);
       }
       try {
-        window.postMessage({ __shihabMehediContentPing: true }, "*");
+        window.postMessage({ __shihabMehediContentPing: true, shihabIsInitialSync: false }, "*");
       } catch (_) {}
 
       await chrome.runtime.sendMessage({
@@ -1844,6 +2196,7 @@
           box-shadow: 0 18px 42px rgba(0, 0, 0, 0.78);
           backdrop-filter: blur(14px);
           -webkit-backdrop-filter: blur(14px);
+          user-select: none;
           display: none;
           z-index: 3;
         }
@@ -2015,6 +2368,31 @@
       const shihabMenuEl = document.createElement("div");
       shihabMenuEl.className = "mehedi-menu";
 
+      // Mount header & rows container ONCE so re-renders NEVER detach buttons or break clicks/hover transitions!
+      const shihabMenuHeaderDiv = document.createElement("div");
+      shihabMenuHeaderDiv.className = "shihab-menu-head";
+      shihabMenuHeaderDiv.title = "MHS Stream Sniffer";
+
+      const mehediHeadLeft = document.createElement("span");
+      mehediHeadLeft.textContent = "MHS STREAM SNIFFER";
+
+      const shihabHeadRight = document.createElement("div");
+      shihabHeadRight.className = "mehedi-head-right";
+      const mehediQualTxt = document.createElement("span");
+      mehediQualTxt.textContent = "SELECT QUALITY";
+      shihabHeadRight.appendChild(mehediQualTxt);
+      shihabHeadRight.appendChild(mehediRetrackBtn);
+      shihabHeadRight.appendChild(shihabCloseBtn);
+
+      shihabMenuHeaderDiv.appendChild(mehediHeadLeft);
+      shihabMenuHeaderDiv.appendChild(shihabHeadRight);
+
+      const shihabMenuRowsEl = document.createElement("div");
+      shihabMenuRowsEl.className = "shihab-menu-rows";
+
+      shihabMenuEl.appendChild(shihabMenuHeaderDiv);
+      shihabMenuEl.appendChild(shihabMenuRowsEl);
+
       shihabWrap.appendChild(mehediBar);
       shihabWrap.appendChild(mehediToastEl);
       shihabWrap.appendChild(shihabMenuEl);
@@ -2028,8 +2406,55 @@
         mehediRetrackBtn,
         shihabCloseBtn,
         mehediToastEl,
-        shihabMenuEl
+        shihabMenuEl,
+        shihabMenuHeaderDiv,
+        shihabMenuRowsEl
       };
+      shihabLastRenderedMenuSig = "";
+
+      // Prevent host-page pointerdown/mousedown handlers (e.g. LinkedIn feed / Video.js controls) from stealing focus or interfering with clicks
+      shihabWrap.addEventListener("pointerdown", (mehediEv) => {
+        mehediEv.stopPropagation();
+      });
+      shihabWrap.addEventListener("mousedown", (mehediEv) => {
+        mehediEv.stopPropagation();
+      });
+
+      // Lock menu row layout while pointer is pressed inside the dropdown so clicks NEVER miss due to async stream updates
+      const shihabAcquireMenuPointerLock = () => {
+        if (shihabPointerReleaseTimerId) {
+          clearTimeout(shihabPointerReleaseTimerId);
+          shihabPointerReleaseTimerId = null;
+        }
+        mehediPointerDownInMenuAtMs = Date.now();
+      };
+      shihabMenuEl.addEventListener("pointerdown", shihabAcquireMenuPointerLock);
+      shihabMenuEl.addEventListener("mousedown", shihabAcquireMenuPointerLock);
+
+      // Single delegated click handler on persistent rows container — rows are patched in-place so clicks ALWAYS fire on first click!
+      shihabMenuRowsEl.addEventListener("click", (mehediClickEv) => {
+        const shihabRowEl = mehediClickEv.target && typeof mehediClickEv.target.closest === "function"
+          ? mehediClickEv.target.closest(".shihab-item")
+          : null;
+        if (!shihabRowEl) return;
+        mehediClickEv.preventDefault();
+        mehediClickEv.stopPropagation();
+        shihabClearMenuPointerLockNow();
+        if (shihabRowEl.dataset && shihabRowEl.dataset.shihabEmptyRow === "1") {
+          mehediTriggerActiveVideoRetrack(true);
+          return;
+        }
+        const shihabIdx = parseInt((shihabRowEl.dataset && shihabRowEl.dataset.shihabRowIdx) || "-1", 10);
+        const mehediChosenEntry = (shihabIdx >= 0 && shihabIdx < shihabRenderedMenuRows.length)
+          ? shihabRenderedMenuRows[shihabIdx]
+          : null;
+        if (!mehediChosenEntry || !mehediChosenEntry.mehediStream) return;
+        const mehediTargetVidForDl = shihabRenderedMenuTargetVideo || mehediLockedDropdownVideoEl || mehediFindPrimaryVisibleVideo();
+        shihabDropdownOpen = false;
+        mehediLockedDropdownVideoEl = null;
+        mehediTriggerStreamDownload(mehediChosenEntry.mehediStream, mehediTargetVidForDl);
+        shihabRenderFloatingIdmVideoPanel();
+      });
 
       mehediShadowHost.addEventListener("mouseenter", () => {
         mehediPointerInsideBar = true;
@@ -2064,7 +2489,7 @@
         shihabRenderFloatingIdmVideoPanel();
         shihabRefreshBackgroundStreamsThrottled(true).then(() => {
           if (shihabDropdownOpen && !mehediInstanceDisposed) {
-            shihabRenderFloatingIdmVideoPanel();
+            shihabScheduleFloatingPanelRender();
           }
         }).catch(() => {});
       });
@@ -2072,12 +2497,14 @@
       mehediRetrackBtn.addEventListener("click", async (shihabRetrackEv) => {
         shihabRetrackEv.preventDefault();
         shihabRetrackEv.stopPropagation();
+        shihabClearMenuPointerLockNow();
         await mehediTriggerActiveVideoRetrack(true);
       });
 
       shihabCloseBtn.addEventListener("click", (mehediEv) => {
         mehediEv.preventDefault();
         mehediEv.stopPropagation();
+        shihabClearMenuPointerLockNow();
         shihabPanelDismissedUrl = location.href;
         shihabDropdownOpen = false;
         mehediLockedDropdownVideoEl = null;
@@ -2085,8 +2512,8 @@
       });
     }
 
-    shihabSweepForeignHostElements(mehediShadowHost);
     if (mehediShadowHost.parentNode !== mehediDesiredParent) {
+      shihabSweepForeignHostElements(mehediShadowHost);
       mehediDesiredParent.appendChild(mehediShadowHost);
     }
     return mehediShadowHost;
@@ -2102,7 +2529,7 @@
     const mehediUrl = String((shihabStream && shihabStream.shihabStreamUrl) || "").toLowerCase();
     const shihabExt = String((shihabStream && shihabStream.shihabExt) || "").toLowerCase();
     if (mehediUrl.includes("videoplayback")) return { tag: "VIDEOPLAYBACK", sub: "videoplayback" };
-    if (shihabExt === "m3u8" || mehediUrl.includes(".m3u8")) return { tag: "HLS", sub: "m3u8" };
+    if (shihabExt === "m3u8" || mehediUrl.includes(".m3u8") || /\/hls-manifest\b/i.test(mehediUrl)) return { tag: "HLS", sub: "m3u8" };
     if (mehediUrl.includes(".mpd")) return { tag: "DASH", sub: "mpd" };
     if (shihabExt === "webm" || mehediUrl.includes(".webm")) return { tag: "WEBM", sub: "webm" };
     if (shihabExt === "m4a" || shihabStream.shihabIsAudioOnly) return { tag: "AUDIO", sub: "audio" };
@@ -2249,19 +2676,19 @@
     if (location.href !== mehediLastObservedPageHref) {
       mehediLastObservedPageHref = location.href;
       shihabDropdownOpen = false;
+      mehediLockedDropdownVideoEl = null;
+      shihabClearMenuPointerLockNow();
+      shihabPageHasDrmProtectedMedia = false;
+      mehediDetectedDrmKeySystem = "";
       const shihabNavYtId = shihabExtractCurrentPageYouTubeVideoId();
       if (shihabNavYtId) {
         mehediRequestYouTubeResolutionForVideoId(shihabNavYtId, "", "", false);
       }
     }
 
-    // Prevent tiny ad/tracker iframes or background subframes from spawning duplicate icons when top frame is active
+    // Prevent tiny ad/tracker iframes from spawning duplicate icons; NEVER hide a real movie/embed player iframe when top frame only has a smaller banner video!
     if (window !== window.top) {
       if (window.innerWidth < 220 || window.innerHeight < 130) {
-        if (mehediShadowHost) mehediShadowHost.style.display = "none";
-        return;
-      }
-      if (Date.now() < shihabTopFrameActiveUntilMs && Date.now() >= shihabHoveredUntilMs && !shihabDropdownOpen) {
         if (mehediShadowHost) mehediShadowHost.style.display = "none";
         return;
       }
@@ -2286,13 +2713,32 @@
       return;
     }
 
+    const shihabTargetRectPre = shihabTargetVideo.getBoundingClientRect();
+    const mehediTargetAreaPre = Math.max(0, shihabTargetRectPre.width * shihabTargetRectPre.height);
+    if (window !== window.top) {
+      const mehediSubPlaying = !shihabTargetVideo.paused && !shihabTargetVideo.ended;
+      if (
+        Date.now() < shihabTopFrameActiveUntilMs &&
+        shihabTopFrameVideoArea > mehediTargetAreaPre &&
+        !mehediSubPlaying &&
+        Date.now() >= shihabHoveredUntilMs &&
+        !shihabDropdownOpen
+      ) {
+        if (mehediShadowHost) mehediShadowHost.style.display = "none";
+        return;
+      }
+    }
+
     // Coordinate with child iframes so at most ONE download icon is shown on the tab
     if (window === window.top && Date.now() - mehediLastTopFrameNotifyMs > 800) {
       mehediLastTopFrameNotifyMs = Date.now();
       try {
         for (let shihabFi = 0; shihabFi < window.frames.length; shihabFi++) {
           try {
-            window.frames[shihabFi].postMessage({ __shihabMehediTopPanelActive: true }, "*");
+            window.frames[shihabFi].postMessage({
+              __shihabMehediTopPanelActive: true,
+              shihabTopVideoArea: mehediTargetAreaPre
+            }, "*");
           } catch (_) {}
         }
       } catch (_) {}
@@ -2399,103 +2845,148 @@
     const mehediToastEl = shihabRefs.mehediToastEl;
     const mehediPlacedLeft = mehediLeftCss !== "auto" ? parseInt(mehediLeftCss, 10) : -1;
     const shihabAlignPopupLeft = mehediPlacedLeft >= 0 && (mehediPlacedLeft + 370 <= shihabViewportW - 8);
-    shihabMenuEl.style.left = shihabAlignPopupLeft ? "0px" : "auto";
-    shihabMenuEl.style.right = shihabAlignPopupLeft ? "auto" : "0px";
-    mehediToastEl.style.left = shihabAlignPopupLeft ? "0px" : "auto";
-    mehediToastEl.style.right = shihabAlignPopupLeft ? "auto" : "0px";
+    const mehediWantLeft = shihabAlignPopupLeft ? "0px" : "auto";
+    const shihabWantRight = shihabAlignPopupLeft ? "auto" : "0px";
+    if (shihabMenuEl.style.left !== mehediWantLeft) shihabMenuEl.style.left = mehediWantLeft;
+    if (shihabMenuEl.style.right !== shihabWantRight) shihabMenuEl.style.right = shihabWantRight;
+    if (mehediToastEl.style.left !== mehediWantLeft) mehediToastEl.style.left = mehediWantLeft;
+    if (mehediToastEl.style.right !== shihabWantRight) mehediToastEl.style.right = shihabWantRight;
 
     const mehediOpenUpward = (mehediViewportH - (shihabTopPx + mehediBarH) < 240) && shihabTopPx > 260;
-    shihabMenuEl.style.top = mehediOpenUpward ? "auto" : "calc(100% + 7px)";
-    shihabMenuEl.style.bottom = mehediOpenUpward ? "calc(100% + 7px)" : "auto";
+    const shihabWantMenuTop = mehediOpenUpward ? "auto" : "calc(100% + 7px)";
+    const mehediWantMenuBottom = mehediOpenUpward ? "calc(100% + 7px)" : "auto";
+    if (shihabMenuEl.style.top !== shihabWantMenuTop) shihabMenuEl.style.top = shihabWantMenuTop;
+    if (shihabMenuEl.style.bottom !== mehediWantMenuBottom) shihabMenuEl.style.bottom = mehediWantMenuBottom;
 
-    shihabMenuEl.style.display = shihabDropdownOpen ? "block" : "none";
+    const shihabWantMenuDisplay = shihabDropdownOpen ? "block" : "none";
+    if (shihabMenuEl.style.display !== shihabWantMenuDisplay) {
+      shihabMenuEl.style.display = shihabWantMenuDisplay;
+    }
+
     if (shihabDropdownOpen) {
-      shihabClearElementChildren(shihabMenuEl);
       const mehediLiveCaption = shihabExtractBestVideoTitle(shihabTargetVideo, shihabStreams[0]);
+      const shihabHeaderTitle = mehediLiveCaption || "MHS Stream Sniffer";
+      if (shihabRefs.shihabMenuHeaderDiv && shihabRefs.shihabMenuHeaderDiv.title !== shihabHeaderTitle) {
+        shihabRefs.shihabMenuHeaderDiv.title = shihabHeaderTitle;
+      }
 
-      const shihabHeaderDiv = document.createElement("div");
-      shihabHeaderDiv.className = "shihab-menu-head";
-      shihabHeaderDiv.title = mehediLiveCaption || "MHS Stream Sniffer";
+      const shihabIsDrmStream = Boolean(
+        shihabPageHasDrmProtectedMedia || (shihabTargetVideo && shihabTargetVideo.mediaKeys)
+      );
+      let mehediNextMenuSig = "";
+      if (mehediSnifferRows.length === 0) {
+        mehediNextMenuSig = `EMPTY|${shihabIsDrmStream ? 1 : 0}|${mehediDetectedDrmKeySystem || ""}`;
+      } else {
+        const shihabSigParts = [shihabHeaderTitle];
+        for (const shihabEntry of mehediSnifferRows) {
+          const mehediS = shihabEntry.mehediStream || {};
+          const shihabSz = mehediS.mehediDisplaySizeBytes > 0 ? mehediS.mehediDisplaySizeBytes : (mehediS.shihabSizeBytes || -1);
+          shihabSigParts.push(
+            `${shihabEntry.mehediIsAudio ? 1 : 0}:${shihabEntry.shihabBadge}:${shihabEntry.shihabLabel}:${mehediS.shihabStreamUrl || ""}:${shihabSz}:${mehediS.mehediAudioCompanionUrl || ""}`
+          );
+        }
+        mehediNextMenuSig = shihabSigParts.join("|");
+      }
 
-      const mehediHeadLeft = document.createElement("span");
-      mehediHeadLeft.textContent = "MHS STREAM SNIFFER";
+      // If pointer is pressed inside the dropdown, defer DOM patching until pointerup (capped at 3s safety timeout) so clicks NEVER drop or shift!
+      if (mehediPointerDownInMenuAtMs > 0 && (Date.now() - mehediPointerDownInMenuAtMs) < 3000) {
+        if (mehediNextMenuSig !== shihabLastRenderedMenuSig) {
+          shihabDeferredMenuRender = true;
+        }
+        return;
+      }
+      mehediPointerDownInMenuAtMs = 0;
 
-      const shihabHeadRight = document.createElement("div");
-      shihabHeadRight.className = "mehedi-head-right";
-      const mehediQualTxt = document.createElement("span");
-      mehediQualTxt.textContent = "SELECT QUALITY";
-      shihabHeadRight.appendChild(mehediQualTxt);
-      shihabHeadRight.appendChild(shihabRefs.mehediRetrackBtn);
-      shihabHeadRight.appendChild(shihabRefs.shihabCloseBtn);
+      shihabRenderedMenuRows = mehediSnifferRows;
+      shihabRenderedMenuTargetVideo = shihabTargetVideo;
 
-      shihabHeaderDiv.appendChild(mehediHeadLeft);
-      shihabHeaderDiv.appendChild(shihabHeadRight);
-      shihabMenuEl.appendChild(shihabHeaderDiv);
+      // Fast path: ZERO DOM mutations when menu contents are unchanged (eliminates hover blinking & scroll resets!)
+      if (mehediNextMenuSig === shihabLastRenderedMenuSig) {
+        return;
+      }
+      shihabLastRenderedMenuSig = mehediNextMenuSig;
+
+      const shihabRowsBox = shihabRefs.shihabMenuRowsEl;
+      if (!shihabRowsBox) return;
 
       if (mehediSnifferRows.length === 0) {
+        shihabClearElementChildren(shihabRowsBox);
         const mehediEmptyRow = document.createElement("div");
         mehediEmptyRow.className = "shihab-item";
+        mehediEmptyRow.dataset.shihabEmptyRow = "1";
         const shihabEmptySpan = document.createElement("span");
         shihabEmptySpan.className = "mehedi-name";
-        const shihabIsDrmStream = Boolean(
-          shihabPageHasDrmProtectedMedia || (shihabTargetVideo && shihabTargetVideo.mediaKeys)
-        );
         shihabEmptySpan.textContent = shihabIsDrmStream
           ? (mehediDetectedDrmKeySystem
               ? `Protected (DRM — Encrypted Media Stream: ${mehediDetectedDrmKeySystem})`
               : "Protected (DRM — Encrypted Media Stream)")
           : "No direct HTTP stream exposed — click ↻ to re-track";
         mehediEmptyRow.appendChild(shihabEmptySpan);
-        mehediEmptyRow.addEventListener("click", async (shihabEv) => {
-          shihabEv.preventDefault();
-          shihabEv.stopPropagation();
-          await mehediTriggerActiveVideoRetrack(true);
-        });
-        shihabMenuEl.appendChild(mehediEmptyRow);
+        shihabRowsBox.appendChild(mehediEmptyRow);
       } else {
-        for (const shihabEntry of mehediSnifferRows) {
-          const shihabRow = document.createElement("div");
-          shihabRow.className = "shihab-item";
+        // Clear stale empty-state placeholder if transitioning from 0 -> N rows
+        if (shihabRowsBox.firstChild && shihabRowsBox.firstChild.dataset && shihabRowsBox.firstChild.dataset.shihabEmptyRow === "1") {
+          shihabClearElementChildren(shihabRowsBox);
+        }
 
-          const mehediLeftGrp = document.createElement("div");
-          mehediLeftGrp.className = "mehedi-left-group";
-
-          const shihabKindPill = document.createElement("span");
-          shihabKindPill.className = "shihab-kind-pill " + (shihabEntry.mehediIsAudio ? "mehedi-kind-audio" : "mehedi-kind-video");
-          shihabKindPill.textContent = shihabEntry.shihabBadge;
-
-          const mehediNameSpan = document.createElement("span");
-          mehediNameSpan.className = "mehedi-name";
-          mehediNameSpan.textContent = shihabEntry.shihabLabel;
-
+        // Patch existing .shihab-item DOM nodes IN-PLACE so hover state & in-flight clicks NEVER reset!
+        const shihabExistingCount = shihabRowsBox.children.length;
+        for (let mehediIdx = 0; mehediIdx < mehediSnifferRows.length; mehediIdx++) {
+          const shihabEntry = mehediSnifferRows[mehediIdx];
           const mehediStreamObj = shihabEntry.mehediStream;
           const shihabBytes = mehediStreamObj.mehediDisplaySizeBytes > 0
             ? mehediStreamObj.mehediDisplaySizeBytes
             : mehediStreamObj.shihabSizeBytes;
           const mehediSizeHint = shihabFormatBytesHuman(shihabBytes);
-          mehediNameSpan.title = mehediLiveCaption
+          const shihabRowTooltip = mehediLiveCaption
             ? (mehediSizeHint ? `${mehediLiveCaption} (${mehediSizeHint})` : mehediLiveCaption)
             : shihabEntry.shihabLabel;
+          const mehediPillClass = "shihab-kind-pill " + (shihabEntry.mehediIsAudio ? "mehedi-kind-audio" : "mehedi-kind-video");
 
-          mehediLeftGrp.appendChild(shihabKindPill);
-          mehediLeftGrp.appendChild(mehediNameSpan);
+          let shihabRow = mehediIdx < shihabExistingCount ? shihabRowsBox.children[mehediIdx] : null;
+          if (!shihabRow || !shihabRow.__shihabRowRefs) {
+            shihabRow = document.createElement("div");
+            shihabRow.className = "shihab-item";
 
-          const shihabDlSpan = document.createElement("span");
-          shihabDlSpan.className = "shihab-dl-action";
-          shihabDlSpan.textContent = "Download";
+            const mehediLeftGrp = document.createElement("div");
+            mehediLeftGrp.className = "mehedi-left-group";
 
-          shihabRow.appendChild(mehediLeftGrp);
-          shihabRow.appendChild(shihabDlSpan);
+            const shihabKindPill = document.createElement("span");
+            const mehediNameSpan = document.createElement("span");
+            mehediNameSpan.className = "mehedi-name";
 
-          shihabRow.addEventListener("click", (mehediClickEv) => {
-            mehediClickEv.preventDefault();
-            mehediClickEv.stopPropagation();
-            shihabDropdownOpen = false;
-            mehediLockedDropdownVideoEl = null;
-            mehediTriggerStreamDownload(mehediStreamObj, shihabTargetVideo);
-            shihabRenderFloatingIdmVideoPanel();
-          });
-          shihabMenuEl.appendChild(shihabRow);
+            mehediLeftGrp.appendChild(shihabKindPill);
+            mehediLeftGrp.appendChild(mehediNameSpan);
+
+            const shihabDlSpan = document.createElement("span");
+            shihabDlSpan.className = "shihab-dl-action";
+            shihabDlSpan.textContent = "Download";
+
+            shihabRow.appendChild(mehediLeftGrp);
+            shihabRow.appendChild(shihabDlSpan);
+            shihabRow.__shihabRowRefs = { shihabKindPill, mehediNameSpan };
+            shihabRowsBox.appendChild(shihabRow);
+          }
+
+          shihabRow.dataset.shihabRowIdx = String(mehediIdx);
+          const mehediR = shihabRow.__shihabRowRefs;
+          if (mehediR.shihabKindPill.className !== mehediPillClass) {
+            mehediR.shihabKindPill.className = mehediPillClass;
+          }
+          if (mehediR.shihabKindPill.textContent !== shihabEntry.shihabBadge) {
+            mehediR.shihabKindPill.textContent = shihabEntry.shihabBadge;
+          }
+          if (mehediR.mehediNameSpan.textContent !== shihabEntry.shihabLabel) {
+            mehediR.mehediNameSpan.textContent = shihabEntry.shihabLabel;
+          }
+          if (mehediR.mehediNameSpan.title !== shihabRowTooltip) {
+            mehediR.mehediNameSpan.title = shihabRowTooltip;
+          }
+        }
+
+        // Remove only extra trailing rows if the list shrank
+        while (shihabRowsBox.children.length > mehediSnifferRows.length) {
+          shihabRowsBox.removeChild(shihabRowsBox.children[shihabRowsBox.children.length - 1]);
         }
       }
     }
@@ -2519,6 +3010,8 @@
     if (mehediRawExt === "m3u8") shihabExt = ".mp4";
     else if (mehediRawExt === "webm") shihabExt = ".webm";
     else if (mehediRawExt === "mkv") shihabExt = ".mkv";
+    else if (mehediRawExt === "mov") shihabExt = ".mov";
+    else if (mehediRawExt === "m4v") shihabExt = ".m4v";
     else if (mehediRawExt === "mp3") shihabExt = ".mp3";
     else if (mehediRawExt === "m4a" || shihabIsAud) shihabExt = ".m4a";
 
@@ -2532,11 +3025,12 @@
         chrome.runtime.sendMessage({
           shihabCmd: "mehedi_send_download_now",
           shihabUrl: shihabStreamEntry.shihabStreamUrl,
-          mehediReferrer: shihabStreamEntry.mehediCapturedReferer || location.href,
+          mehediReferrer: shihabStreamEntry.mehediCapturedReferer || shihabSafeHttpRef(),
           shihabFileName: mehediFinalFileName,
+          mehediMimeType: shihabStreamEntry.mehediMimeType || (mehediRawExt === "m3u8" ? "application/vnd.apple.mpegurl" : ""),
           shihabFileSize: shihabStreamEntry.shihabSizeBytes || -1,
           mehediTabTitle: shihabRealTitle || document.title || "",
-          shihabOrigin: shihabStreamEntry.shihabOrigin || location.origin || "",
+          shihabOrigin: shihabStreamEntry.shihabOrigin || shihabSafeHttpOrg(),
           mehediOmitCookies: shihabStreamEntry.mehediOmitCookies,
           mehediUserAgent: shihabStreamEntry.mehediCustomUserAgent || "",
           mehediAudioCompanionUrl: shihabStreamEntry.mehediAudioCompanionUrl || "",
@@ -2855,14 +3349,14 @@
       if (shihabMsg.shihabForceKey) {
         mehediConfiguredForceKey = String(shihabMsg.shihabForceKey);
       }
-      shihabRenderFloatingIdmVideoPanel();
+      shihabScheduleFloatingPanelRender();
       shihabReply({ ok: true });
       return false;
     }
 
     if (shihabMsg && shihabMsg.shihabCmd === "mehedi_trigger_page_retrack") {
       try {
-        window.postMessage({ __shihabMehediContentPing: true }, "*");
+        window.postMessage({ __shihabMehediContentPing: true, shihabIsInitialSync: false }, "*");
       } catch (_) {}
       const shihabRetrackYtId = shihabExtractCurrentPageYouTubeVideoId();
       if (shihabRetrackYtId) {
@@ -2875,9 +3369,6 @@
     }
 
     if (shihabMsg && shihabMsg.shihabCmd === "mehedi_exec_tab_relay_job") {
-      if (window !== window.top) {
-        return false;
-      }
       mehediExecuteTabRelayJobInPageContext(shihabMsg.mehediJob)
         .then(() => shihabReply({ ok: true }))
         .catch(() => shihabReply({ ok: false }));
@@ -2918,6 +3409,8 @@
           if (shihabRawE === "m3u8") mehediExtDot = ".mp4";
           else if (shihabRawE === "webm") mehediExtDot = ".webm";
           else if (shihabRawE === "mkv") mehediExtDot = ".mkv";
+          else if (shihabRawE === "mov") mehediExtDot = ".mov";
+          else if (shihabRawE === "m4v") mehediExtDot = ".m4v";
           else if (shihabRawE === "mp3") mehediExtDot = ".mp3";
           else if (shihabRawE === "m4a" || mehediIsAud) mehediExtDot = ".m4a";
 
@@ -3047,10 +3540,11 @@
 
   function mehediMediaLifecycleListener(shihabEv) {
     if (mehediInstanceDisposed) return;
-    if (shihabEv.target && shihabEv.target.tagName === "VIDEO") {
-      mehediEnsureVideoUidAndInspect(shihabEv.target, false);
+    const shihabTarget = (shihabEv && typeof shihabEv.composedPath === "function" ? shihabEv.composedPath()[0] : shihabEv.target) || (shihabEv && shihabEv.target);
+    if (shihabTarget && shihabTarget.tagName === "VIDEO") {
+      mehediEnsureVideoUidAndInspect(shihabTarget, false);
       if (shihabEv.type === "play" || shihabEv.type === "playing") {
-        mehediLastSelectedVideoEl = shihabEv.target;
+        mehediLastSelectedVideoEl = shihabTarget;
       }
       shihabRefreshBackgroundStreamsThrottled(false);
       shihabScheduleFloatingPanelRender();
@@ -3088,6 +3582,33 @@
     }
   }
 
+  function shihabClearMenuPointerLockNow() {
+    if (shihabPointerReleaseTimerId) {
+      clearTimeout(shihabPointerReleaseTimerId);
+      shihabPointerReleaseTimerId = null;
+    }
+    mehediPointerDownInMenuAtMs = 0;
+    shihabDeferredMenuRender = false;
+  }
+
+  // Keep pointer lock for a brief 80ms grace window after pointerup/mouseup so touch/pen compatibility `click` ALWAYS fires before deferred row updates!
+  function shihabReleaseMenuPointerLock() {
+    if (!mehediPointerDownInMenuAtMs) return;
+    if (shihabPointerReleaseTimerId) {
+      clearTimeout(shihabPointerReleaseTimerId);
+    }
+    shihabPointerReleaseTimerId = setTimeout(() => {
+      shihabPointerReleaseTimerId = null;
+      mehediPointerDownInMenuAtMs = 0;
+      if (shihabDeferredMenuRender) {
+        shihabDeferredMenuRender = false;
+        if (!mehediInstanceDisposed && shihabDropdownOpen) {
+          shihabScheduleFloatingPanelRender();
+        }
+      }
+    }, 80);
+  }
+
   function mehediDisposeCurrentInstance() {
     if (mehediInstanceDisposed) {
       if (mehediShadowHost) {
@@ -3098,6 +3619,11 @@
     }
     mehediInstanceDisposed = true;
     mehediPointerInsideBar = false;
+    shihabClearMenuPointerLockNow();
+    shihabHasHiddenVideoInDom = false;
+    shihabLastRenderedMenuSig = "";
+    shihabRenderedMenuRows = [];
+    shihabRenderedMenuTargetVideo = null;
     if (shihabRenderRafId) {
       try { cancelAnimationFrame(shihabRenderRafId); } catch (_) {}
       shihabRenderRafId = 0;
@@ -3125,6 +3651,10 @@
     }
     window.removeEventListener("pointerdown", mehediCloseDropdownOnOutsideEvent, true);
     window.removeEventListener("keydown", mehediCloseDropdownOnOutsideEvent, true);
+    window.removeEventListener("pointerup", shihabReleaseMenuPointerLock, true);
+    window.removeEventListener("pointercancel", shihabReleaseMenuPointerLock, true);
+    window.removeEventListener("mouseup", shihabReleaseMenuPointerLock, true);
+    window.removeEventListener("blur", shihabReleaseMenuPointerLock);
     window.removeEventListener("pointerover", mehediTrackPointerOverVideo, { capture: true });
     window.removeEventListener("pointermove", mehediTrackPointerOverVideo, { capture: true });
     window.removeEventListener("scroll", shihabScheduleFloatingPanelRender, { capture: true });
@@ -3209,7 +3739,7 @@
           shihabQualityLabel: "Google Drive Original",
           shihabDisplayName: titleClean,
           mehediResolvedFileName: titleClean.endsWith(".mp4") ? titleClean : `${titleClean}.mp4`,
-          mehediCapturedReferer: location.href,
+          mehediCapturedReferer: shihabSafeHttpRef(),
           mehediOmitCookies: false
         });
       }
@@ -3235,7 +3765,7 @@
     } catch (_) {}
 
     try {
-      window.postMessage({ __shihabMehediContentPing: true }, "*");
+      window.postMessage({ __shihabMehediContentPing: true, shihabIsInitialSync: true }, "*");
     } catch (_) {}
 
     const shihabInitialYtId = shihabExtractCurrentPageYouTubeVideoId();
@@ -3248,18 +3778,62 @@
     });
 
     shihabDomObserver = new MutationObserver((mehediRecords) => {
-      if (mehediInstanceDisposed) return;
-      if (
-        Array.isArray(mehediRecords) &&
-        mehediRecords.length > 0 &&
-        mehediRecords.every((shihabRec) =>
-          (mehediShadowHost && (shihabRec.target === mehediShadowHost || mehediShadowHost.contains(shihabRec.target))) ||
-          (mehediUpdateToastHost && (shihabRec.target === mehediUpdateToastHost || mehediUpdateToastHost.contains(shihabRec.target)))
-        )
-      ) {
-        return;
+      if (mehediInstanceDisposed || !Array.isArray(mehediRecords) || mehediRecords.length === 0) return;
+      let shihabHasRelevant = false;
+      for (const shihabRec of mehediRecords) {
+        const mehediT = shihabRec && shihabRec.target;
+        if (!mehediT) continue;
+        if (
+          (mehediShadowHost && (mehediT === mehediShadowHost || mehediShadowHost.contains(mehediT))) ||
+          (mehediUpdateToastHost && (mehediT === mehediUpdateToastHost || mehediUpdateToastHost.contains(mehediT)))
+        ) {
+          continue;
+        }
+        if (shihabRec.type === "attributes") {
+          // Ignore 60fps Video.js progress-bar / feed animation style & class churn — react only to video/source/iframe or modal/container ancestors wrapping the active/hidden video!
+          const mehediTag = mehediT.tagName ? mehediT.tagName.toUpperCase() : "";
+          if (mehediTag === "VIDEO" || mehediTag === "SOURCE" || mehediTag === "IFRAME") {
+            shihabHasRelevant = true;
+            break;
+          }
+          if (mehediT !== document.body && mehediT !== document.documentElement) {
+            if (mehediLastSelectedVideoEl && typeof mehediT.contains === "function" && mehediT.contains(mehediLastSelectedVideoEl)) {
+              shihabHasRelevant = true;
+              break;
+            }
+            if (shihabHasHiddenVideoInDom && typeof mehediT.querySelector === "function" && mehediT.querySelector("video")) {
+              shihabHasRelevant = true;
+              break;
+            }
+          }
+          continue;
+        }
+        if (shihabRec.type === "childList") {
+          if (!mehediLastSelectedVideoEl || !mehediLastSelectedVideoEl.isConnected) {
+            shihabHasRelevant = true;
+            break;
+          }
+          const mehediContainsMediaNode = (shihabList) => {
+            if (!shihabList) return false;
+            for (const shihabN of shihabList) {
+              if (!shihabN || shihabN.nodeType !== 1) continue;
+              const mehediNt = shihabN.tagName ? shihabN.tagName.toUpperCase() : "";
+              if (mehediNt === "VIDEO" || mehediNt === "SOURCE" || mehediNt === "IFRAME") return true;
+              if (shihabN.shadowRoot) return true;
+              if (typeof shihabN.matches === "function" && shihabN.matches(SHIHAB_SHADOW_VIDEO_HOSTS_SELECTOR)) return true;
+              if (typeof shihabN.querySelector === "function" && shihabN.querySelector("video, iframe, " + SHIHAB_SHADOW_VIDEO_HOSTS_SELECTOR)) return true;
+            }
+            return false;
+          };
+          if (mehediContainsMediaNode(shihabRec.addedNodes) || mehediContainsMediaNode(shihabRec.removedNodes)) {
+            shihabHasRelevant = true;
+            break;
+          }
+        }
       }
-      shihabScheduleFloatingPanelRender();
+      if (shihabHasRelevant) {
+        shihabScheduleFloatingPanelRender();
+      }
     });
 
     if (window === window.top) {
@@ -3291,6 +3865,10 @@
 
     window.addEventListener("pointerdown", mehediCloseDropdownOnOutsideEvent, { capture: true, passive: true });
     window.addEventListener("keydown", mehediCloseDropdownOnOutsideEvent, { capture: true, passive: true });
+    window.addEventListener("pointerup", shihabReleaseMenuPointerLock, { capture: true, passive: true });
+    window.addEventListener("pointercancel", shihabReleaseMenuPointerLock, { capture: true, passive: true });
+    window.addEventListener("mouseup", shihabReleaseMenuPointerLock, { capture: true, passive: true });
+    window.addEventListener("blur", shihabReleaseMenuPointerLock, { passive: true });
     window.addEventListener("pointerover", mehediTrackPointerOverVideo, { capture: true, passive: true });
     window.addEventListener("pointermove", mehediTrackPointerOverVideo, { capture: true, passive: true });
     window.addEventListener("scroll", shihabScheduleFloatingPanelRender, { capture: true, passive: true });

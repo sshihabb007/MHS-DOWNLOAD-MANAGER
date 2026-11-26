@@ -78,6 +78,25 @@ namespace ShihabMehediIDM
             return end >= start;
         }
 
+        private static bool HasEncryptedHlsKeyTag(string shihabManifestText)
+        {
+            if (string.IsNullOrEmpty(shihabManifestText)) return false;
+            string[] mehediLines = shihabManifestText.Split(new char[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            for (int shihabI = 0; shihabI < mehediLines.Length; shihabI++)
+            {
+                string mehediLine = mehediLines[shihabI].Trim();
+                if (mehediLine.StartsWith("#EXT-X-KEY:", StringComparison.OrdinalIgnoreCase) ||
+                    mehediLine.StartsWith("#EXT-X-SESSION-KEY:", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (mehediLine.IndexOf("METHOD=NONE", StringComparison.OrdinalIgnoreCase) < 0)
+                    {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
         private void ExecuteMehediHlsStreamDownload(
             ShihabDownloadItem shihabItem,
             string mehediPlaylistUrl,
@@ -87,8 +106,7 @@ namespace ShihabMehediIDM
         {
             string shihabManifestText = DownloadMehediText(mehediPlaylistUrl, shihabItem, mehediToken);
             if (mehediToken.IsCancellationRequested) return;
-            if (shihabManifestText.IndexOf("#EXT-X-KEY", StringComparison.OrdinalIgnoreCase) >= 0 &&
-                shihabManifestText.IndexOf("METHOD=NONE", StringComparison.OrdinalIgnoreCase) < 0)
+            if (HasEncryptedHlsKeyTag(shihabManifestText))
             {
                 throw new InvalidOperationException("Protected/encrypted HLS stream cannot be downloaded (DRM/encryption measures are respected).");
             }
@@ -192,8 +210,7 @@ namespace ShihabMehediIDM
         {
             string shihabManifestText = DownloadMehediText(shihabMediaPlaylistUrl, mehediItem, mehediToken);
             if (mehediToken.IsCancellationRequested) return;
-            if (shihabManifestText.IndexOf("#EXT-X-KEY", StringComparison.OrdinalIgnoreCase) >= 0 &&
-                shihabManifestText.IndexOf("METHOD=NONE", StringComparison.OrdinalIgnoreCase) < 0)
+            if (HasEncryptedHlsKeyTag(shihabManifestText))
             {
                 throw new InvalidOperationException("Protected/encrypted HLS stream cannot be downloaded (DRM/encryption measures are respected).");
             }
@@ -595,8 +612,40 @@ namespace ShihabMehediIDM
                         long.TryParse(shihabMatch.Groups[1].Value, NumberStyles.None, CultureInfo.InvariantCulture, out mehediBw);
                     }
                     Match mehediAudAttr = HlsAudioAttrRegex.Match(shihabLine);
-                    string shihabNext = mehediLines[mehediI + 1].Trim();
-                    if (!shihabNext.StartsWith("#") && mehediBw >= shihabBestBw)
+                    int shihabNextIdx = mehediI + 1;
+                    bool mehediHitNextStreamInf = false;
+                    while (shihabNextIdx < mehediLines.Length)
+                    {
+                        string mehediPeek = mehediLines[shihabNextIdx].Trim();
+                        if (string.IsNullOrEmpty(mehediPeek))
+                        {
+                            shihabNextIdx++;
+                            continue;
+                        }
+                        if (mehediPeek.StartsWith("#EXT-X-STREAM-INF", StringComparison.OrdinalIgnoreCase))
+                        {
+                            mehediHitNextStreamInf = true;
+                            break;
+                        }
+                        if (mehediPeek.StartsWith("#"))
+                        {
+                            shihabNextIdx++;
+                            continue;
+                        }
+                        break;
+                    }
+                    if (mehediHitNextStreamInf)
+                    {
+                        mehediI = shihabNextIdx - 1;
+                        continue;
+                    }
+                    if (shihabNextIdx >= mehediLines.Length)
+                    {
+                        break;
+                    }
+                    string shihabNext = mehediLines[shihabNextIdx].Trim();
+                    mehediI = shihabNextIdx;
+                    if (!string.IsNullOrEmpty(shihabNext) && !shihabNext.StartsWith("#") && mehediBw >= shihabBestBw)
                     {
                         Uri mehediResolved;
                         if (Uri.TryCreate(shihabBase, shihabNext, out mehediResolved) &&

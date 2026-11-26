@@ -607,7 +607,7 @@ namespace ShihabMehediIDM
 
                 if (mehediProbe.MehediSuccess)
                 {
-                    if (mehediProbe.MehediIsHlsPlaylist || effectiveUrl.IndexOf(".m3u8", StringComparison.OrdinalIgnoreCase) >= 0)
+                    if (shihabItem.MehediIsHlsStream || mehediProbe.MehediIsHlsPlaylist || effectiveUrl.IndexOf(".m3u8", StringComparison.OrdinalIgnoreCase) >= 0)
                     {
                         shihabItem.MehediIsHlsStream = true;
                         ExecuteMehediHlsStreamDownload(shihabItem, mehediProbe.ShihabFinalUrl, mehediItemTempDir, mehediToken, handle);
@@ -693,7 +693,7 @@ namespace ShihabMehediIDM
                             mehediProbe.MehediSuggestedFileName);
                     }
                 }
-                else if (effectiveUrl.IndexOf(".m3u8", StringComparison.OrdinalIgnoreCase) >= 0)
+                else if (shihabItem.MehediIsHlsStream || effectiveUrl.IndexOf(".m3u8", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
                     shihabItem.MehediIsHlsStream = true;
                     ExecuteMehediHlsStreamDownload(shihabItem, effectiveUrl, mehediItemTempDir, mehediToken, handle);
