@@ -6,20 +6,29 @@ using System.Runtime.InteropServices;
 using System.Runtime.Serialization.Json;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 using ShihabMehediShared;
 
 namespace ShihabMehediIDM
 {
     public class ShihabStateStore
     {
+        private static readonly DataContractJsonSerializer ConfigSerializer =
+            new DataContractJsonSerializer(typeof(MehediAppConfiguration));
+        private static readonly DataContractJsonSerializer DbSerializer =
+            new DataContractJsonSerializer(typeof(ShihabDownloadDatabase));
+
         private static readonly Regex EmbeddedUrlRx = new Regex(
             @"(?:https?|ftps?|magnet):(?://|\?)[^\s<>""'`\)\]]+",
-            RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant,
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
             TimeSpan.FromMilliseconds(250));
+
+        private static int _bridgeTokenRotationEpoch;
 
         private readonly object _shihabSyncLock = new object();
         private string _cachedBridgeToken = "";
-        private DateTime _cachedBridgeTokenWriteUtc = DateTime.MinValue;
+        private int _cachedBridgeTokenEpoch = -1;
+        private string _lastPersistedBridgeToken = "";
         public string MehediBaseDirectory { get; private set; }
         public string ShihabConfigFilePath { get; private set; }
         public string MehediDownloadsFilePath { get; private set; }
@@ -77,8 +86,7 @@ namespace ShihabMehediIDM
                         byte[] mehediBytes = StripShihabUtf8Bom(File.ReadAllBytes(ShihabConfigFilePath));
                         using (MemoryStream shihabMs = new MemoryStream(mehediBytes))
                         {
-                            DataContractJsonSerializer mehediSer = new DataContractJsonSerializer(typeof(MehediAppConfiguration));
-                            MehediAppConfiguration shihabLoaded = mehediSer.ReadObject(shihabMs) as MehediAppConfiguration;
+                            MehediAppConfiguration shihabLoaded = ConfigSerializer.ReadObject(shihabMs) as MehediAppConfiguration;
                             if (shihabLoaded != null)
                             {
                                 NormalizeLoadedConfiguration(shihabLoaded);
@@ -212,6 +220,18 @@ namespace ShihabMehediIDM
             if (string.IsNullOrWhiteSpace(shihabLoaded.MehediAutoCaptureExtensions)) shihabLoaded.MehediAutoCaptureExtensions = MehediAppConfiguration.DefaultShihabAutoCaptureExtensions;
             if (string.IsNullOrWhiteSpace(shihabLoaded.ShihabExcludedSitesSpaceSeparated)) shihabLoaded.ShihabExcludedSitesSpaceSeparated = MehediAppConfiguration.DefaultMehediExcludedSites;
             if (shihabLoaded.MehediLocalBridgePort <= 0) shihabLoaded.MehediLocalBridgePort = 45779;
+            if (!string.IsNullOrWhiteSpace(shihabLoaded.ShihabLocalBridgeToken))
+            {
+                string unsealedBridgeTok = ShihabSecretsVault.UnprotectSecret(shihabLoaded.ShihabLocalBridgeToken).Trim();
+                if (!string.IsNullOrWhiteSpace(unsealedBridgeTok))
+                {
+                    shihabLoaded.ShihabLocalBridgeToken = unsealedBridgeTok;
+                }
+                else
+                {
+                    shihabLoaded.ShihabLocalBridgeToken = "";
+                }
+            }
             if (string.IsNullOrWhiteSpace(shihabLoaded.ShihabLocalBridgeToken))
             {
                 string existingTok = TryReadExistingBridgeTokenFile();
@@ -264,16 +284,16 @@ namespace ShihabMehediIDM
         {
             lock (_shihabSyncLock)
             {
+                int curEpoch = Volatile.Read(ref _bridgeTokenRotationEpoch);
+                if (!string.IsNullOrEmpty(_cachedBridgeToken) && _cachedBridgeTokenEpoch == curEpoch)
+                {
+                    return _cachedBridgeToken;
+                }
                 try
                 {
                     string tokPath = Path.Combine(MehediBaseDirectory, "bridge.token");
                     if (File.Exists(tokPath))
                     {
-                        DateTime writeUtc = File.GetLastWriteTimeUtc(tokPath);
-                        if (!string.IsNullOrEmpty(_cachedBridgeToken) && writeUtc == _cachedBridgeTokenWriteUtc)
-                        {
-                            return _cachedBridgeToken;
-                        }
                         string existing = File.ReadAllText(tokPath, Encoding.UTF8).Trim();
                         if (!string.IsNullOrWhiteSpace(existing))
                         {
@@ -282,7 +302,8 @@ namespace ShihabMehediIDM
                                 ShihabSecretsVault.ApplyRestrictedUserFileAcl(tokPath);
                             }
                             _cachedBridgeToken = existing;
-                            _cachedBridgeTokenWriteUtc = File.GetLastWriteTimeUtc(tokPath);
+                            _cachedBridgeTokenEpoch = Volatile.Read(ref _bridgeTokenRotationEpoch);
+                            _lastPersistedBridgeToken = existing;
                             return existing;
                         }
                     }
@@ -290,15 +311,16 @@ namespace ShihabMehediIDM
                     MehediAppConfiguration cfg = LoadShihabConfig();
                     if (string.IsNullOrWhiteSpace(cfg.ShihabLocalBridgeToken))
                     {
-                        cfg.ShihabLocalBridgeToken = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
+                        cfg.ShihabLocalBridgeToken = ShihabSecretsVault.GenerateSecureRandomHexToken(32);
                         SaveMehediConfig(cfg);
                     }
                     else
                     {
-                        WriteProtectedTokenFile(tokPath, cfg.ShihabLocalBridgeToken);
+                        PersistBridgeTokenAtomically(tokPath, cfg.ShihabLocalBridgeToken);
+                        _lastPersistedBridgeToken = cfg.ShihabLocalBridgeToken;
                     }
                     _cachedBridgeToken = cfg.ShihabLocalBridgeToken;
-                    try { if (File.Exists(tokPath)) _cachedBridgeTokenWriteUtc = File.GetLastWriteTimeUtc(tokPath); } catch { }
+                    _cachedBridgeTokenEpoch = Volatile.Read(ref _bridgeTokenRotationEpoch);
                     return cfg.ShihabLocalBridgeToken;
                 }
                 catch
@@ -307,12 +329,12 @@ namespace ShihabMehediIDM
                     {
                         return _cachedBridgeToken;
                     }
-                    return Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
+                    return ShihabSecretsVault.GenerateSecureRandomHexToken(32);
                 }
             }
         }
 
-        private static void WriteProtectedTokenFile(string tokPath, string token)
+        private static void PersistBridgeTokenAtomically(string tokPath, string token)
         {
             string tmp = tokPath + "." + Path.GetRandomFileName() + ".tmp";
             try
@@ -320,7 +342,6 @@ namespace ShihabMehediIDM
                 File.WriteAllText(tmp, token, new UTF8Encoding(false));
                 ShihabSecretsVault.ApplyRestrictedUserFileAcl(tmp);
                 ReplaceFileAtomically(tmp, tokPath);
-                ShihabSecretsVault.ApplyRestrictedUserFileAcl(tokPath);
             }
             catch
             {
@@ -353,37 +374,47 @@ namespace ShihabMehediIDM
                 string mehediTmp = ShihabConfigFilePath + "." + Path.GetRandomFileName() + ".tmp";
                 try
                 {
-                    if (string.IsNullOrWhiteSpace(shihabCfg.ShihabLocalBridgeToken))
+                    string plainBridgeToken = !string.IsNullOrWhiteSpace(shihabCfg.ShihabLocalBridgeToken)
+                        ? ShihabSecretsVault.UnprotectSecret(shihabCfg.ShihabLocalBridgeToken).Trim()
+                        : "";
+                    if (string.IsNullOrWhiteSpace(plainBridgeToken))
                     {
                         string existingTok = TryReadExistingBridgeTokenFile();
-                        shihabCfg.ShihabLocalBridgeToken = !string.IsNullOrWhiteSpace(existingTok)
+                        plainBridgeToken = !string.IsNullOrWhiteSpace(existingTok)
                             ? existingTok
-                            : (Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N"));
+                            : ShihabSecretsVault.GenerateSecureRandomHexToken(32);
                     }
+                    shihabCfg.ShihabLocalBridgeToken = plainBridgeToken;
+
                     ShihabSecretsVault.SealConfigurationSecrets(shihabCfg);
                     Directory.CreateDirectory(MehediBaseDirectory);
-                    WriteProtectedTokenFile(Path.Combine(MehediBaseDirectory, "bridge.token"), shihabCfg.ShihabLocalBridgeToken);
 
-                    // Serialize a snapshot of quota history so concurrent workers cannot throw during enumeration
-                    List<ShihabQuotaBucketEntry> originalQuota = shihabCfg.ShihabQuotaHistory;
-                    try
+                    string tokPath = Path.Combine(MehediBaseDirectory, "bridge.token");
+                    bool tokenChanged = !string.Equals(_lastPersistedBridgeToken, plainBridgeToken, StringComparison.Ordinal);
+                    if (tokenChanged || !File.Exists(tokPath))
                     {
-                        shihabCfg.ShihabQuotaHistory = shihabCfg.CloneQuotaHistorySnapshot();
-                        using (FileStream shihabFs = new FileStream(mehediTmp, FileMode.Create, FileAccess.Write, FileShare.None))
+                        PersistBridgeTokenAtomically(tokPath, plainBridgeToken);
+                        _lastPersistedBridgeToken = plainBridgeToken;
+                        if (tokenChanged)
                         {
-                            DataContractJsonSerializer mehediSer = new DataContractJsonSerializer(typeof(MehediAppConfiguration));
-                            mehediSer.WriteObject(shihabFs, shihabCfg);
-                            shihabFs.Flush(true);
+                            Interlocked.Increment(ref _bridgeTokenRotationEpoch);
                         }
                     }
-                    finally
+                    _cachedBridgeToken = plainBridgeToken;
+                    _cachedBridgeTokenEpoch = Volatile.Read(ref _bridgeTokenRotationEpoch);
+
+                    // Serialize a shallow clone so live in-memory _mehediConfig fields are never mutated during disk flush
+                    MehediAppConfiguration serializableSnapshot = shihabCfg.CloneShallowForSerialization();
+                    serializableSnapshot.ShihabQuotaHistory = shihabCfg.CloneQuotaHistorySnapshot();
+                    serializableSnapshot.ShihabLocalBridgeToken = ShihabSecretsVault.ProtectSecret(plainBridgeToken);
+                    using (FileStream shihabFs = new FileStream(mehediTmp, FileMode.Create, FileAccess.Write, FileShare.None))
                     {
-                        shihabCfg.ShihabQuotaHistory = originalQuota;
+                        ConfigSerializer.WriteObject(shihabFs, serializableSnapshot);
+                        shihabFs.Flush(true);
                     }
 
                     ShihabSecretsVault.ApplyRestrictedUserFileAcl(mehediTmp);
                     ReplaceFileAtomically(mehediTmp, ShihabConfigFilePath);
-                    ShihabSecretsVault.ApplyRestrictedUserFileAcl(ShihabConfigFilePath);
                 }
                 catch
                 {
@@ -403,8 +434,7 @@ namespace ShihabMehediIDM
                         byte[] shihabBytes = StripShihabUtf8Bom(File.ReadAllBytes(MehediDownloadsFilePath));
                         using (MemoryStream mehediMs = new MemoryStream(shihabBytes))
                         {
-                            DataContractJsonSerializer shihabSer = new DataContractJsonSerializer(typeof(ShihabDownloadDatabase));
-                            ShihabDownloadDatabase mehediDb = shihabSer.ReadObject(mehediMs) as ShihabDownloadDatabase;
+                            ShihabDownloadDatabase mehediDb = DbSerializer.ReadObject(mehediMs) as ShihabDownloadDatabase;
                             if (mehediDb != null && mehediDb.ShihabItems != null)
                             {
                                 for (int shihabI = 0; shihabI < mehediDb.ShihabItems.Count; shihabI++)
@@ -475,13 +505,11 @@ namespace ShihabMehediIDM
                     }
                     using (FileStream shihabFs = new FileStream(mehediTmp, FileMode.Create, FileAccess.Write, FileShare.None))
                     {
-                        DataContractJsonSerializer mehediSer = new DataContractJsonSerializer(typeof(ShihabDownloadDatabase));
-                        mehediSer.WriteObject(shihabFs, shihabDb);
+                        DbSerializer.WriteObject(shihabFs, shihabDb);
                         shihabFs.Flush(true);
                     }
                     ShihabSecretsVault.ApplyRestrictedUserFileAcl(mehediTmp);
                     ReplaceFileAtomically(mehediTmp, MehediDownloadsFilePath);
-                    ShihabSecretsVault.ApplyRestrictedUserFileAcl(MehediDownloadsFilePath);
                 }
                 catch
                 {

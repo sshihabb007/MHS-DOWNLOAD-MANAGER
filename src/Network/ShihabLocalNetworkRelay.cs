@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Net;
@@ -9,6 +11,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
+using System.Threading.Tasks;
 using ShihabMehediShared;
 
 namespace ShihabMehediIDM
@@ -17,28 +20,47 @@ namespace ShihabMehediIDM
     public static class ShihabLocalNetworkRelay
     {
         private const int MaxPacBytes = 512 * 1024;
+        private const int MaxConcurrentRelayConnections = 48;
+        private const int RelayCopyBufferBytes = 16384;
+        private const long DnsCacheTtlMs = 60000L;
+        private const int DnsCacheMaxEntries = 512;
+
+        private sealed class CachedDnsEntry
+        {
+            public IPAddress Address;
+            public long ExpiresAtMs;
+        }
+
         private static readonly Regex PacRuleRx = new Regex(
             @"if\s*\(([^\{;]+)\)\s*\{?\s*return\s+[""']([^""']+)[""']",
-            RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant,
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
             TimeSpan.FromMilliseconds(250));
         private static readonly Regex PacAllRetRx = new Regex(
             @"return\s+[""']([^""']+)[""']",
-            RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant,
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
             TimeSpan.FromMilliseconds(250));
         private static readonly Regex PacDomainIsRx = new Regex(
             @"dnsDomainIs\s*\(\s*host\s*,\s*[""']([^""']+)[""']\s*\)",
-            RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant,
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
             TimeSpan.FromMilliseconds(250));
         private static readonly Regex PacShExpMatchRx = new Regex(
             @"shExpMatch\s*\(\s*(host|url)\s*,\s*[""']([^""']+)[""']\s*\)",
-            RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant,
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
             TimeSpan.FromMilliseconds(250));
 
         private static readonly object _relayLock = new object();
+        private static readonly SemaphoreSlim _connectionGate = new SemaphoreSlim(MaxConcurrentRelayConnections, MaxConcurrentRelayConnections);
+        private static readonly Stopwatch _relayClock = Stopwatch.StartNew();
+        private static readonly ConcurrentDictionary<string, CachedDnsEntry> _dnsCache =
+            new ConcurrentDictionary<string, CachedDnsEntry>(StringComparer.OrdinalIgnoreCase);
+        private static readonly RNGCryptoServiceProvider _staticRng = new RNGCryptoServiceProvider();
+        private static int _dnsTxCounter;
+
         private static TcpListener _listener;
         private static int _boundPort;
-        private static readonly string _proxyUser = "mhsrelay";
-        private static readonly string _proxyPass = GenerateRelayPassword();
+        private static string _relaySessionUser = "";
+        private static string _relaySessionPass = "";
+        private static string _expectedProxyAuthHeader = "";
         private static MehediAppConfiguration _activeConfig;
         private static string _cachedPacUrl = "";
         private static string _cachedPacScript = "";
@@ -69,14 +91,39 @@ namespace ShihabMehediIDM
             catch { }
         }
 
-        private static string GenerateRelayPassword()
+        private static string GenerateEphemeralTokenHex(int byteCount)
         {
-            byte[] buf = new byte[24];
-            using (RNGCryptoServiceProvider rng = new RNGCryptoServiceProvider())
+            byte[] buf = new byte[byteCount];
+            _staticRng.GetBytes(buf);
+            char[] hex = new char[byteCount * 2];
+            const string digits = "0123456789abcdef";
+            for (int i = 0; i < byteCount; i++)
             {
-                rng.GetBytes(buf);
+                hex[i * 2] = digits[(buf[i] >> 4) & 0x0F];
+                hex[i * 2 + 1] = digits[buf[i] & 0x0F];
             }
-            return Convert.ToBase64String(buf).Replace('+', '-').Replace('/', '_').TrimEnd('=');
+            return new string(hex);
+        }
+
+        private static void RotateRelaySessionCredentialsLocked()
+        {
+            _relaySessionUser = "mhs_" + GenerateEphemeralTokenHex(8);
+            _relaySessionPass = GenerateEphemeralTokenHex(16);
+            _expectedProxyAuthHeader = "Basic " + Convert.ToBase64String(
+                Encoding.ASCII.GetBytes(_relaySessionUser + ":" + _relaySessionPass));
+        }
+
+        private static void GetRelaySessionCredentials(out string user, out string pass)
+        {
+            lock (_relayLock)
+            {
+                if (string.IsNullOrEmpty(_relaySessionUser) || string.IsNullOrEmpty(_relaySessionPass))
+                {
+                    RotateRelaySessionCredentialsLocked();
+                }
+                user = _relaySessionUser;
+                pass = _relaySessionPass;
+            }
         }
 
         private static void HandleNetworkStateChanged(object sender, EventArgs e)
@@ -121,8 +168,11 @@ namespace ShihabMehediIDM
             _activeConfig = cfg;
             int port = EnsureStarted(cfg);
             if (port <= 0) return null;
+            string user;
+            string pass;
+            GetRelaySessionCredentials(out user, out pass);
             WebProxy wp = new WebProxy("http://127.0.0.1:" + port);
-            wp.Credentials = new NetworkCredential(_proxyUser, _proxyPass);
+            wp.Credentials = new NetworkCredential(user, pass);
             return wp;
         }
 
@@ -150,7 +200,10 @@ namespace ShihabMehediIDM
             }
             int port = EnsureStarted(cfg);
             if (port <= 0) return "";
-            return string.Format(CultureInfo.InvariantCulture, "http://{0}:{1}@127.0.0.1:{2}", _proxyUser, _proxyPass, port);
+            string sessionUser;
+            string sessionPass;
+            GetRelaySessionCredentials(out sessionUser, out sessionPass);
+            return string.Format(CultureInfo.InvariantCulture, "http://{0}:{1}@127.0.0.1:{2}", sessionUser, sessionPass, port);
         }
 
         public static void Stop()
@@ -163,6 +216,9 @@ namespace ShihabMehediIDM
                     _listener = null;
                 }
                 _boundPort = 0;
+                _relaySessionUser = "";
+                _relaySessionPass = "";
+                _expectedProxyAuthHeader = "";
             }
         }
 
@@ -174,6 +230,7 @@ namespace ShihabMehediIDM
                 if (_listener != null && _boundPort > 0) return _boundPort;
                 try
                 {
+                    RotateRelaySessionCredentialsLocked();
                     _listener = new TcpListener(IPAddress.Loopback, 0);
                     ShihabMehediShared.ShihabProcessAndPathSafety.DisableListenerInheritance(_listener);
                     _listener.Start();
@@ -204,8 +261,21 @@ namespace ShihabMehediIDM
                 {
                     if (_listener != expectedListener || expectedListener == null) break;
                     client = expectedListener.AcceptTcpClient();
+                    if (!_connectionGate.Wait(0))
+                    {
+                        try { client.Close(); } catch { }
+                        continue;
+                    }
                     TcpClient captured = client;
-                    ThreadPool.QueueUserWorkItem(delegate { HandleClient(captured); });
+                    try
+                    {
+                        Task.Run(delegate { return HandleClientWithGateAsync(captured); });
+                    }
+                    catch
+                    {
+                        try { _connectionGate.Release(); } catch { }
+                        try { captured.Close(); } catch { }
+                    }
                 }
                 catch (ObjectDisposedException)
                 {
@@ -242,7 +312,90 @@ namespace ShihabMehediIDM
             return s;
         }
 
-        private static void HandleClient(TcpClient client)
+        private static async Task HandleClientWithGateAsync(TcpClient client)
+        {
+            try
+            {
+                await HandleClientAsync(client).ConfigureAwait(false);
+            }
+            finally
+            {
+                try { _connectionGate.Release(); } catch { }
+            }
+        }
+
+        private static bool ReadHttpRequestHeaders(
+            NetworkStream rawNet,
+            out string firstLine,
+            out List<string> headerLines,
+            out byte[] leftoverBytes)
+        {
+            firstLine = "";
+            headerLines = new List<string>();
+            leftoverBytes = null;
+            byte[] buf = new byte[4096];
+            using (MemoryStream acc = new MemoryStream(1024))
+            {
+                int headerEnd = -1;
+                int sepLen = 4;
+                while (acc.Length < 65536)
+                {
+                    int read = rawNet.Read(buf, 0, buf.Length);
+                    if (read <= 0) break;
+                    int prevLen = (int)acc.Length;
+                    acc.Write(buf, 0, read);
+                    byte[] raw = acc.GetBuffer();
+                    int totalLen = (int)acc.Length;
+                    int scanStart = Math.Max(0, prevLen - 3);
+                    for (int i = scanStart; i <= totalLen - 4; i++)
+                    {
+                        if (raw[i] == '\r' && raw[i + 1] == '\n' && raw[i + 2] == '\r' && raw[i + 3] == '\n')
+                        {
+                            headerEnd = i;
+                            sepLen = 4;
+                            break;
+                        }
+                    }
+                    if (headerEnd < 0)
+                    {
+                        for (int i = Math.Max(0, prevLen - 1); i <= totalLen - 2; i++)
+                        {
+                            if (raw[i] == '\n' && raw[i + 1] == '\n')
+                            {
+                                headerEnd = i;
+                                sepLen = 2;
+                                break;
+                            }
+                        }
+                    }
+                    if (headerEnd >= 0) break;
+                }
+                if (headerEnd <= 0) return false;
+                byte[] all = acc.GetBuffer();
+                int allLen = (int)acc.Length;
+                int bodyStart = headerEnd + sepLen;
+                if (bodyStart < allLen)
+                {
+                    int extra = allLen - bodyStart;
+                    leftoverBytes = new byte[extra];
+                    Buffer.BlockCopy(all, bodyStart, leftoverBytes, 0, extra);
+                }
+                string headerText = Encoding.ASCII.GetString(all, 0, headerEnd);
+                string[] lines = headerText.Split(new string[] { "\r\n", "\n" }, StringSplitOptions.None);
+                if (lines.Length == 0 || string.IsNullOrWhiteSpace(lines[0])) return false;
+                firstLine = lines[0].Trim();
+                for (int i = 1; i < lines.Length && headerLines.Count < 120; i++)
+                {
+                    if (!string.IsNullOrEmpty(lines[i]))
+                    {
+                        headerLines.Add(lines[i]);
+                    }
+                }
+                return true;
+            }
+        }
+
+        private static async Task HandleClientAsync(TcpClient client)
         {
             using (client)
             {
@@ -251,24 +404,20 @@ namespace ShihabMehediIDM
                     client.ReceiveTimeout = 30000;
                     client.SendTimeout = 30000;
                     using (NetworkStream rawNet = client.GetStream())
-                    using (BufferedStream clientStream = new BufferedStream(rawNet, 8192))
                     {
-                        List<string> headerLines = new List<string>();
-                        string firstLine = ReadAsciiLine(clientStream);
-                        if (string.IsNullOrEmpty(firstLine)) return;
-                        while (true)
+                        string firstLine;
+                        List<string> headerLines;
+                        byte[] leftoverBytes;
+                        if (!ReadHttpRequestHeaders(rawNet, out firstLine, out headerLines, out leftoverBytes))
                         {
-                            string h = ReadAsciiLine(clientStream);
-                            if (string.IsNullOrEmpty(h)) break;
-                            headerLines.Add(h);
-                            if (headerLines.Count > 120) return;
+                            return;
                         }
 
                         if (!ValidateRelayAuth(headerLines))
                         {
-                            byte[] unauth = Encoding.ASCII.GetBytes("HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"MHS\"\r\nConnection: close\r\n\r\n");
-                            clientStream.Write(unauth, 0, unauth.Length);
-                            clientStream.Flush();
+                            byte[] unauth = Encoding.ASCII.GetBytes("HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"MHS\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                            await rawNet.WriteAsync(unauth, 0, unauth.Length).ConfigureAwait(false);
+                            await rawNet.FlushAsync().ConfigureAwait(false);
                             return;
                         }
 
@@ -299,9 +448,9 @@ namespace ShihabMehediIDM
                             }
                             if (string.IsNullOrEmpty(targetHost) || targetPort <= 0 || targetPort > 65535)
                             {
-                                byte[] badReq = Encoding.ASCII.GetBytes("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
-                                clientStream.Write(badReq, 0, badReq.Length);
-                                clientStream.Flush();
+                                byte[] badReq = Encoding.ASCII.GetBytes("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                                await rawNet.WriteAsync(badReq, 0, badReq.Length).ConfigureAwait(false);
+                                await rawNet.FlushAsync().ConfigureAwait(false);
                                 return;
                             }
                             fullUrl = "https://" + targetHost + ":" + targetPort.ToString(CultureInfo.InvariantCulture) + "/";
@@ -359,7 +508,7 @@ namespace ShihabMehediIDM
                                         }
                                         reqSb.Append("Connection: close\r\n\r\n");
                                         byte[] outHdr = Encoding.ASCII.GetBytes(reqSb.ToString());
-                                        upStream.Write(outHdr, 0, outHdr.Length);
+                                        await upStream.WriteAsync(outHdr, 0, outHdr.Length).ConfigureAwait(false);
 
                                         long contentLen = 0;
                                         for (int i = 0; i < headerLines.Count; i++)
@@ -371,19 +520,28 @@ namespace ShihabMehediIDM
                                         }
                                         if (contentLen > 0)
                                         {
-                                            byte[] bBuf = new byte[16384];
                                             long rem = contentLen;
-                                            while (rem > 0)
+                                            if (leftoverBytes != null && leftoverBytes.Length > 0)
                                             {
-                                                int r = clientStream.Read(bBuf, 0, (int)Math.Min(bBuf.Length, rem));
-                                                if (r <= 0) break;
-                                                upStream.Write(bBuf, 0, r);
-                                                rem -= r;
+                                                int take = (int)Math.Min(leftoverBytes.Length, rem);
+                                                await upStream.WriteAsync(leftoverBytes, 0, take).ConfigureAwait(false);
+                                                rem -= take;
+                                            }
+                                            if (rem > 0)
+                                            {
+                                                byte[] bBuf = new byte[RelayCopyBufferBytes];
+                                                while (rem > 0)
+                                                {
+                                                    int r = await rawNet.ReadAsync(bBuf, 0, (int)Math.Min(bBuf.Length, rem)).ConfigureAwait(false);
+                                                    if (r <= 0) break;
+                                                    await upStream.WriteAsync(bBuf, 0, r).ConfigureAwait(false);
+                                                    rem -= r;
+                                                }
                                             }
                                         }
-                                        upStream.Flush();
-                                        upStream.CopyTo(clientStream);
-                                        clientStream.Flush();
+                                        await upStream.FlushAsync().ConfigureAwait(false);
+                                        await upStream.CopyToAsync(rawNet, RelayCopyBufferBytes).ConfigureAwait(false);
+                                        await rawNet.FlushAsync().ConfigureAwait(false);
                                     }
                                     return;
                                 }
@@ -396,9 +554,16 @@ namespace ShihabMehediIDM
                             if (method == "CONNECT")
                             {
                                 byte[] okBytes = Encoding.ASCII.GetBytes("HTTP/1.1 200 Connection Established\r\n\r\n");
-                                clientStream.Write(okBytes, 0, okBytes.Length);
-                                clientStream.Flush();
-                                PumpBidirectional(clientStream, upStream);
+                                await rawNet.WriteAsync(okBytes, 0, okBytes.Length).ConfigureAwait(false);
+                                await rawNet.FlushAsync().ConfigureAwait(false);
+                                if (leftoverBytes != null && leftoverBytes.Length > 0)
+                                {
+                                    await upStream.WriteAsync(leftoverBytes, 0, leftoverBytes.Length).ConfigureAwait(false);
+                                    await upStream.FlushAsync().ConfigureAwait(false);
+                                }
+                                // Pump directly on raw full-duplex NetworkStreams (never wrap in BufferedStream,
+                                // whose ReadAsync/WriteAsync share a single active semaphore in .NET 4.8 and deadlock).
+                                await PumpBidirectionalAsync(rawNet, upStream).ConfigureAwait(false);
                             }
                             else
                             {
@@ -417,7 +582,7 @@ namespace ShihabMehediIDM
                                 }
                                 reqSb.Append("Connection: close\r\n\r\n");
                                 byte[] outHdr = Encoding.ASCII.GetBytes(reqSb.ToString());
-                                upStream.Write(outHdr, 0, outHdr.Length);
+                                await upStream.WriteAsync(outHdr, 0, outHdr.Length).ConfigureAwait(false);
 
                                 long contentLen = 0;
                                 for (int i = 0; i < headerLines.Count; i++)
@@ -429,19 +594,28 @@ namespace ShihabMehediIDM
                                 }
                                 if (contentLen > 0)
                                 {
-                                    byte[] bBuf = new byte[16384];
                                     long rem = contentLen;
-                                    while (rem > 0)
+                                    if (leftoverBytes != null && leftoverBytes.Length > 0)
                                     {
-                                        int r = clientStream.Read(bBuf, 0, (int)Math.Min(bBuf.Length, rem));
-                                        if (r <= 0) break;
-                                        upStream.Write(bBuf, 0, r);
-                                        rem -= r;
+                                        int take = (int)Math.Min(leftoverBytes.Length, rem);
+                                        await upStream.WriteAsync(leftoverBytes, 0, take).ConfigureAwait(false);
+                                        rem -= take;
+                                    }
+                                    if (rem > 0)
+                                    {
+                                        byte[] bBuf = new byte[RelayCopyBufferBytes];
+                                        while (rem > 0)
+                                        {
+                                            int r = await rawNet.ReadAsync(bBuf, 0, (int)Math.Min(bBuf.Length, rem)).ConfigureAwait(false);
+                                            if (r <= 0) break;
+                                            await upStream.WriteAsync(bBuf, 0, r).ConfigureAwait(false);
+                                            rem -= r;
+                                        }
                                     }
                                 }
-                                upStream.Flush();
-                                upStream.CopyTo(clientStream);
-                                clientStream.Flush();
+                                await upStream.FlushAsync().ConfigureAwait(false);
+                                await upStream.CopyToAsync(rawNet, RelayCopyBufferBytes).ConfigureAwait(false);
+                                await rawNet.FlushAsync().ConfigureAwait(false);
                             }
                         }
                     }
@@ -460,7 +634,12 @@ namespace ShihabMehediIDM
 
         private static bool ValidateRelayAuth(List<string> headers)
         {
-            string expected = "Basic " + Convert.ToBase64String(Encoding.ASCII.GetBytes(_proxyUser + ":" + _proxyPass));
+            string expected;
+            lock (_relayLock)
+            {
+                expected = _expectedProxyAuthHeader;
+            }
+            if (string.IsNullOrEmpty(expected)) return false;
             for (int i = 0; i < headers.Count; i++)
             {
                 if (headers[i].StartsWith("Proxy-Authorization:", StringComparison.OrdinalIgnoreCase))
@@ -484,24 +663,33 @@ namespace ShihabMehediIDM
                     if (b != '\r') ms.WriteByte((byte)b);
                 }
                 if (ms.Length == 0) return "";
-                return Encoding.ASCII.GetString(ms.ToArray());
+                return Encoding.ASCII.GetString(ms.GetBuffer(), 0, (int)ms.Length);
             }
         }
 
-        private static void PumpBidirectional(Stream a, Stream b)
+        private static async Task CopyDirectionSafeAsync(Stream src, Stream dst)
         {
-            using (ManualResetEvent done = new ManualResetEvent(false))
+            try
             {
-                ThreadPool.QueueUserWorkItem(delegate
-                {
-                    try { a.CopyTo(b); } catch { }
-                    try { b.Close(); } catch { }
-                    try { done.Set(); } catch { }
-                });
-                try { b.CopyTo(a); } catch { }
-                try { a.Close(); } catch { }
-                done.WaitOne(5000);
+                await src.CopyToAsync(dst, RelayCopyBufferBytes).ConfigureAwait(false);
             }
+            catch
+            {
+            }
+        }
+
+        private static async Task PumpBidirectionalAsync(Stream a, Stream b)
+        {
+            Task aToB = CopyDirectionSafeAsync(a, b);
+            Task bToA = CopyDirectionSafeAsync(b, a);
+            await Task.WhenAny(aToB, bToA).ConfigureAwait(false);
+            try { a.Close(); } catch { }
+            try { b.Close(); } catch { }
+            try
+            {
+                await Task.WhenAll(aToB, bToA).ConfigureAwait(false);
+            }
+            catch { }
         }
 
         private static Socket ConnectUpstreamSocket(string targetHost, int targetPort, string fullUrl, MehediAppConfiguration cfg)
@@ -669,7 +857,9 @@ namespace ShihabMehediIDM
                         return body;
                     }
                 }
-                if (File.Exists(pacUrl))
+                if (!ShihabProcessAndPathSafety.IsUncOrDevicePath(pacUrl) &&
+                    !ShihabProcessAndPathSafety.HasAnyReparsePointInPath(pacUrl) &&
+                    File.Exists(pacUrl))
                 {
                     FileInfo fi = new FileInfo(pacUrl);
                     string ext = Path.GetExtension(pacUrl) ?? "";
@@ -967,6 +1157,40 @@ namespace ShihabMehediIDM
             return QueryPlainUdpDnsA(domain, dnsServerIp, null);
         }
 
+        private static void StorePlainDnsCacheEntry(string cacheKey, IPAddress address, long nowMs)
+        {
+            if (string.IsNullOrEmpty(cacheKey) || address == null) return;
+            if (_dnsCache.Count >= DnsCacheMaxEntries)
+            {
+                string oldestKey = null;
+                long oldestExpiry = long.MaxValue;
+                foreach (KeyValuePair<string, CachedDnsEntry> kv in _dnsCache)
+                {
+                    CachedDnsEntry e = kv.Value;
+                    if (e == null || e.ExpiresAtMs <= nowMs)
+                    {
+                        CachedDnsEntry removed;
+                        _dnsCache.TryRemove(kv.Key, out removed);
+                    }
+                    else if (e.ExpiresAtMs < oldestExpiry)
+                    {
+                        oldestExpiry = e.ExpiresAtMs;
+                        oldestKey = kv.Key;
+                    }
+                }
+                if (_dnsCache.Count >= DnsCacheMaxEntries && oldestKey != null)
+                {
+                    CachedDnsEntry removed;
+                    _dnsCache.TryRemove(oldestKey, out removed);
+                }
+            }
+            _dnsCache[cacheKey] = new CachedDnsEntry
+            {
+                Address = address,
+                ExpiresAtMs = nowMs + DnsCacheTtlMs
+            };
+        }
+
         public static IPAddress QueryPlainUdpDnsA(string domain, string dnsServerIp, IPAddress boundLocalIp)
         {
             try
@@ -974,12 +1198,21 @@ namespace ShihabMehediIDM
                 IPAddress serverAddr;
                 if (string.IsNullOrWhiteSpace(domain) || !IPAddress.TryParse(dnsServerIp, out serverAddr)) return null;
 
-                byte[] txBytes = new byte[2];
-                using (RNGCryptoServiceProvider rng = new RNGCryptoServiceProvider())
+                string normalizedDomain = domain.Trim().TrimEnd('.').ToLowerInvariant();
+                string cacheKey = serverAddr.ToString() + "|" + normalizedDomain + "|" + (boundLocalIp != null ? boundLocalIp.ToString() : "");
+                long nowMs = _relayClock.ElapsedMilliseconds;
+                CachedDnsEntry cached;
+                if (_dnsCache.TryGetValue(cacheKey, out cached) && cached != null && cached.Address != null && cached.ExpiresAtMs > nowMs)
                 {
-                    rng.GetBytes(txBytes);
+                    return cached.Address;
                 }
-                ushort txId = (ushort)((txBytes[0] << 8) | txBytes[1]);
+
+                byte[] txBytes = new byte[2];
+                _staticRng.GetBytes(txBytes);
+                int seq = Interlocked.Increment(ref _dnsTxCounter);
+                ushort txId = (ushort)(((txBytes[0] << 8) | txBytes[1]) ^ (seq & 0xFFFF));
+                txBytes[0] = (byte)((txId >> 8) & 0xFF);
+                txBytes[1] = (byte)(txId & 0xFF);
 
                 byte[] pkt;
                 using (MemoryStream q = new MemoryStream())
@@ -987,7 +1220,7 @@ namespace ShihabMehediIDM
                     q.WriteByte(txBytes[0]);
                     q.WriteByte(txBytes[1]);
                     q.Write(new byte[] { 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, 0, 10);
-                    string[] labels = domain.Trim('.').Split('.');
+                    string[] labels = normalizedDomain.Split('.');
                     for (int i = 0; i < labels.Length; i++)
                     {
                         byte[] lb = Encoding.ASCII.GetBytes(labels[i]);
@@ -1043,7 +1276,9 @@ namespace ShihabMehediIDM
                         idx += 10;
                         if (rType == 1 && rdLen == 4 && idx + 4 <= resp.Length)
                         {
-                            return new IPAddress(new byte[] { resp[idx], resp[idx + 1], resp[idx + 2], resp[idx + 3] });
+                            IPAddress foundIp = new IPAddress(new byte[] { resp[idx], resp[idx + 1], resp[idx + 2], resp[idx + 3] });
+                            StorePlainDnsCacheEntry(cacheKey, foundIp, _relayClock.ElapsedMilliseconds);
+                            return foundIp;
                         }
                         idx += rdLen;
                     }

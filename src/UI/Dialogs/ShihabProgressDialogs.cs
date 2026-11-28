@@ -15,10 +15,47 @@ namespace ShihabMehediIDM
         public MehediDynamicSegmentEngine MehediBoundEngine { get; set; }
         public bool ShihabIsOverallBar { get; set; }
 
+        private long _lastVisualFingerprint;
+        private bool _hasVisualFingerprint;
+
+        private SolidBrush _bgBrush;
+        private SolidBrush _whiteBrush;
+        private SolidBrush _doneBrush;
+        private SolidBrush _flightBrush;
+        private SolidBrush _segFillBrush;
+        private Pen _markerPen;
+        private Pen _borderPen;
+
         public ShihabSegmentMapPanel()
         {
             DoubleBuffered = true;
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer, true);
+        }
+
+        private void EnsureGdiCache()
+        {
+            if (_bgBrush == null) _bgBrush = new SolidBrush(Color.FromArgb(24, 27, 38));
+            if (_whiteBrush == null) _whiteBrush = new SolidBrush(Color.White);
+            if (_doneBrush == null) _doneBrush = new SolidBrush(Color.FromArgb(16, 185, 129));
+            if (_flightBrush == null) _flightBrush = new SolidBrush(Color.FromArgb(56, 189, 248));
+            if (_segFillBrush == null) _segFillBrush = new SolidBrush(Color.FromArgb(124, 92, 255));
+            if (_markerPen == null) _markerPen = new Pen(Color.FromArgb(56, 189, 248), 1.5f);
+            if (_borderPen == null) _borderPen = new Pen(Color.FromArgb(42, 48, 68), 1f);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                if (_bgBrush != null) { _bgBrush.Dispose(); _bgBrush = null; }
+                if (_whiteBrush != null) { _whiteBrush.Dispose(); _whiteBrush = null; }
+                if (_doneBrush != null) { _doneBrush.Dispose(); _doneBrush = null; }
+                if (_flightBrush != null) { _flightBrush.Dispose(); _flightBrush = null; }
+                if (_segFillBrush != null) { _segFillBrush.Dispose(); _segFillBrush = null; }
+                if (_markerPen != null) { _markerPen.Dispose(); _markerPen = null; }
+                if (_borderPen != null) { _borderPen.Dispose(); _borderPen = null; }
+            }
+            base.Dispose(disposing);
         }
 
         private List<MehediSegmentChunk> SnapshotSegmentsSafe()
@@ -36,15 +73,92 @@ namespace ShihabMehediIDM
             }
         }
 
+        private long ComputeVisualFingerprint()
+        {
+            unchecked
+            {
+                long hash = -3750763034362895579L; // FNV-1a 64-bit offset basis
+                int w = ClientRectangle.Width;
+                int h = ClientRectangle.Height;
+                hash = (hash ^ w) * 1099511628211L;
+                hash = (hash ^ h) * 1099511628211L;
+                hash = (hash ^ (ShihabIsOverallBar ? 1L : 0L)) * 1099511628211L;
+
+                if (MehediBoundItem == null)
+                {
+                    return hash;
+                }
+
+                if (ShihabIsOverallBar)
+                {
+                    double pct = MehediBoundItem.GetMehediPercent();
+                    int fillW = (int)Math.Round((w * pct) / 100.0);
+                    int tenths = (int)Math.Round(pct * 10.0);
+                    hash = (hash ^ fillW) * 1099511628211L;
+                    hash = (hash ^ tenths) * 1099511628211L;
+                    return hash;
+                }
+
+                if (MehediBoundItem.ShihabIsTorrent)
+                {
+                    ShihabTorrentLiveSnapshot tSnap = ShihabTorrentLiveTelemetry.GetSnapshot(MehediBoundItem.ShihabId);
+                    if (tSnap != null && tSnap.PieceStates != null && tSnap.PieceStates.Length > 0 && w > 0)
+                    {
+                        int pc = tSnap.PieceStates.Length;
+                        hash = (hash ^ pc) * 1099511628211L;
+                        for (int px = 0; px < w; px++)
+                        {
+                            int pIdx = (int)(((long)px * pc) / w);
+                            if (pIdx >= pc) pIdx = pc - 1;
+                            byte st = tSnap.PieceStates[pIdx];
+                            if (st != 1 && st != 2) st = 0;
+                            hash = (hash ^ st) * 1099511628211L;
+                        }
+                    }
+                    return hash;
+                }
+
+                if (MehediBoundItem.ShihabTotalBytes > 0 && w > 0)
+                {
+                    long total = MehediBoundItem.ShihabTotalBytes;
+                    List<MehediSegmentChunk> snap = SnapshotSegmentsSafe();
+                    hash = (hash ^ total) * 1099511628211L;
+                    hash = (hash ^ snap.Count) * 1099511628211L;
+                    for (int i = 0; i < snap.Count; i++)
+                    {
+                        MehediSegmentChunk seg = snap[i];
+                        if (seg == null) continue;
+                        int x0 = (int)((seg.MehediStartByte * (long)w) / total);
+                        int fillW = (int)((seg.MehediDownloadedBytes * (long)w) / total);
+                        if (seg.MehediDownloadedBytes > 0 && fillW < 2) fillW = 2;
+                        hash = (hash ^ x0) * 1099511628211L;
+                        hash = (hash ^ fillW) * 1099511628211L;
+                    }
+                }
+                return hash;
+            }
+        }
+
+        public void InvalidateIfVisualChanged()
+        {
+            long fp = ComputeVisualFingerprint();
+            if (!_hasVisualFingerprint || fp != _lastVisualFingerprint)
+            {
+                _hasVisualFingerprint = true;
+                _lastVisualFingerprint = fp;
+                Invalidate();
+            }
+        }
+
         protected override void OnPaint(PaintEventArgs shihabArgs)
         {
             Graphics mehediG = shihabArgs.Graphics;
             mehediG.SmoothingMode = SmoothingMode.AntiAlias;
             Rectangle shihabRect = ClientRectangle;
-            using (SolidBrush mehediBg = new SolidBrush(Color.FromArgb(24, 27, 38)))
-            {
-                mehediG.FillRectangle(mehediBg, shihabRect);
-            }
+            if (shihabRect.Width <= 0 || shihabRect.Height <= 0) return;
+
+            EnsureGdiCache();
+            mehediG.FillRectangle(_bgBrush, shihabRect);
 
             if (MehediBoundItem != null)
             {
@@ -64,16 +178,13 @@ namespace ShihabMehediIDM
                         }
                     }
                     string shihabText = string.Format("{0:0.0}%", mehediPct);
-                    using (SolidBrush shihabWhite = new SolidBrush(Color.White))
-                    {
-                        SizeF mehediSz = mehediG.MeasureString(shihabText, ShihabThemePalette.UiSemibold85Font);
-                        mehediG.DrawString(
-                            shihabText,
-                            ShihabThemePalette.UiSemibold85Font,
-                            shihabWhite,
-                            (shihabRect.Width - mehediSz.Width) / 2f,
-                            (shihabRect.Height - mehediSz.Height) / 2f);
-                    }
+                    SizeF mehediSz = mehediG.MeasureString(shihabText, ShihabThemePalette.UiSemibold85Font);
+                    mehediG.DrawString(
+                        shihabText,
+                        ShihabThemePalette.UiSemibold85Font,
+                        _whiteBrush,
+                        (shihabRect.Width - mehediSz.Width) / 2f,
+                        (shihabRect.Height - mehediSz.Height) / 2f);
                 }
                 else if (MehediBoundItem.ShihabIsTorrent)
                 {
@@ -81,18 +192,26 @@ namespace ShihabMehediIDM
                     if (tSnap != null && tSnap.PieceStates != null && tSnap.PieceStates.Length > 0)
                     {
                         int pc = tSnap.PieceStates.Length;
-                        using (SolidBrush doneBrush = new SolidBrush(Color.FromArgb(16, 185, 129)))
-                        using (SolidBrush flightBrush = new SolidBrush(Color.FromArgb(56, 189, 248)))
+                        int w = shihabRect.Width;
+                        int barH = Math.Max(1, shihabRect.Height - 2);
+                        byte runState = 0;
+                        int runStart = 0;
+                        for (int px = 0; px < w; px++)
                         {
-                            for (int px = 0; px < shihabRect.Width; px++)
+                            int pIdx = (int)(((long)px * pc) / w);
+                            if (pIdx >= pc) pIdx = pc - 1;
+                            byte st = tSnap.PieceStates[pIdx];
+                            if (st != 1 && st != 2) st = 0;
+                            if (st != runState)
                             {
-                                int pIdx = (int)(((long)px * pc) / Math.Max(1, shihabRect.Width));
-                                if (pIdx >= pc) pIdx = pc - 1;
-                                byte st = tSnap.PieceStates[pIdx];
-                                if (st == 2) mehediG.FillRectangle(doneBrush, px, 1, 1, shihabRect.Height - 2);
-                                else if (st == 1) mehediG.FillRectangle(flightBrush, px, 1, 1, shihabRect.Height - 2);
+                                if (runState == 2) mehediG.FillRectangle(_doneBrush, runStart, 1, px - runStart, barH);
+                                else if (runState == 1) mehediG.FillRectangle(_flightBrush, runStart, 1, px - runStart, barH);
+                                runState = st;
+                                runStart = px;
                             }
                         }
+                        if (runState == 2) mehediG.FillRectangle(_doneBrush, runStart, 1, w - runStart, barH);
+                        else if (runState == 1) mehediG.FillRectangle(_flightBrush, runStart, 1, w - runStart, barH);
                     }
                 }
                 else if (MehediBoundItem.ShihabTotalBytes > 0)
@@ -101,31 +220,24 @@ namespace ShihabMehediIDM
                     List<MehediSegmentChunk> mehediSnap = SnapshotSegmentsSafe();
                     if (mehediSnap.Count > 0)
                     {
-                        using (SolidBrush shihabFillBrush = new SolidBrush(Color.FromArgb(124, 92, 255)))
-                        using (Pen mehediMarkerPen = new Pen(Color.FromArgb(56, 189, 248), 1.5f))
+                        for (int shihabI = 0; shihabI < mehediSnap.Count; shihabI++)
                         {
-                            for (int shihabI = 0; shihabI < mehediSnap.Count; shihabI++)
+                            MehediSegmentChunk mehediSeg = mehediSnap[shihabI];
+                            if (mehediSeg == null) continue;
+                            int shihabX0 = (int)((mehediSeg.MehediStartByte * (long)shihabRect.Width) / shihabTotal);
+                            int mehediFillW = (int)((mehediSeg.MehediDownloadedBytes * (long)shihabRect.Width) / shihabTotal);
+                            if (mehediSeg.MehediDownloadedBytes > 0 && mehediFillW < 2) mehediFillW = 2;
+                            if (mehediFillW > 0)
                             {
-                                MehediSegmentChunk mehediSeg = mehediSnap[shihabI];
-                                if (mehediSeg == null) continue;
-                                int shihabX0 = (int)((mehediSeg.MehediStartByte * (long)shihabRect.Width) / shihabTotal);
-                                int mehediFillW = (int)((mehediSeg.MehediDownloadedBytes * (long)shihabRect.Width) / shihabTotal);
-                                if (mehediSeg.MehediDownloadedBytes > 0 && mehediFillW < 2) mehediFillW = 2;
-                                if (mehediFillW > 0)
-                                {
-                                    mehediG.FillRectangle(shihabFillBrush, shihabX0, 1, mehediFillW, shihabRect.Height - 2);
-                                }
-                                mehediG.DrawLine(mehediMarkerPen, shihabX0, 0, shihabX0, shihabRect.Height);
+                                mehediG.FillRectangle(_segFillBrush, shihabX0, 1, mehediFillW, shihabRect.Height - 2);
                             }
+                            mehediG.DrawLine(_markerPen, shihabX0, 0, shihabX0, shihabRect.Height);
                         }
                     }
                 }
             }
 
-            using (Pen shihabBorder = new Pen(Color.FromArgb(42, 48, 68), 1f))
-            {
-                mehediG.DrawRectangle(shihabBorder, 0, 0, shihabRect.Width - 1, shihabRect.Height - 1);
-            }
+            mehediG.DrawRectangle(_borderPen, 0, 0, shihabRect.Width - 1, shihabRect.Height - 1);
         }
     }
 
@@ -383,6 +495,9 @@ namespace ShihabMehediIDM
         private ListView _torrentFilesList;
         private ListView _torrentPeersList;
         private ListView _torrentTrackersList;
+        private TabPage _torrentFilesTab;
+        private TabPage _torrentPeersTab;
+        private TabPage _torrentTrackersTab;
         private Button _mehediPauseResumeBtn;
         private Button _shihabStopLiveBtn;
         private Button _shihabHideDetailsBtn;
@@ -395,6 +510,7 @@ namespace ShihabMehediIDM
         private Label _shihabDeferredRenameStatus;
         private Timer _shihabUiRefreshTimer;
         private bool _mehediDetailsExpanded = true;
+        private bool _wasHiddenOrMinimized = false;
 
         public ShihabDownloadProgressForm(
             ShihabDownloadItem shihabItem,
@@ -471,20 +587,21 @@ namespace ShihabMehediIDM
             _shihabTabs.TabPages.Add(mehediCompletionTab);
             if (_shihabItem.ShihabIsTorrent)
             {
-                TabPage tFilesTab = new TabPage("Files") { BackColor = BackColor, ForeColor = ForeColor };
-                TabPage tPeersTab = new TabPage("Peers") { BackColor = BackColor, ForeColor = ForeColor };
-                TabPage tTrackersTab = new TabPage("Trackers") { BackColor = BackColor, ForeColor = ForeColor };
-                BuildTorrentInspectorTabs(tFilesTab, tPeersTab, tTrackersTab, mehediDark);
-                _shihabTabs.TabPages.Add(tFilesTab);
-                _shihabTabs.TabPages.Add(tPeersTab);
-                _shihabTabs.TabPages.Add(tTrackersTab);
+                _torrentFilesTab = new TabPage("Files") { BackColor = BackColor, ForeColor = ForeColor };
+                _torrentPeersTab = new TabPage("Peers") { BackColor = BackColor, ForeColor = ForeColor };
+                _torrentTrackersTab = new TabPage("Trackers") { BackColor = BackColor, ForeColor = ForeColor };
+                BuildTorrentInspectorTabs(_torrentFilesTab, _torrentPeersTab, _torrentTrackersTab, mehediDark);
+                _shihabTabs.TabPages.Add(_torrentFilesTab);
+                _shihabTabs.TabPages.Add(_torrentPeersTab);
+                _shihabTabs.TabPages.Add(_torrentTrackersTab);
             }
+            _shihabTabs.SelectedIndexChanged += delegate { RefreshShihabProgressView(false); };
             shihabContentHost.Controls.Add(_shihabTabs);
             Controls.Add(shihabContentHost);
             Controls.Add(_shihabTitleBar);
 
             _shihabUiRefreshTimer = new Timer { Interval = 250 };
-            _shihabUiRefreshTimer.Tick += delegate { RefreshShihabProgressView(); };
+            _shihabUiRefreshTimer.Tick += delegate { RefreshShihabProgressView(false); };
             _shihabUiRefreshTimer.Start();
 
             FormClosed += delegate
@@ -495,7 +612,38 @@ namespace ShihabMehediIDM
                 }
             };
 
-            RefreshShihabProgressView();
+            RefreshShihabProgressView(true);
+        }
+
+        protected override void OnVisibleChanged(EventArgs e)
+        {
+            base.OnVisibleChanged(e);
+            HandleProgressVisibilityOrStateChange();
+        }
+
+        protected override void OnResize(EventArgs e)
+        {
+            base.OnResize(e);
+            HandleProgressVisibilityOrStateChange();
+        }
+
+        private void HandleProgressVisibilityOrStateChange()
+        {
+            if (IsDisposed || _shihabUiRefreshTimer == null) return;
+            bool hiddenOrMin = !Visible || WindowState == FormWindowState.Minimized;
+            if (hiddenOrMin)
+            {
+                _wasHiddenOrMinimized = true;
+                if (_shihabUiRefreshTimer.Interval != 1000)
+                {
+                    _shihabUiRefreshTimer.Interval = 1000;
+                }
+            }
+            else if (_wasHiddenOrMinimized)
+            {
+                _wasHiddenOrMinimized = false;
+                RefreshShihabProgressView(false);
+            }
         }
 
         protected override void Dispose(bool disposing)
@@ -594,6 +742,10 @@ namespace ShihabMehediIDM
                 _shihabConnectionsList.Visible = _mehediDetailsExpanded;
                 if (_shihabTabs != null) _shihabTabs.Height = _mehediDetailsExpanded ? 424 : 268;
                 Height = _mehediDetailsExpanded ? 474 : 318;
+                if (_mehediDetailsExpanded)
+                {
+                    RefreshShihabProgressView(false);
+                }
             };
 
             _shihabStopLiveBtn = ShihabThemePalette.CreateMehediStyledButton("Stop & Save MP4", ShihabThemePalette.GetMehediAccentGreen(), Color.White, 138);
@@ -616,9 +768,13 @@ namespace ShihabMehediIDM
                 }
                 else if (_shihabItem.GetShihabStatusEnum() != ShihabDownloadStatus.ShihabCompleted)
                 {
+                    if (_shihabUiRefreshTimer != null && _shihabUiRefreshTimer.Interval != 250)
+                    {
+                        _shihabUiRefreshTimer.Interval = 250;
+                    }
                     _mehediEngine.StartOrResumeMehediDownload(_shihabItem);
                 }
-                RefreshShihabProgressView();
+                RefreshShihabProgressView(false);
             };
 
             Button shihabCancelBtn = ShihabThemePalette.CreateMehediStyledButton("Cancel", ShihabThemePalette.GetMehediAccentRed(), Color.White, 112);
@@ -859,194 +1015,321 @@ namespace ShihabMehediIDM
             trackersPage.Controls.Add(_torrentTrackersList);
         }
 
+        private static void SetLabelTextIfChanged(Label lbl, string nextText)
+        {
+            if (lbl == null) return;
+            string normalized = nextText ?? "";
+            if (!string.Equals(lbl.Text, normalized, StringComparison.Ordinal))
+            {
+                lbl.Text = normalized;
+            }
+        }
+
+        private static bool UpdateListViewSubItemLazy(ListView lv, ListViewItem lvi, int subIdx, string nextText, ref bool updateStarted)
+        {
+            string normalized = nextText ?? "";
+            if (!string.Equals(lvi.SubItems[subIdx].Text, normalized, StringComparison.Ordinal))
+            {
+                if (!updateStarted)
+                {
+                    lv.BeginUpdate();
+                    updateStarted = true;
+                }
+                lvi.SubItems[subIdx].Text = normalized;
+                return true;
+            }
+            return false;
+        }
+
         private void RefreshShihabProgressView()
+        {
+            RefreshShihabProgressView(false);
+        }
+
+        private void RefreshShihabProgressView(bool forceWhileHidden)
         {
             if (IsDisposed) return;
 
             ShihabDownloadStatus mehediSt = _shihabItem.GetShihabStatusEnum();
+            bool mehediActive = _mehediEngine.IsMehediItemActive(_shihabItem.ShihabId);
+
+            if (!forceWhileHidden && (!Visible || WindowState == FormWindowState.Minimized))
+            {
+                if (mehediSt == ShihabDownloadStatus.ShihabCompleted)
+                {
+                    if (_shihabUiRefreshTimer != null) _shihabUiRefreshTimer.Stop();
+                    Close();
+                    return;
+                }
+                _wasHiddenOrMinimized = true;
+                if (_shihabUiRefreshTimer != null && _shihabUiRefreshTimer.Interval != 1000)
+                {
+                    _shihabUiRefreshTimer.Interval = 1000;
+                }
+                return;
+            }
+
+            if (_shihabUiRefreshTimer != null)
+            {
+                bool isSlowStatus = !mehediActive &&
+                    (mehediSt == ShihabDownloadStatus.ShihabPaused ||
+                     mehediSt == ShihabDownloadStatus.ShihabCompleted ||
+                     mehediSt == ShihabDownloadStatus.ShihabError);
+                int targetInterval = isSlowStatus ? 1000 : 250;
+                if (_shihabUiRefreshTimer.Interval != targetInterval)
+                {
+                    _shihabUiRefreshTimer.Interval = targetInterval;
+                }
+            }
+
             string nextProgressTitle = string.Format("{0:0.0}% — {1}", _shihabItem.GetMehediPercent(), _shihabItem.ShihabFileName);
             if (!string.Equals(Text, nextProgressTitle, StringComparison.Ordinal))
             {
                 Text = nextProgressTitle;
             }
-            _shihabStatusVal.Text = _shihabItem.ShihabStatusText;
-            _mehediFileSizeVal.Text = ShihabFormatHelpers.FormatMehediBytes(_shihabItem.ShihabTotalBytes);
-            _shihabDownloadedVal.Text = string.Format("{0} ({1:0.0}%)",
-                ShihabFormatHelpers.FormatMehediBytes(_shihabItem.MehediDownloadedBytes),
-                _shihabItem.GetMehediPercent());
 
-            if (_shihabSpeedUnitSwitcher != null && _shihabConfig != null)
+            TabPage selectedTab = _shihabTabs != null ? _shihabTabs.SelectedTab : null;
+            bool isStatusTabActive = (_shihabTabs == null || _shihabTabs.SelectedIndex == 0 || forceWhileHidden);
+
+            if (isStatusTabActive)
             {
-                _shihabSpeedUnitSwitcher.ShihabDarkMode = _shihabConfig.ShihabDarkMode;
-            }
-            if (_shihabRateLimitVal != null && _shihabConfig != null)
-            {
-                _shihabRateLimitVal.ForeColor = ShihabThemePalette.GetMehediMutedText(_shihabConfig.ShihabDarkMode);
-            }
-            bool cfgDefaultBits = ShihabFormatHelpers.IsBitsSpeedUnit(_shihabConfig != null ? _shihabConfig.ShihabDefaultSpeedUnit : null);
-            if (cfgDefaultBits != _lastConfigDefaultBitsUnit)
-            {
-                _lastConfigDefaultBitsUnit = cfgDefaultBits;
-                _useBitsSpeedUnit = cfgDefaultBits;
-                if (_shihabSpeedUnitSwitcher != null)
+                SetLabelTextIfChanged(_shihabStatusVal, _shihabItem.ShihabStatusText);
+                SetLabelTextIfChanged(_mehediFileSizeVal, ShihabFormatHelpers.FormatMehediBytes(_shihabItem.ShihabTotalBytes));
+                SetLabelTextIfChanged(_shihabDownloadedVal, string.Format("{0} ({1:0.0}%)",
+                    ShihabFormatHelpers.FormatMehediBytes(_shihabItem.MehediDownloadedBytes),
+                    _shihabItem.GetMehediPercent()));
+
+                if (_shihabSpeedUnitSwitcher != null && _shihabConfig != null)
                 {
-                    _shihabSpeedUnitSwitcher.UseBitsPerSec = _useBitsSpeedUnit;
+                    _shihabSpeedUnitSwitcher.ShihabDarkMode = _shihabConfig.ShihabDarkMode;
+                }
+                if (_shihabRateLimitVal != null && _shihabConfig != null)
+                {
+                    _shihabRateLimitVal.ForeColor = ShihabThemePalette.GetMehediMutedText(_shihabConfig.ShihabDarkMode);
+                }
+                bool cfgDefaultBits = ShihabFormatHelpers.IsBitsSpeedUnit(_shihabConfig != null ? _shihabConfig.ShihabDefaultSpeedUnit : null);
+                if (cfgDefaultBits != _lastConfigDefaultBitsUnit)
+                {
+                    _lastConfigDefaultBitsUnit = cfgDefaultBits;
+                    _useBitsSpeedUnit = cfgDefaultBits;
+                    if (_shihabSpeedUnitSwitcher != null)
+                    {
+                        _shihabSpeedUnitSwitcher.UseBitsPerSec = _useBitsSpeedUnit;
+                    }
+                }
+
+                string shihabSpd = ShihabFormatHelpers.FormatShihabSpeed(_shihabItem.ShihabCurrentSpeedBps, _useBitsSpeedUnit, false);
+                int effectiveLimitKb = 0;
+                if (_shihabItem.ShihabUseItemSpeedLimit && _shihabItem.MehediItemSpeedLimitKb > 0)
+                {
+                    effectiveLimitKb = _shihabItem.MehediItemSpeedLimitKb;
+                }
+                if (_shihabConfig.MehediGlobalSpeedLimiterEnabled && _shihabConfig.ShihabGlobalSpeedLimitKb > 0)
+                {
+                    effectiveLimitKb = effectiveLimitKb > 0
+                        ? Math.Min(effectiveLimitKb, _shihabConfig.ShihabGlobalSpeedLimitKb)
+                        : _shihabConfig.ShihabGlobalSpeedLimitKb;
+                }
+                SetLabelTextIfChanged(_shihabRateLimitVal, (!string.IsNullOrEmpty(shihabSpd) && effectiveLimitKb > 0)
+                    ? string.Format("(limit: {0})", ShihabFormatHelpers.FormatSpeedLimitCap(effectiveLimitKb, _useBitsSpeedUnit))
+                    : "");
+
+                if (_shihabStopLiveBtn != null)
+                {
+                    bool wantStopLive = _shihabItem.ShihabIsYtDlpJob && mehediActive;
+                    if (_shihabStopLiveBtn.Visible != wantStopLive)
+                    {
+                        _shihabStopLiveBtn.Visible = wantStopLive;
+                    }
+                }
+                SetLabelTextIfChanged(_mehediRateVal, string.IsNullOrEmpty(shihabSpd) ? "-" : shihabSpd);
+                SetLabelTextIfChanged(_shihabEtaVal, (mehediActive && _shihabItem.MehediEtaSeconds > 0)
+                    ? ShihabFormatHelpers.FormatMehediTimeLeft(_shihabItem.MehediEtaSeconds)
+                    : "-");
+
+                if (_shihabItem.ShihabIsTorrent)
+                {
+                    string upStr = ShihabFormatHelpers.FormatShihabSpeed(_shihabItem.ShihabTorrentUploadSpeedBps, _useBitsSpeedUnit, false);
+                    double ratio = _shihabItem.ShihabTotalBytes > 0 ? ((double)_shihabItem.ShihabTorrentUploadedBytes / (double)_shihabItem.ShihabTotalBytes) : 0.0;
+                    SetLabelTextIfChanged(_mehediResumeVal, string.Format("Yes (SHA-1 Verified)  •  Peers: {0}  •  Up: {1}  •  Ratio: {2:0.00}",
+                        _shihabItem.ShihabTorrentActivePeers,
+                        string.IsNullOrEmpty(upStr) ? ShihabFormatHelpers.FormatZeroSpeed(_useBitsSpeedUnit, true) : upStr,
+                        ratio));
+                    _mehediResumeVal.ForeColor = ShihabThemePalette.GetMehediAccentGreen();
+                }
+                else
+                {
+                    string shihabGeoInfo = ShihabGeoIpLookup.FormatCountryBadgeText(_shihabItem.ShihabServerCountryCode, _shihabItem.ShihabServerIp);
+                    SetLabelTextIfChanged(_mehediResumeVal, (_shihabItem.ShihabResumeSupported ? "Yes" : "No") +
+                        (!string.IsNullOrEmpty(shihabGeoInfo) ? ("   •   Server: " + shihabGeoInfo) : ""));
+                    _mehediResumeVal.ForeColor = _shihabItem.ShihabResumeSupported
+                        ? ShihabThemePalette.GetMehediAccentGreen()
+                        : ShihabThemePalette.GetShihabAccentAmber();
+                }
+
+                string nextPauseText = mehediActive ? "Pause" : "Start";
+                if (!string.Equals(_mehediPauseResumeBtn.Text, nextPauseText, StringComparison.Ordinal))
+                {
+                    _mehediPauseResumeBtn.Text = nextPauseText;
+                }
+                bool nextPauseEnabled = mehediSt != ShihabDownloadStatus.ShihabCompleted;
+                if (_mehediPauseResumeBtn.Enabled != nextPauseEnabled)
+                {
+                    _mehediPauseResumeBtn.Enabled = nextPauseEnabled;
+                }
+
+                _shihabOverallBar.InvalidateIfVisualChanged();
+
+                if (_mehediDetailsExpanded)
+                {
+                    _mehediSegmentsMapBar.InvalidateIfVisualChanged();
+
+                    List<MehediSegmentChunk> shihabSegs = _mehediEngine.GetItemSegmentsSnapshot(_shihabItem);
+                    bool connUpdateStarted = false;
+                    try
+                    {
+                        if (_shihabConnectionsList.Items.Count != shihabSegs.Count)
+                        {
+                            _shihabConnectionsList.BeginUpdate();
+                            connUpdateStarted = true;
+                            while (_shihabConnectionsList.Items.Count < shihabSegs.Count)
+                            {
+                                _shihabConnectionsList.Items.Add(new ListViewItem(new string[] { "", "", "", "" }));
+                            }
+                            while (_shihabConnectionsList.Items.Count > shihabSegs.Count)
+                            {
+                                _shihabConnectionsList.Items.RemoveAt(_shihabConnectionsList.Items.Count - 1);
+                            }
+                        }
+                        for (int mehediI = 0; mehediI < shihabSegs.Count; mehediI++)
+                        {
+                            MehediSegmentChunk shihabSeg = shihabSegs[mehediI];
+                            ListViewItem mehediLvi = _shihabConnectionsList.Items[mehediI];
+                            UpdateListViewSubItemLazy(_shihabConnectionsList, mehediLvi, 0, shihabSeg.ShihabSegmentIndex.ToString(), ref connUpdateStarted);
+                            UpdateListViewSubItemLazy(_shihabConnectionsList, mehediLvi, 1, shihabSeg.ShihabEndByte >= 0
+                                ? string.Format("{0} - {1}", ShihabFormatHelpers.FormatMehediBytes(shihabSeg.MehediStartByte), ShihabFormatHelpers.FormatMehediBytes(shihabSeg.ShihabEndByte))
+                                : "Stream", ref connUpdateStarted);
+                            UpdateListViewSubItemLazy(_shihabConnectionsList, mehediLvi, 2, ShihabFormatHelpers.FormatMehediBytes(shihabSeg.MehediDownloadedBytes), ref connUpdateStarted);
+                            UpdateListViewSubItemLazy(_shihabConnectionsList, mehediLvi, 3, shihabSeg.ShihabSegmentState ?? "", ref connUpdateStarted);
+                        }
+                    }
+                    finally
+                    {
+                        if (connUpdateStarted)
+                        {
+                            _shihabConnectionsList.EndUpdate();
+                        }
+                    }
                 }
             }
 
-            string shihabSpd = ShihabFormatHelpers.FormatShihabSpeed(_shihabItem.ShihabCurrentSpeedBps, _useBitsSpeedUnit, false);
-            int effectiveLimitKb = 0;
-            if (_shihabItem.ShihabUseItemSpeedLimit && _shihabItem.MehediItemSpeedLimitKb > 0)
-            {
-                effectiveLimitKb = _shihabItem.MehediItemSpeedLimitKb;
-            }
-            if (_shihabConfig.MehediGlobalSpeedLimiterEnabled && _shihabConfig.ShihabGlobalSpeedLimitKb > 0)
-            {
-                effectiveLimitKb = effectiveLimitKb > 0
-                    ? Math.Min(effectiveLimitKb, _shihabConfig.ShihabGlobalSpeedLimitKb)
-                    : _shihabConfig.ShihabGlobalSpeedLimitKb;
-            }
-            if (_shihabRateLimitVal != null)
-            {
-                _shihabRateLimitVal.Text = (!string.IsNullOrEmpty(shihabSpd) && effectiveLimitKb > 0)
-                    ? string.Format("(limit: {0})", ShihabFormatHelpers.FormatSpeedLimitCap(effectiveLimitKb, _useBitsSpeedUnit))
-                    : "";
-            }
-            bool mehediActive = _mehediEngine.IsMehediItemActive(_shihabItem.ShihabId);
-            if (_shihabStopLiveBtn != null)
-            {
-                _shihabStopLiveBtn.Visible = _shihabItem.ShihabIsYtDlpJob && mehediActive;
-            }
-            _mehediRateVal.Text = string.IsNullOrEmpty(shihabSpd) ? "-" : shihabSpd;
-            _shihabEtaVal.Text = (mehediActive && _shihabItem.MehediEtaSeconds > 0)
-                ? ShihabFormatHelpers.FormatMehediTimeLeft(_shihabItem.MehediEtaSeconds)
-                : "-";
-            string shihabGeoInfo = ShihabGeoIpLookup.FormatCountryBadgeText(_shihabItem.ShihabServerCountryCode, _shihabItem.ShihabServerIp);
-            if (_shihabItem.ShihabIsTorrent)
+            if (_shihabItem.ShihabIsTorrent &&
+                selectedTab != null &&
+                (selectedTab == _torrentFilesTab || selectedTab == _torrentPeersTab || selectedTab == _torrentTrackersTab))
             {
                 ShihabTorrentLiveSnapshot tSnap = ShihabTorrentLiveTelemetry.GetSnapshot(_shihabItem.ShihabId);
-                string upStr = ShihabFormatHelpers.FormatShihabSpeed(_shihabItem.ShihabTorrentUploadSpeedBps, _useBitsSpeedUnit, false);
-                double ratio = _shihabItem.ShihabTotalBytes > 0 ? ((double)_shihabItem.ShihabTorrentUploadedBytes / (double)_shihabItem.ShihabTotalBytes) : 0.0;
-                _mehediResumeVal.Text = string.Format("Yes (SHA-1 Verified)  •  Peers: {0}  •  Up: {1}  •  Ratio: {2:0.00}",
-                    _shihabItem.ShihabTorrentActivePeers,
-                    string.IsNullOrEmpty(upStr) ? ShihabFormatHelpers.FormatZeroSpeed(_useBitsSpeedUnit, true) : upStr,
-                    ratio);
-                _mehediResumeVal.ForeColor = ShihabThemePalette.GetMehediAccentGreen();
-                RefreshTorrentInspectorLists(tSnap);
+                RefreshTorrentInspectorLists(tSnap, selectedTab);
             }
-            else
-            {
-                _mehediResumeVal.Text = (_shihabItem.ShihabResumeSupported ? "Yes" : "No") +
-                    (!string.IsNullOrEmpty(shihabGeoInfo) ? ("   •   Server: " + shihabGeoInfo) : "");
-                _mehediResumeVal.ForeColor = _shihabItem.ShihabResumeSupported
-                    ? ShihabThemePalette.GetMehediAccentGreen()
-                    : ShihabThemePalette.GetShihabAccentAmber();
-            }
-
-            _mehediPauseResumeBtn.Text = mehediActive ? "Pause" : "Start";
-            _mehediPauseResumeBtn.Enabled = mehediSt != ShihabDownloadStatus.ShihabCompleted;
-
-            _shihabOverallBar.Invalidate();
-            _mehediSegmentsMapBar.Invalidate();
-
-            List<MehediSegmentChunk> shihabSegs = _mehediEngine.GetItemSegmentsSnapshot(_shihabItem);
-
-            _shihabConnectionsList.BeginUpdate();
-            while (_shihabConnectionsList.Items.Count < shihabSegs.Count)
-            {
-                _shihabConnectionsList.Items.Add(new ListViewItem(new string[] { "", "", "", "" }));
-            }
-            while (_shihabConnectionsList.Items.Count > shihabSegs.Count)
-            {
-                _shihabConnectionsList.Items.RemoveAt(_shihabConnectionsList.Items.Count - 1);
-            }
-            for (int mehediI = 0; mehediI < shihabSegs.Count; mehediI++)
-            {
-                MehediSegmentChunk shihabSeg = shihabSegs[mehediI];
-                ListViewItem mehediLvi = _shihabConnectionsList.Items[mehediI];
-                mehediLvi.SubItems[0].Text = shihabSeg.ShihabSegmentIndex.ToString();
-                mehediLvi.SubItems[1].Text = shihabSeg.ShihabEndByte >= 0
-                    ? string.Format("{0} - {1}", ShihabFormatHelpers.FormatMehediBytes(shihabSeg.MehediStartByte), ShihabFormatHelpers.FormatMehediBytes(shihabSeg.ShihabEndByte))
-                    : "Stream";
-                mehediLvi.SubItems[2].Text = ShihabFormatHelpers.FormatMehediBytes(shihabSeg.MehediDownloadedBytes);
-                mehediLvi.SubItems[3].Text = shihabSeg.ShihabSegmentState ?? "";
-            }
-            _shihabConnectionsList.EndUpdate();
 
             if (mehediSt == ShihabDownloadStatus.ShihabCompleted)
             {
-                _shihabUiRefreshTimer.Stop();
+                if (_shihabUiRefreshTimer != null) _shihabUiRefreshTimer.Stop();
                 Close();
             }
         }
 
-        private void RefreshTorrentInspectorLists(ShihabTorrentLiveSnapshot snap)
+        private void RefreshTorrentInspectorLists(ShihabTorrentLiveSnapshot snap, TabPage activeTab)
         {
-            if (snap == null) return;
-            if (_torrentFilesList != null)
+            if (snap == null || activeTab == null) return;
+
+            if (activeTab == _torrentFilesTab && _torrentFilesList != null)
             {
-                _torrentFilesList.BeginUpdate();
+                bool updateStarted = false;
                 try
                 {
-                    while (_torrentFilesList.Items.Count < snap.Files.Count)
-                        _torrentFilesList.Items.Add(new ListViewItem(new string[] { "", "", "", "" }));
-                    while (_torrentFilesList.Items.Count > snap.Files.Count)
-                        _torrentFilesList.Items.RemoveAt(_torrentFilesList.Items.Count - 1);
+                    if (_torrentFilesList.Items.Count != snap.Files.Count)
+                    {
+                        _torrentFilesList.BeginUpdate();
+                        updateStarted = true;
+                        while (_torrentFilesList.Items.Count < snap.Files.Count)
+                            _torrentFilesList.Items.Add(new ListViewItem(new string[] { "", "", "", "" }));
+                        while (_torrentFilesList.Items.Count > snap.Files.Count)
+                            _torrentFilesList.Items.RemoveAt(_torrentFilesList.Items.Count - 1);
+                    }
                     for (int i = 0; i < snap.Files.Count; i++)
                     {
                         ShihabTorrentFileProgressTelemetry f = snap.Files[i];
                         double pct = f.SizeBytes > 0 ? Math.Min(100.0, (f.CompletedBytes * 100.0) / f.SizeBytes) : (f.Selected ? 100.0 : 0.0);
                         ListViewItem lvi = _torrentFilesList.Items[i];
-                        lvi.SubItems[0].Text = f.Index.ToString();
-                        lvi.SubItems[1].Text = f.RelativePath;
-                        lvi.SubItems[2].Text = ShihabFormatHelpers.FormatMehediBytes(f.SizeBytes);
-                        lvi.SubItems[3].Text = f.Selected ? string.Format("{0:0.0}%", pct) : "Skipped";
+                        UpdateListViewSubItemLazy(_torrentFilesList, lvi, 0, f.Index.ToString(), ref updateStarted);
+                        UpdateListViewSubItemLazy(_torrentFilesList, lvi, 1, f.RelativePath, ref updateStarted);
+                        UpdateListViewSubItemLazy(_torrentFilesList, lvi, 2, ShihabFormatHelpers.FormatMehediBytes(f.SizeBytes), ref updateStarted);
+                        UpdateListViewSubItemLazy(_torrentFilesList, lvi, 3, f.Selected ? string.Format("{0:0.0}%", pct) : "Skipped", ref updateStarted);
                     }
                 }
-                finally { _torrentFilesList.EndUpdate(); }
+                finally
+                {
+                    if (updateStarted) _torrentFilesList.EndUpdate();
+                }
             }
-            if (_torrentPeersList != null)
+            else if (activeTab == _torrentPeersTab && _torrentPeersList != null)
             {
-                _torrentPeersList.BeginUpdate();
+                bool updateStarted = false;
                 try
                 {
-                    while (_torrentPeersList.Items.Count < snap.Peers.Count)
-                        _torrentPeersList.Items.Add(new ListViewItem(new string[] { "", "", "", "", "" }));
-                    while (_torrentPeersList.Items.Count > snap.Peers.Count)
-                        _torrentPeersList.Items.RemoveAt(_torrentPeersList.Items.Count - 1);
+                    if (_torrentPeersList.Items.Count != snap.Peers.Count)
+                    {
+                        _torrentPeersList.BeginUpdate();
+                        updateStarted = true;
+                        while (_torrentPeersList.Items.Count < snap.Peers.Count)
+                            _torrentPeersList.Items.Add(new ListViewItem(new string[] { "", "", "", "", "" }));
+                        while (_torrentPeersList.Items.Count > snap.Peers.Count)
+                            _torrentPeersList.Items.RemoveAt(_torrentPeersList.Items.Count - 1);
+                    }
                     for (int i = 0; i < snap.Peers.Count; i++)
                     {
                         ShihabTorrentPeerTelemetry p = snap.Peers[i];
                         ListViewItem lvi = _torrentPeersList.Items[i];
-                        lvi.SubItems[0].Text = p.Endpoint;
-                        lvi.SubItems[1].Text = p.ClientName;
-                        lvi.SubItems[2].Text = p.Direction + " " + p.Flags;
-                        lvi.SubItems[3].Text = ShihabFormatHelpers.FormatMehediBytes(p.DownloadedBytes);
-                        lvi.SubItems[4].Text = ShihabFormatHelpers.FormatMehediBytes(p.UploadedBytes);
+                        UpdateListViewSubItemLazy(_torrentPeersList, lvi, 0, p.Endpoint, ref updateStarted);
+                        UpdateListViewSubItemLazy(_torrentPeersList, lvi, 1, p.ClientName, ref updateStarted);
+                        UpdateListViewSubItemLazy(_torrentPeersList, lvi, 2, p.Direction + " " + p.Flags, ref updateStarted);
+                        UpdateListViewSubItemLazy(_torrentPeersList, lvi, 3, ShihabFormatHelpers.FormatMehediBytes(p.DownloadedBytes), ref updateStarted);
+                        UpdateListViewSubItemLazy(_torrentPeersList, lvi, 4, ShihabFormatHelpers.FormatMehediBytes(p.UploadedBytes), ref updateStarted);
                     }
                 }
-                finally { _torrentPeersList.EndUpdate(); }
+                finally
+                {
+                    if (updateStarted) _torrentPeersList.EndUpdate();
+                }
             }
-            if (_torrentTrackersList != null)
+            else if (activeTab == _torrentTrackersTab && _torrentTrackersList != null)
             {
-                _torrentTrackersList.BeginUpdate();
+                bool updateStarted = false;
                 try
                 {
-                    while (_torrentTrackersList.Items.Count < snap.Trackers.Count)
-                        _torrentTrackersList.Items.Add(new ListViewItem(new string[] { "", "", "", "" }));
-                    while (_torrentTrackersList.Items.Count > snap.Trackers.Count)
-                        _torrentTrackersList.Items.RemoveAt(_torrentTrackersList.Items.Count - 1);
+                    if (_torrentTrackersList.Items.Count != snap.Trackers.Count)
+                    {
+                        _torrentTrackersList.BeginUpdate();
+                        updateStarted = true;
+                        while (_torrentTrackersList.Items.Count < snap.Trackers.Count)
+                            _torrentTrackersList.Items.Add(new ListViewItem(new string[] { "", "", "", "" }));
+                        while (_torrentTrackersList.Items.Count > snap.Trackers.Count)
+                            _torrentTrackersList.Items.RemoveAt(_torrentTrackersList.Items.Count - 1);
+                    }
                     for (int i = 0; i < snap.Trackers.Count; i++)
                     {
                         ShihabTorrentTrackerTelemetry t = snap.Trackers[i];
                         ListViewItem lvi = _torrentTrackersList.Items[i];
-                        lvi.SubItems[0].Text = t.Url;
-                        lvi.SubItems[1].Text = t.Status;
-                        lvi.SubItems[2].Text = t.PeersReturned.ToString();
-                        lvi.SubItems[3].Text = string.Format("{0} / {1}", t.Seeders >= 0 ? t.Seeders.ToString() : "-", t.Leechers >= 0 ? t.Leechers.ToString() : "-");
+                        UpdateListViewSubItemLazy(_torrentTrackersList, lvi, 0, t.Url, ref updateStarted);
+                        UpdateListViewSubItemLazy(_torrentTrackersList, lvi, 1, t.Status, ref updateStarted);
+                        UpdateListViewSubItemLazy(_torrentTrackersList, lvi, 2, t.PeersReturned.ToString(), ref updateStarted);
+                        UpdateListViewSubItemLazy(_torrentTrackersList, lvi, 3, string.Format("{0} / {1}", t.Seeders >= 0 ? t.Seeders.ToString() : "-", t.Leechers >= 0 ? t.Leechers.ToString() : "-"), ref updateStarted);
                     }
                 }
-                finally { _torrentTrackersList.EndUpdate(); }
+                finally
+                {
+                    if (updateStarted) _torrentTrackersList.EndUpdate();
+                }
             }
         }
     }

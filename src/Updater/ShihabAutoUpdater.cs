@@ -73,7 +73,7 @@ namespace ShihabMehediIDM
                 }
             }
             catch { }
-            return "1.2.2";
+            return "1.2.3";
         }
 
         public static string NormalizeVersionString(string rawTagOrVer)
@@ -165,7 +165,7 @@ namespace ShihabMehediIDM
         {
             try
             {
-                string exePath = Process.GetCurrentProcess().MainModule.FileName;
+                string exePath = ShihabProcessAndPathSafety.CurrentExePath;
                 string exeDir = Path.GetFullPath(Path.GetDirectoryName(exePath)).TrimEnd('\\', '/');
                 if (File.Exists(Path.Combine(exeDir, "Uninstall.exe")))
                 {
@@ -211,7 +211,7 @@ namespace ShihabMehediIDM
         {
             try
             {
-                string currentExe = Process.GetCurrentProcess().MainModule.FileName;
+                string currentExe = ShihabProcessAndPathSafety.CurrentExePath;
                 string oldBackup = currentExe + ".old";
                 if (File.Exists(oldBackup))
                 {
@@ -245,6 +245,18 @@ namespace ShihabMehediIDM
                             }
                             catch { }
                         }
+                        string[] stageDirs = Directory.GetDirectories(updatesDir, "stage_*");
+                        for (int i = 0; i < stageDirs.Length; i++)
+                        {
+                            try
+                            {
+                                if (Directory.GetLastWriteTimeUtc(stageDirs[i]) < cutoff)
+                                {
+                                    ShihabProcessAndPathSafety.SafeDeleteDirectoryNoFollow(stageDirs[i]);
+                                }
+                            }
+                            catch { }
+                        }
                     }
                 }
             }
@@ -268,7 +280,7 @@ namespace ShihabMehediIDM
                 validatedUri = null;
                 return false;
             }
-            if (!allowCustomOverrideHost && !ShihabProcessAndPathSafety.IsOfficialGitHubHttpsUri(validatedUri))
+            if (!allowCustomOverrideHost && !ShihabProcessAndPathSafety.IsOfficialMhsReleaseHttpsUri(validatedUri))
             {
                 validatedUri = null;
                 return false;
@@ -591,18 +603,22 @@ namespace ShihabMehediIDM
             string currentVer = GetCurrentAppVersion();
             res.CurrentVersion = currentVer;
 
-            string slug = (cfg != null && !string.IsNullOrWhiteSpace(cfg.ShihabUpdateRepoSlug))
-                ? cfg.ShihabUpdateRepoSlug.Trim().Trim('/')
-                : DefaultRepoSlug;
+            string slug = DefaultRepoSlug;
+            bool includePre = cfg != null && cfg.ShihabUpdateIncludePrereleases;
+            bool hasCustomOverride = false;
+#if DEBUG
+            if (cfg != null && !string.IsNullOrWhiteSpace(cfg.ShihabUpdateRepoSlug))
+            {
+                slug = cfg.ShihabUpdateRepoSlug.Trim().Trim('/');
+            }
+            hasCustomOverride = cfg != null && !string.IsNullOrWhiteSpace(cfg.ShihabUpdateApiOverrideUrl);
+#endif
             if (!ShihabProcessAndPathSafety.IsValidGitHubRepoSlug(slug))
             {
                 res.Ok = false;
                 res.ErrorMessage = "Invalid GitHub repository slug configuration.";
                 return res;
             }
-
-            bool includePre = cfg != null && cfg.ShihabUpdateIncludePrereleases;
-            bool hasCustomOverride = cfg != null && !string.IsNullOrWhiteSpace(cfg.ShihabUpdateApiOverrideUrl);
 
             try
             {
@@ -889,8 +905,18 @@ namespace ShihabMehediIDM
             try
             {
                 string updatesDir = Path.Combine(dataDirectory, "updates");
+                if (ShihabProcessAndPathSafety.HasAnyReparsePointInPath(updatesDir))
+                {
+                    errorMessage = "Security check refused update: unsafe reparse point in updates directory.";
+                    return false;
+                }
                 Directory.CreateDirectory(updatesDir);
-                bool hasOverride = cfg != null && !string.IsNullOrWhiteSpace(cfg.ShihabUpdateApiOverrideUrl);
+                string runStageDir = Path.Combine(updatesDir, "stage_" + Guid.NewGuid().ToString("N"));
+                Directory.CreateDirectory(runStageDir);
+                bool hasOverride = false;
+#if DEBUG
+                hasOverride = cfg != null && !string.IsNullOrWhiteSpace(cfg.ShihabUpdateApiOverrideUrl);
+#endif
 
                 Dictionary<string, string> sumsMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                 if (checkResult.Sha256SumsAsset != null && !string.IsNullOrWhiteSpace(checkResult.Sha256SumsAsset.BrowserDownloadUrl))
@@ -912,8 +938,8 @@ namespace ShihabMehediIDM
                 checkResult.ExpectedPrimarySha256 = expectedPrimaryHash;
 
                 string safeAssetName = ShihabProcessAndPathSafety.SanitizeFileName(checkResult.PrimaryAsset.Name, "update.exe");
-                string tempPart = Path.Combine(updatesDir, safeAssetName + ".download");
-                string finalVerified = Path.Combine(updatesDir, safeAssetName);
+                string tempPart = Path.Combine(runStageDir, safeAssetName + ".download");
+                string finalVerified = Path.Combine(runStageDir, safeAssetName);
 
                 if (!DownloadStreamWithSha256Check(
                         checkResult.PrimaryAsset.BrowserDownloadUrl,
@@ -929,6 +955,7 @@ namespace ShihabMehediIDM
                 {
                     return false;
                 }
+                ShihabSecretsVault.ApplyRestrictedUserFileAcl(finalVerified);
 
                 verifiedPrimaryPath = finalVerified;
 
@@ -941,8 +968,8 @@ namespace ShihabMehediIDM
                     {
                         checkResult.ExpectedExtensionSha256 = expectedExtHash;
                         string extName = ShihabProcessAndPathSafety.SanitizeFileName(checkResult.ExtensionZipAsset.Name, "extension.zip");
-                        string extPart = Path.Combine(updatesDir, extName + ".download");
-                        string extFinal = Path.Combine(updatesDir, extName);
+                        string extPart = Path.Combine(runStageDir, extName + ".download");
+                        string extFinal = Path.Combine(runStageDir, extName);
                         string extErr;
                         if (DownloadStreamWithSha256Check(
                                 checkResult.ExtensionZipAsset.BrowserDownloadUrl,
@@ -956,6 +983,7 @@ namespace ShihabMehediIDM
                                 cancelToken,
                                 out extErr))
                         {
+                            ShihabSecretsVault.ApplyRestrictedUserFileAcl(extFinal);
                             verifiedExtZipPath = extFinal;
                         }
                     }
@@ -1124,119 +1152,134 @@ namespace ShihabMehediIDM
             errorMessage = "";
             try
             {
-                if (string.IsNullOrWhiteSpace(verifiedPrimaryPath) || !File.Exists(verifiedPrimaryPath))
+                if (string.IsNullOrWhiteSpace(verifiedPrimaryPath) || !File.Exists(verifiedPrimaryPath) ||
+                    ShihabProcessAndPathSafety.HasAnyReparsePointInPath(verifiedPrimaryPath))
                 {
-                    errorMessage = "Verified update package does not exist on disk.";
+                    errorMessage = "Verified update package does not exist on disk or failed path safety check.";
                     return false;
                 }
 
-                if (checkResult != null && !string.IsNullOrWhiteSpace(checkResult.ExpectedPrimarySha256))
+                // Hold a non-inheritable FileShare.Read handle open across SHA-256 verification and Process.Start
+                // so no concurrent process can overwrite, rename, or delete the binary before UAC/CreateProcess maps it.
+                using (FileStream pinnedPrimaryFs = new FileStream(verifiedPrimaryPath, FileMode.Open, FileAccess.Read, FileShare.Read, 65536))
                 {
-                    string actualSha = ComputeFileSha256Hex(verifiedPrimaryPath);
-                    if (!ShihabProcessAndPathSafety.FixedTimeEqualsAscii(actualSha, checkResult.ExpectedPrimarySha256.Trim().ToLowerInvariant()))
+                    ShihabProcessAndPathSafety.DisableHandleInheritance(pinnedPrimaryFs.SafeFileHandle.DangerousGetHandle());
+                    if (checkResult != null && !string.IsNullOrWhiteSpace(checkResult.ExpectedPrimarySha256))
                     {
-                        errorMessage = "Pre-launch SHA-256 integrity re-check failed for staged update binary.";
-                        return false;
-                    }
-                }
-
-                string currentExe = Process.GetCurrentProcess().MainModule.FileName;
-                string currentDir = Path.GetFullPath(Path.GetDirectoryName(currentExe)).TrimEnd('\\');
-                string currentVer = GetCurrentAppVersion();
-                int currentPid = Process.GetCurrentProcess().Id;
-
-                bool isSetupAsset = Path.GetFileName(verifiedPrimaryPath).IndexOf("Setup", StringComparison.OrdinalIgnoreCase) >= 0;
-                if ((checkResult != null && checkResult.InstallMode == ShihabAppInstallMode.InstalledSetup) || isSetupAsset)
-                {
-                    if (!isSetupAsset)
-                    {
-                        errorMessage = "Installed copy requires the official Setup installer asset to update safely.";
-                        return false;
-                    }
-                    string args = ShihabProcessAndPathSafety.BuildWindowsArgumentString(
-                        "--shihab-silent",
-                        "--shihab-update-mode",
-                        "--shihab-wait-pid",
-                        currentPid.ToString(CultureInfo.InvariantCulture),
-                        "--shihab-relaunch",
-                        "--shihab-updated-from",
-                        currentVer,
-                        "--shihab-install-dir",
-                        currentDir);
-
-                    ProcessStartInfo psi = new ProcessStartInfo(verifiedPrimaryPath, args);
-                    psi.WorkingDirectory = Path.GetDirectoryName(verifiedPrimaryPath);
-                    // UseShellExecute = true prevents child Setup.exe from inheriting any open listening socket handles (e.g. :45779)
-                    // and allows Windows UAC elevation for Program Files (x86) installations.
-                    psi.UseShellExecute = true;
-                    try
-                    {
-                        Process.Start(psi);
-                    }
-                    catch (System.ComponentModel.Win32Exception wex)
-                    {
-                        if (wex.NativeErrorCode == 1223)
+                        string actualSha;
+                        using (SHA256 sha = SHA256.Create())
                         {
-                            errorMessage = "Update canceled: Administrator permission was declined.";
+                            actualSha = BytesToLowerHex(sha.ComputeHash(pinnedPrimaryFs));
+                        }
+                        if (!ShihabProcessAndPathSafety.FixedTimeEqualsAscii(actualSha, checkResult.ExpectedPrimarySha256.Trim().ToLowerInvariant()))
+                        {
+                            errorMessage = "Pre-launch SHA-256 integrity re-check failed for staged update binary.";
                             return false;
                         }
-                        throw;
                     }
 
-                    if (cleanExitCallback != null) cleanExitCallback();
-                    return true;
-                }
-                else
-                {
-                    if (!CanWriteDirectory(currentDir))
-                    {
-                        errorMessage = "Cannot replace executable in protected folder (" + currentDir + "). Please download and run the Setup Installer.";
-                        return false;
-                    }
-                    string backupOld = currentExe + ".old";
-                    try { if (File.Exists(backupOld)) File.Delete(backupOld); } catch { }
-                    File.Move(currentExe, backupOld);
-                    try
-                    {
-                        File.Copy(verifiedPrimaryPath, currentExe, true);
-                    }
-                    catch
-                    {
-                        try { if (!File.Exists(currentExe) && File.Exists(backupOld)) File.Move(backupOld, currentExe); } catch { }
-                        throw;
-                    }
+                    string currentExe = ShihabProcessAndPathSafety.CurrentExePath;
+                    string currentDir = Path.GetFullPath(Path.GetDirectoryName(currentExe)).TrimEnd('\\');
+                    string currentVer = GetCurrentAppVersion();
+                    int currentPid = ShihabProcessAndPathSafety.CurrentProcessId;
 
-                    if (!string.IsNullOrWhiteSpace(verifiedExtZipPath) && File.Exists(verifiedExtZipPath))
+                    bool isSetupAsset = Path.GetFileName(verifiedPrimaryPath).IndexOf("Setup", StringComparison.OrdinalIgnoreCase) >= 0;
+                    if ((checkResult != null && checkResult.InstallMode == ShihabAppInstallMode.InstalledSetup) || isSetupAsset)
                     {
-                        bool extHashOk = true;
-                        if (checkResult != null && !string.IsNullOrWhiteSpace(checkResult.ExpectedExtensionSha256))
+                        if (!isSetupAsset)
                         {
-                            string extSha = ComputeFileSha256Hex(verifiedExtZipPath);
-                            extHashOk = ShihabProcessAndPathSafety.FixedTimeEqualsAscii(
-                                extSha,
-                                checkResult.ExpectedExtensionSha256.Trim().ToLowerInvariant());
+                            errorMessage = "Installed copy requires the official Setup installer asset to update safely.";
+                            return false;
                         }
-                        if (extHashOk)
+                        string args = ShihabProcessAndPathSafety.BuildWindowsArgumentString(
+                            "--shihab-silent",
+                            "--shihab-update-mode",
+                            "--shihab-wait-pid",
+                            currentPid.ToString(CultureInfo.InvariantCulture),
+                            "--shihab-relaunch",
+                            "--shihab-updated-from",
+                            currentVer,
+                            "--shihab-install-dir",
+                            currentDir);
+
+                        ProcessStartInfo psi = new ProcessStartInfo(verifiedPrimaryPath, args);
+                        psi.WorkingDirectory = Path.GetDirectoryName(verifiedPrimaryPath);
+                        // UseShellExecute = true prevents child Setup.exe from inheriting open listening socket handles (e.g. :45779).
+                        psi.UseShellExecute = true;
+                        try
                         {
-                            string siblingExtDir = Path.Combine(currentDir, "extension");
-                            if (Directory.Exists(siblingExtDir))
+                            Process.Start(psi);
+                        }
+                        catch (System.ComponentModel.Win32Exception wex)
+                        {
+                            if (wex.NativeErrorCode == 1223)
                             {
-                                SafeUpdateSiblingExtensionFolder(verifiedExtZipPath, siblingExtDir);
+                                errorMessage = "Update canceled: Administrator permission was declined.";
+                                return false;
+                            }
+                            throw;
+                        }
+
+                        if (cleanExitCallback != null) cleanExitCallback();
+                        return true;
+                    }
+                    else
+                    {
+                        if (!CanWriteDirectory(currentDir))
+                        {
+                            errorMessage = "Cannot replace executable in protected folder (" + currentDir + "). Please download and run the Setup Installer.";
+                            return false;
+                        }
+                        string backupOld = currentExe + ".old";
+                        try { if (File.Exists(backupOld)) File.Delete(backupOld); } catch { }
+                        File.Move(currentExe, backupOld);
+                        try
+                        {
+                            pinnedPrimaryFs.Position = 0;
+                            using (FileStream destFs = new FileStream(currentExe, FileMode.Create, FileAccess.Write, FileShare.None, 65536))
+                            {
+                                pinnedPrimaryFs.CopyTo(destFs, 65536);
+                                destFs.Flush(true);
                             }
                         }
+                        catch
+                        {
+                            try { if (!File.Exists(currentExe) && File.Exists(backupOld)) File.Move(backupOld, currentExe); } catch { }
+                            throw;
+                        }
+
+                        if (!string.IsNullOrWhiteSpace(verifiedExtZipPath) && File.Exists(verifiedExtZipPath))
+                        {
+                            bool extHashOk = true;
+                            if (checkResult != null && !string.IsNullOrWhiteSpace(checkResult.ExpectedExtensionSha256))
+                            {
+                                string extSha = ComputeFileSha256Hex(verifiedExtZipPath);
+                                extHashOk = ShihabProcessAndPathSafety.FixedTimeEqualsAscii(
+                                    extSha,
+                                    checkResult.ExpectedExtensionSha256.Trim().ToLowerInvariant());
+                            }
+                            if (extHashOk)
+                            {
+                                string siblingExtDir = Path.Combine(currentDir, "extension");
+                                if (Directory.Exists(siblingExtDir))
+                                {
+                                    SafeUpdateSiblingExtensionFolder(verifiedExtZipPath, siblingExtDir);
+                                }
+                            }
+                        }
+
+                        RefreshPortableShellShortcutsAndIconCache(currentExe);
+
+                        if (cleanExitCallback != null) cleanExitCallback();
+
+                        ProcessStartInfo relaunchPsi = new ProcessStartInfo(
+                            currentExe,
+                            ShihabProcessAndPathSafety.BuildWindowsArgumentString("--shihab-updated-from", currentVer));
+                        relaunchPsi.WorkingDirectory = currentDir;
+                        relaunchPsi.UseShellExecute = true;
+                        Process.Start(relaunchPsi);
+                        return true;
                     }
-
-                    RefreshPortableShellShortcutsAndIconCache(currentExe);
-
-                    if (cleanExitCallback != null) cleanExitCallback();
-
-                    ProcessStartInfo relaunchPsi = new ProcessStartInfo(
-                        currentExe,
-                        ShihabProcessAndPathSafety.BuildWindowsArgumentString("--shihab-updated-from", currentVer));
-                    relaunchPsi.WorkingDirectory = currentDir;
-                    relaunchPsi.UseShellExecute = true;
-                    Process.Start(relaunchPsi);
-                    return true;
                 }
             }
             catch (Exception ex)
@@ -1282,7 +1325,6 @@ namespace ShihabMehediIDM
                 dirsToCheck.Add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "OneDrive\\Desktop"));
                 dirsToCheck.Add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), @"Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"));
 
-                Type shellType = Type.GetTypeFromProgID("WScript.Shell");
                 for (int d = 0; d < dirsToCheck.Count; d++)
                 {
                     string dir = dirsToCheck[d];
@@ -1294,18 +1336,8 @@ namespace ShihabMehediIDM
                         string lnk = lnks[i];
                         try
                         {
-                            if (shellType == null) continue;
-                            object shell = Activator.CreateInstance(shellType);
-                            object sc = shellType.InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, new object[] { lnk });
-                            Type scType = sc.GetType();
-                            object targetObj = scType.InvokeMember("TargetPath", BindingFlags.GetProperty, null, sc, null);
-                            string scTarget = targetObj != null ? targetObj.ToString().Trim() : "";
-                            if (!string.IsNullOrEmpty(scTarget) &&
-                                string.Equals(Path.GetFullPath(scTarget), normExe, StringComparison.OrdinalIgnoreCase))
+                            if (ShihabShellLinkHelper.RefreshShortcutIconLocation(lnk, normExe, 0))
                             {
-                                scType.InvokeMember("IconLocation", BindingFlags.SetProperty, null, sc, new object[] { normExe + ",0" });
-                                scType.InvokeMember("Save", BindingFlags.InvokeMethod, null, sc, null);
-                                try { File.SetLastWriteTimeUtc(lnk, DateTime.UtcNow); } catch { }
                                 SHChangeNotify(SHCNE_UPDATEITEM, SHCNF_PATHW | SHCNF_FLUSH, lnk, null);
                                 updatedDir = true;
                             }
@@ -1320,22 +1352,6 @@ namespace ShihabMehediIDM
 
                 SHChangeNotify(SHCNE_UPDATEITEM, SHCNF_PATHW | SHCNF_FLUSH, normExe, null);
                 SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST | SHCNF_FLUSH, null, null);
-            }
-            catch { }
-
-            try
-            {
-                string ie4uinit = ShihabProcessAndPathSafety.ResolveSystem32ToolPath("ie4uinit.exe");
-                if (!string.IsNullOrEmpty(ie4uinit) && File.Exists(ie4uinit))
-                {
-                    ProcessStartInfo psi = new ProcessStartInfo(ie4uinit, "-show");
-                    psi.UseShellExecute = false;
-                    psi.CreateNoWindow = true;
-                    using (Process p = Process.Start(psi))
-                    {
-                        if (p != null) p.WaitForExit(2500);
-                    }
-                }
             }
             catch { }
         }

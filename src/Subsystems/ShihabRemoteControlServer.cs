@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.Globalization;
 using System.IO;
@@ -9,6 +10,7 @@ using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
+using ShihabMehediShared;
 
 namespace ShihabMehediIDM
 {
@@ -19,6 +21,17 @@ namespace ShihabMehediIDM
         private const int MaxTorrentUploadBodyBytes = 2 * 1024 * 1024;
         private const int MaxTrackedRateLimitIps = 2048;
         private const int MaxConcurrentClients = 32;
+        private const int MaxStoredRemoteTorrents = 32;
+        private const long LocalHostCacheTtlMs = 10000L;
+
+        private static readonly ThreadLocal<SHA256> SharedSha256 = new ThreadLocal<SHA256>(delegate
+        {
+            return SHA256.Create();
+        });
+        private static readonly object LocalHostsCacheLock = new object();
+        private static readonly Stopwatch RemoteMonotonicClock = Stopwatch.StartNew();
+        private static HashSet<string> _cachedLocalHostNames;
+        private static long _cachedLocalHostsTickMs = -LocalHostCacheTtlMs;
 
         private readonly Func<MehediAppConfiguration> _getConfig;
         private readonly Action _saveConfig;
@@ -56,19 +69,21 @@ namespace ShihabMehediIDM
                     if (act == "start_queue") { engine.StartMehediQueue("Main Download Queue"); return; }
                     if (act == "stop_queue") { engine.StopShihabQueue("Main Download Queue"); return; }
                     if (string.IsNullOrWhiteSpace(id)) return;
+                    bool targetAll = string.Equals(id, "all", StringComparison.OrdinalIgnoreCase);
+                    if (act == "delete" && targetAll) return;
                     List<ShihabDownloadItem> snap = engine.GetShihabDownloadsSnapshot();
                     for (int i = 0; i < snap.Count; i++)
                     {
                         ShihabDownloadItem candidate = snap[i];
-                        bool matches = string.Equals(id, "all", StringComparison.OrdinalIgnoreCase) ||
+                        bool matches = targetAll ||
                             string.Equals(candidate.ShihabId, id, StringComparison.OrdinalIgnoreCase) ||
-                            candidate.ShihabId.StartsWith(id, StringComparison.OrdinalIgnoreCase);
+                            (id.Length >= 8 && candidate.ShihabId.StartsWith(id, StringComparison.OrdinalIgnoreCase));
                         if (!matches) continue;
                         if (act == "pause") engine.PauseShihabDownload(candidate);
                         else if (act == "resume" || act == "start") engine.StartOrResumeMehediDownload(candidate);
                         else if (act == "remove") engine.RemoveShihabDownload(candidate, false);
                         else if (act == "delete") engine.RemoveShihabDownload(candidate, true);
-                        if (!string.Equals(id, "all", StringComparison.OrdinalIgnoreCase)) break;
+                        if (!targetAll) break;
                     }
                 })
         {
@@ -307,7 +322,23 @@ namespace ShihabMehediIDM
                     for (int i = 0; i < staleKeys.Count; i++) _failedPairAttemptsByIp.Remove(staleKeys[i]);
                     if (_failedPairAttemptsByIp.Count >= MaxTrackedRateLimitIps && !_failedPairAttemptsByIp.ContainsKey(ipKey))
                     {
-                        _failedPairAttemptsByIp.Clear();
+                        string oldestKey = null;
+                        DateTime oldestActivity = DateTime.MaxValue;
+                        foreach (KeyValuePair<string, List<DateTime>> kv in _failedPairAttemptsByIp)
+                        {
+                            DateTime latest = kv.Value != null && kv.Value.Count > 0
+                                ? kv.Value[kv.Value.Count - 1]
+                                : DateTime.MinValue;
+                            if (latest < oldestActivity)
+                            {
+                                oldestActivity = latest;
+                                oldestKey = kv.Key;
+                            }
+                        }
+                        if (oldestKey != null)
+                        {
+                            _failedPairAttemptsByIp.Remove(oldestKey);
+                        }
                     }
                 }
                 List<DateTime> hits;
@@ -319,6 +350,229 @@ namespace ShihabMehediIDM
                 hits.RemoveAll(delegate(DateTime dt) { return dt < cutoff; });
                 hits.Add(now);
             }
+        }
+
+        private static HashSet<string> GetAllowedLocalHostNames()
+        {
+            long nowMs = RemoteMonotonicClock.ElapsedMilliseconds;
+            lock (LocalHostsCacheLock)
+            {
+                if (_cachedLocalHostNames != null && (nowMs - _cachedLocalHostsTickMs) < LocalHostCacheTtlMs)
+                {
+                    return _cachedLocalHostNames;
+                }
+                HashSet<string> hosts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                hosts.Add("127.0.0.1");
+                hosts.Add("localhost");
+                hosts.Add("::1");
+                try
+                {
+                    string machine = Environment.MachineName;
+                    if (!string.IsNullOrWhiteSpace(machine))
+                    {
+                        hosts.Add(machine.Trim());
+                        hosts.Add(machine.Trim() + ".local");
+                    }
+                }
+                catch { }
+                try
+                {
+                    string dnsHost = Dns.GetHostName();
+                    if (!string.IsNullOrWhiteSpace(dnsHost))
+                    {
+                        hosts.Add(dnsHost.Trim());
+                        hosts.Add(dnsHost.Trim() + ".local");
+                    }
+                }
+                catch { }
+                try
+                {
+                    NetworkInterface[] nics = NetworkInterface.GetAllNetworkInterfaces();
+                    for (int i = 0; i < nics.Length; i++)
+                    {
+                        NetworkInterface nic = nics[i];
+                        if (nic == null || nic.OperationalStatus != OperationalStatus.Up) continue;
+                        IPInterfaceProperties props = nic.GetIPProperties();
+                        if (props == null) continue;
+                        for (int u = 0; u < props.UnicastAddresses.Count; u++)
+                        {
+                            IPAddress addr = props.UnicastAddresses[u].Address;
+                            if (addr != null)
+                            {
+                                string ipText = addr.ToString();
+                                int pct = ipText.IndexOf('%');
+                                if (pct > 0) ipText = ipText.Substring(0, pct);
+                                hosts.Add(ipText);
+                            }
+                        }
+                    }
+                }
+                catch { }
+                _cachedLocalHostNames = hosts;
+                _cachedLocalHostsTickMs = nowMs;
+                return hosts;
+            }
+        }
+
+        private static bool TryExtractHostAndPort(string hostHeader, out string hostOnly, out int port)
+        {
+            hostOnly = "";
+            port = -1;
+            if (string.IsNullOrWhiteSpace(hostHeader) || ShihabProcessAndPathSafety.ContainsControlOrNewline(hostHeader))
+            {
+                return false;
+            }
+            string raw = hostHeader.Trim();
+            if (raw.StartsWith("[", StringComparison.Ordinal))
+            {
+                int closeIdx = raw.IndexOf(']');
+                if (closeIdx <= 1) return false;
+                hostOnly = raw.Substring(1, closeIdx - 1);
+                if (closeIdx + 1 < raw.Length)
+                {
+                    if (raw[closeIdx + 1] != ':') return false;
+                    if (!int.TryParse(raw.Substring(closeIdx + 2), NumberStyles.Integer, CultureInfo.InvariantCulture, out port) || port <= 0 || port > 65535)
+                    {
+                        return false;
+                    }
+                }
+                return !string.IsNullOrWhiteSpace(hostOnly);
+            }
+            int firstColon = raw.IndexOf(':');
+            int lastColon = raw.LastIndexOf(':');
+            if (firstColon > 0 && firstColon == lastColon)
+            {
+                hostOnly = raw.Substring(0, firstColon).Trim();
+                if (!int.TryParse(raw.Substring(firstColon + 1), NumberStyles.Integer, CultureInfo.InvariantCulture, out port) || port <= 0 || port > 65535)
+                {
+                    return false;
+                }
+            }
+            else if (firstColon < 0)
+            {
+                hostOnly = raw;
+            }
+            else
+            {
+                // Bare IPv6 without brackets
+                hostOnly = raw;
+            }
+            return !string.IsNullOrWhiteSpace(hostOnly);
+        }
+
+        private bool IsValidRemoteHostHeader(string hostHeader)
+        {
+            string hostOnly;
+            int hostPort;
+            if (!TryExtractHostAndPort(hostHeader, out hostOnly, out hostPort))
+            {
+                return false;
+            }
+            if (hostPort > 0 && hostPort != Port)
+            {
+                return false;
+            }
+            return GetAllowedLocalHostNames().Contains(hostOnly);
+        }
+
+        private bool IsAllowedOriginHeader(string originHeader, string hostHeader)
+        {
+            if (string.IsNullOrWhiteSpace(originHeader))
+            {
+                return true;
+            }
+            string trimmed = originHeader.Trim();
+            if (ShihabProcessAndPathSafety.ContainsControlOrNewline(trimmed))
+            {
+                return false;
+            }
+            if (trimmed.StartsWith("chrome-extension://", StringComparison.OrdinalIgnoreCase) ||
+                trimmed.StartsWith("moz-extension://", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+            Uri originUri;
+            if (!Uri.TryCreate(trimmed, UriKind.Absolute, out originUri))
+            {
+                return false;
+            }
+            if (!string.Equals(originUri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(originUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+            string reqHostOnly;
+            int reqHostPort;
+            if (!TryExtractHostAndPort(hostHeader, out reqHostOnly, out reqHostPort))
+            {
+                return false;
+            }
+            string originHost = (originUri.Host ?? "").Trim('[', ']');
+            if (!string.Equals(originHost, reqHostOnly, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+            int expectedPort = reqHostPort > 0 ? reqHostPort : Port;
+            return originUri.Port == expectedPort;
+        }
+
+        private static bool IsJsonContentType(string contentTypeHeader)
+        {
+            if (string.IsNullOrWhiteSpace(contentTypeHeader)) return false;
+            string mediaType = contentTypeHeader.Trim();
+            int semi = mediaType.IndexOf(';');
+            if (semi >= 0) mediaType = mediaType.Substring(0, semi).Trim();
+            return string.Equals(mediaType, "application/json", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string GetAndCleanRemoteTorrentsDirectory()
+        {
+            string dir = Path.Combine(
+                Path.Combine(
+                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ShihabMehediIDM"),
+                    "temp"),
+                "remote_torrents");
+            Directory.CreateDirectory(dir);
+            ShihabSecretsVault.ApplyRestrictedUserDirectoryAcl(dir);
+            try
+            {
+                string[] files = Directory.GetFiles(dir, "*.torrent");
+                if (files.Length > 0)
+                {
+                    DateTime cutoff = DateTime.UtcNow.AddHours(-1);
+                    List<FileInfo> remaining = new List<FileInfo>(files.Length);
+                    for (int i = 0; i < files.Length; i++)
+                    {
+                        try
+                        {
+                            FileInfo fi = new FileInfo(files[i]);
+                            if (fi.LastWriteTimeUtc < cutoff)
+                            {
+                                fi.Delete();
+                            }
+                            else
+                            {
+                                remaining.Add(fi);
+                            }
+                        }
+                        catch { }
+                    }
+                    if (remaining.Count >= MaxStoredRemoteTorrents)
+                    {
+                        remaining.Sort(delegate(FileInfo a, FileInfo b)
+                        {
+                            return a.LastWriteTimeUtc.CompareTo(b.LastWriteTimeUtc);
+                        });
+                        int toRemove = remaining.Count - (MaxStoredRemoteTorrents - 1);
+                        for (int i = 0; i < toRemove && i < remaining.Count; i++)
+                        {
+                            try { remaining[i].Delete(); } catch { }
+                        }
+                    }
+                }
+            }
+            catch { }
+            return dir;
         }
 
         private void HandleClient(object state)
@@ -338,26 +592,39 @@ namespace ShihabMehediIDM
                     {
                         string method;
                         string path;
+                        string hostHeader;
+                        string originHeader;
+                        string contentTypeHeader;
                         string authHeader;
-                        byte[] bodyBytes;
-                        int maxBody = MaxJsonBodyBytes;
-                        bool payloadTooLarge;
-                        if (!TryReadHttpRequest(ns, MaxTorrentUploadBodyBytes, out method, out path, out authHeader, out bodyBytes, out payloadTooLarge))
+                        long contentLength;
+                        byte[] leftover;
+                        int leftoverLen;
+                        if (!TryReadHttpHeaders(
+                            ns,
+                            out method,
+                            out path,
+                            out hostHeader,
+                            out originHeader,
+                            out contentTypeHeader,
+                            out authHeader,
+                            out contentLength,
+                            out leftover,
+                            out leftoverLen))
                         {
-                            if (payloadTooLarge)
-                            {
-                                WriteJsonResponse(ns, 413, false, "Request body exceeds maximum allowed size.");
-                            }
                             return;
                         }
 
-                        if (!string.Equals(path, "/api/torrent", StringComparison.Ordinal) && bodyBytes.Length > maxBody)
+                        if (!IsValidRemoteHostHeader(hostHeader))
                         {
-                            WriteJsonResponse(ns, 413, false, "Request body too large.");
+                            WriteJsonResponse(ns, 403, false, "Untrusted Host header rejected.");
                             return;
                         }
 
-                        string body = bodyBytes != null && bodyBytes.Length > 0 ? Encoding.UTF8.GetString(bodyBytes) : "";
+                        if (!IsAllowedOriginHeader(originHeader, hostHeader))
+                        {
+                            WriteJsonResponse(ns, 403, false, "Cross-origin request rejected.");
+                            return;
+                        }
 
                         if (path == "/" || path.StartsWith("/?", StringComparison.Ordinal))
                         {
@@ -368,16 +635,18 @@ namespace ShihabMehediIDM
                             return;
                         }
 
+                        if (method == "POST" && path.StartsWith("/api/", StringComparison.Ordinal) && !IsJsonContentType(contentTypeHeader))
+                        {
+                            WriteJsonResponse(ns, 415, false, "Content-Type: application/json is required.");
+                            return;
+                        }
+
                         MehediAppConfiguration cfg = _getConfig != null ? _getConfig() : null;
                         if (cfg == null)
                         {
                             WriteJsonResponse(ns, 500, false, "Server configuration unavailable.");
                             return;
                         }
-
-                        Dictionary<string, object> reqJson = !string.IsNullOrWhiteSpace(body)
-                            ? ShihabJsonCodec.ParseObjectOrNull(body, 16)
-                            : null;
 
                         if (path == "/api/pair" && method == "POST")
                         {
@@ -387,30 +656,45 @@ namespace ShihabMehediIDM
                                 return;
                             }
 
-                            string submittedCode = reqJson != null
-                                ? ShihabJsonCodec.GetString(reqJson, "code")
-                                : ShihabDebridManager.ExtractJsonStringField(body, "code");
-                            string devName = SanitizeRemoteLabel(reqJson != null
-                                ? ShihabJsonCodec.GetString(reqJson, "device")
-                                : ShihabDebridManager.ExtractJsonStringField(body, "device"));
-
-                            DateTime expUtc;
-                            bool codeExpired = false;
-                            if (!string.IsNullOrWhiteSpace(cfg.ShihabRemotePairingExpiresUtc) &&
-                                DateTime.TryParse(cfg.ShihabRemotePairingExpiresUtc, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out expUtc))
+                            byte[] pairBodyBytes;
+                            bool pairTooLarge;
+                            if (!TryReadHttpBody(ns, contentLength, MaxJsonBodyBytes, leftover, leftoverLen, out pairBodyBytes, out pairTooLarge))
                             {
-                                codeExpired = DateTime.UtcNow > expUtc;
+                                WriteJsonResponse(ns, pairTooLarge ? 413 : 400, false, pairTooLarge ? "Request body too large." : "Invalid request body.");
+                                return;
                             }
 
-                            if (!codeExpired &&
-                                !string.IsNullOrEmpty(submittedCode) &&
-                                !string.IsNullOrEmpty(cfg.ShihabRemotePairingCode) &&
-                                ConstantTimeEquals(submittedCode.Trim(), cfg.ShihabRemotePairingCode))
+                            string pairBody = pairBodyBytes.Length > 0 ? Encoding.UTF8.GetString(pairBodyBytes) : "";
+                            Dictionary<string, object> pairJson = !string.IsNullOrWhiteSpace(pairBody)
+                                ? ShihabJsonCodec.ParseObjectOrNull(pairBody, 16)
+                                : null;
+
+                            string submittedCode = pairJson != null
+                                ? ShihabJsonCodec.GetString(pairJson, "code")
+                                : ShihabDebridManager.ExtractJsonStringField(pairBody, "code");
+                            string devName = SanitizeRemoteLabel(pairJson != null
+                                ? ShihabJsonCodec.GetString(pairJson, "device")
+                                : ShihabDebridManager.ExtractJsonStringField(pairBody, "device"));
+
+                            bool pairedOk = false;
+                            bool codeExpired = false;
+                            string rawToken = "";
+                            lock (_devicesLock)
                             {
-                                string rawToken = GenerateCryptographicHex(32);
-                                string tokenHash = ComputeSha256Hex(rawToken);
-                                lock (_devicesLock)
+                                DateTime expUtc;
+                                if (!string.IsNullOrWhiteSpace(cfg.ShihabRemotePairingExpiresUtc) &&
+                                    DateTime.TryParse(cfg.ShihabRemotePairingExpiresUtc, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out expUtc))
                                 {
+                                    codeExpired = DateTime.UtcNow > expUtc;
+                                }
+
+                                if (!codeExpired &&
+                                    !string.IsNullOrEmpty(submittedCode) &&
+                                    !string.IsNullOrEmpty(cfg.ShihabRemotePairingCode) &&
+                                    ConstantTimeEquals(submittedCode.Trim(), cfg.ShihabRemotePairingCode))
+                                {
+                                    rawToken = GenerateCryptographicHex(32);
+                                    string tokenHash = ComputeSha256Hex(rawToken);
                                     if (cfg.ShihabPairedRemoteDevices == null)
                                     {
                                         cfg.ShihabPairedRemoteDevices = new List<ShihabPairedRemoteDevice>();
@@ -423,8 +707,13 @@ namespace ShihabMehediIDM
                                         MehediPairedDate = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture),
                                         ShihabLastSeenIp = remoteIp
                                     });
-                                    EnsureFreshPairingCode(cfg, _saveConfig, true);
+                                    EnsureFreshPairingCode(cfg, null, true);
+                                    pairedOk = true;
                                 }
+                            }
+
+                            if (pairedOk)
+                            {
                                 if (_saveConfig != null) _saveConfig();
 
                                 Dictionary<string, object> okObj = new Dictionary<string, object>();
@@ -443,6 +732,7 @@ namespace ShihabMehediIDM
                             return;
                         }
 
+                        // Validate bearer token and route BEFORE allocating any request body bytes.
                         ShihabPairedRemoteDevice authedDevice;
                         if (!IsAuthorizedBearer(authHeader, cfg, out authedDevice))
                         {
@@ -482,6 +772,36 @@ namespace ShihabMehediIDM
                             WriteHttpResponse(ns, 200, "application/json; charset=utf-8", ShihabJsonCodec.Serialize(payload), null);
                             return;
                         }
+
+                        bool isKnownPostRoute = method == "POST" && (
+                            path == "/api/speedlimit" ||
+                            path == "/api/add" ||
+                            path == "/api/torrent" ||
+                            path == "/api/action" ||
+                            path == "/api/act" ||
+                            path == "/api/queue" ||
+                            path == "/api/forget");
+                        if (!isKnownPostRoute)
+                        {
+                            WriteJsonResponse(ns, 404, false, "Not found");
+                            return;
+                        }
+
+                        int routeMaxBody = string.Equals(path, "/api/torrent", StringComparison.Ordinal)
+                            ? MaxTorrentUploadBodyBytes
+                            : MaxJsonBodyBytes;
+                        byte[] bodyBytes;
+                        bool payloadTooLarge;
+                        if (!TryReadHttpBody(ns, contentLength, routeMaxBody, leftover, leftoverLen, out bodyBytes, out payloadTooLarge))
+                        {
+                            WriteJsonResponse(ns, payloadTooLarge ? 413 : 400, false, payloadTooLarge ? "Request body exceeds maximum allowed size." : "Invalid request body.");
+                            return;
+                        }
+
+                        string body = bodyBytes != null && bodyBytes.Length > 0 ? Encoding.UTF8.GetString(bodyBytes) : "";
+                        Dictionary<string, object> reqJson = !string.IsNullOrWhiteSpace(body)
+                            ? ShihabJsonCodec.ParseObjectOrNull(body, 16)
+                            : null;
 
                         if (path == "/api/speedlimit" && method == "POST")
                         {
@@ -534,10 +854,12 @@ namespace ShihabMehediIDM
                                         ShihabTorrentMetadata meta = ShihabTorrentManager.InspectTorrentBytes(tBytes, "remote.torrent");
                                         if (meta != null && meta.ParsedSuccessfully)
                                         {
+                                            string torDir = GetAndCleanRemoteTorrentsDirectory();
                                             string tmpTor = Path.Combine(
-                                                Path.GetTempPath(),
-                                                "mhs_remote_" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".torrent");
+                                                torDir,
+                                                "mhs_remote_" + GenerateCryptographicHex(8) + ".torrent");
                                             File.WriteAllBytes(tmpTor, tBytes);
+                                            ShihabSecretsVault.ApplyRestrictedUserFileAcl(tmpTor);
                                             url = tmpTor;
                                             isValidatedLocalTorrent = true;
                                         }
@@ -667,27 +989,32 @@ namespace ShihabMehediIDM
             return sb.ToString();
         }
 
-        private static bool TryReadHttpRequest(
+        private static bool TryReadHttpHeaders(
             Stream ns,
-            int maxBodyBytes,
             out string method,
             out string path,
+            out string hostHeader,
+            out string originHeader,
+            out string contentTypeHeader,
             out string authHeader,
-            out byte[] bodyBytes,
-            out bool payloadTooLarge)
+            out long contentLength,
+            out byte[] leftover,
+            out int leftoverLen)
         {
             method = "GET";
             path = "/";
+            hostHeader = "";
+            originHeader = "";
+            contentTypeHeader = "";
             authHeader = "";
-            bodyBytes = new byte[0];
-            payloadTooLarge = false;
+            contentLength = 0;
+            leftover = null;
+            leftoverLen = 0;
 
-            using (MemoryStream hdrBuf = new MemoryStream())
+            using (MemoryStream hdrBuf = new MemoryStream(1024))
             {
                 byte[] chunk = new byte[4096];
                 int headerEndOffset = -1;
-                byte[] leftover = null;
-                int leftoverLen = 0;
 
                 while (hdrBuf.Length < MaxHeaderBytes)
                 {
@@ -722,53 +1049,86 @@ namespace ShihabMehediIDM
                 method = firstParts.Length > 0 ? firstParts[0].ToUpperInvariant() : "GET";
                 path = firstParts.Length > 1 ? firstParts[1] : "/";
 
-                long contentLen = 0;
                 for (int i = 1; i < lines.Length; i++)
                 {
                     string line = lines[i];
                     if (string.IsNullOrEmpty(line)) break;
                     if (line.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase))
                     {
-                        long.TryParse(line.Substring(15).Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out contentLen);
+                        long parsedLen;
+                        if (!long.TryParse(line.Substring(15).Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out parsedLen))
+                        {
+                            contentLength = -1;
+                        }
+                        else
+                        {
+                            contentLength = parsedLen;
+                        }
+                    }
+                    else if (line.StartsWith("Host:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        hostHeader = line.Substring(5).Trim();
+                    }
+                    else if (line.StartsWith("Origin:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        originHeader = line.Substring(7).Trim();
+                    }
+                    else if (line.StartsWith("Content-Type:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        contentTypeHeader = line.Substring(13).Trim();
                     }
                     else if (line.StartsWith("Authorization:", StringComparison.OrdinalIgnoreCase))
                     {
                         authHeader = line.Substring(14).Trim();
                     }
                 }
-
-                if (contentLen < 0 || contentLen > maxBodyBytes)
-                {
-                    payloadTooLarge = contentLen > maxBodyBytes;
-                    return false;
-                }
-
-                if (contentLen > 0)
-                {
-                    int expected = (int)contentLen;
-                    bodyBytes = new byte[expected];
-                    int totalRead = 0;
-                    if (leftover != null && leftoverLen > 0)
-                    {
-                        int copyLen = Math.Min(leftoverLen, expected);
-                        Buffer.BlockCopy(leftover, 0, bodyBytes, 0, copyLen);
-                        totalRead = copyLen;
-                    }
-                    while (totalRead < expected)
-                    {
-                        int r = ns.Read(bodyBytes, totalRead, expected - totalRead);
-                        if (r <= 0) break;
-                        totalRead += r;
-                    }
-                    if (totalRead < expected)
-                    {
-                        byte[] trimmed = new byte[totalRead];
-                        Buffer.BlockCopy(bodyBytes, 0, trimmed, 0, totalRead);
-                        bodyBytes = trimmed;
-                    }
-                }
                 return true;
             }
+        }
+
+        private static bool TryReadHttpBody(
+            Stream ns,
+            long contentLength,
+            int maxBodyBytes,
+            byte[] leftover,
+            int leftoverLen,
+            out byte[] bodyBytes,
+            out bool payloadTooLarge)
+        {
+            bodyBytes = new byte[0];
+            payloadTooLarge = false;
+            if (contentLength < 0 || contentLength > maxBodyBytes)
+            {
+                payloadTooLarge = contentLength > maxBodyBytes;
+                return false;
+            }
+            if (contentLength == 0)
+            {
+                return true;
+            }
+
+            int expected = (int)contentLength;
+            bodyBytes = new byte[expected];
+            int totalRead = 0;
+            if (leftover != null && leftoverLen > 0)
+            {
+                int copyLen = Math.Min(leftoverLen, expected);
+                Buffer.BlockCopy(leftover, 0, bodyBytes, 0, copyLen);
+                totalRead = copyLen;
+            }
+            while (totalRead < expected)
+            {
+                int r = ns.Read(bodyBytes, totalRead, expected - totalRead);
+                if (r <= 0) break;
+                totalRead += r;
+            }
+            if (totalRead < expected)
+            {
+                byte[] trimmed = new byte[totalRead];
+                Buffer.BlockCopy(bodyBytes, 0, trimmed, 0, totalRead);
+                bodyBytes = trimmed;
+            }
+            return true;
         }
 
         public static bool ConstantTimeEquals(string a, string b)
@@ -812,13 +1172,16 @@ namespace ShihabMehediIDM
 
         private static string ComputeSha256Hex(string input)
         {
-            using (SHA256 sha = SHA256.Create())
+            SHA256 sha = SharedSha256.Value;
+            byte[] b = sha.ComputeHash(Encoding.UTF8.GetBytes(input ?? ""));
+            const string digits = "0123456789abcdef";
+            char[] hex = new char[b.Length * 2];
+            for (int i = 0; i < b.Length; i++)
             {
-                byte[] b = sha.ComputeHash(Encoding.UTF8.GetBytes(input ?? ""));
-                StringBuilder sb = new StringBuilder(64);
-                for (int i = 0; i < b.Length; i++) sb.Append(b[i].ToString("x2"));
-                return sb.ToString();
+                hex[i * 2] = digits[(b[i] >> 4) & 0x0F];
+                hex[i * 2 + 1] = digits[b[i] & 0x0F];
             }
+            return new string(hex);
         }
 
         private static void WriteJsonResponse(NetworkStream ns, int statusCode, bool ok, string error)
@@ -841,6 +1204,7 @@ namespace ShihabMehediIDM
                 case 403: statusText = "Forbidden"; break;
                 case 404: statusText = "Not Found"; break;
                 case 413: statusText = "Payload Too Large"; break;
+                case 415: statusText = "Unsupported Media Type"; break;
                 case 429: statusText = "Too Many Requests"; break;
                 default: statusText = "Error"; break;
             }
@@ -929,7 +1293,7 @@ if (tok) {
 }
 function pairNow() {
   var c = document.getElementById('codeInp').value.trim();
-  fetch('/api/pair', { method: 'POST', body: JSON.stringify({ code: c, device: navigator.platform }) })
+  fetch('/api/pair', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: c, device: navigator.platform }) })
     .then(function(r) { return r.json(); })
     .then(function(d) {
       if (d.ok) {
@@ -945,7 +1309,7 @@ function pairNow() {
 function addUrl() {
   var u = document.getElementById('urlInp').value.trim();
   if (!u) return;
-  fetch('/api/add', { method: 'POST', headers: { Authorization: 'Bearer ' + tok }, body: JSON.stringify({ url: u }) })
+  fetch('/api/add', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok }, body: JSON.stringify({ url: u }) })
     .then(function() { document.getElementById('urlInp').value = ''; refresh(); });
 }
 function uploadTorrentFile(ev) {
@@ -956,25 +1320,25 @@ function uploadTorrentFile(ev) {
     var dataUrl = String(rd.result || '');
     var comma = dataUrl.indexOf(',');
     var b64 = comma >= 0 ? dataUrl.substring(comma + 1) : dataUrl;
-    fetch('/api/torrent', { method: 'POST', headers: { Authorization: 'Bearer ' + tok }, body: JSON.stringify({ name: f.name, torrentBase64: b64 }) })
+    fetch('/api/torrent', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok }, body: JSON.stringify({ name: f.name, torrentBase64: b64 }) })
       .then(function() { ev.target.value = ''; refresh(); });
   };
   rd.readAsDataURL(f);
 }
 function toggleSpeedLimit() {
-  fetch('/api/speedlimit', { method: 'POST', headers: { Authorization: 'Bearer ' + tok }, body: '{}' })
+  fetch('/api/speedlimit', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok }, body: '{}' })
     .then(function() { refresh(); });
 }
 function act(a, id) {
-  fetch('/api/action', { method: 'POST', headers: { Authorization: 'Bearer ' + tok }, body: JSON.stringify({ action: a, id: id }) })
+  fetch('/api/action', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok }, body: JSON.stringify({ action: a, id: id }) })
     .then(function() { refresh(); });
 }
 function qAct(m) {
-  fetch('/api/queue', { method: 'POST', headers: { Authorization: 'Bearer ' + tok }, body: JSON.stringify({ mode: m }) })
+  fetch('/api/queue', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok }, body: JSON.stringify({ mode: m }) })
     .then(function() { refresh(); });
 }
 function forgetDev() {
-  fetch('/api/forget', { method: 'POST', headers: { Authorization: 'Bearer ' + tok }, body: '{}' })
+  fetch('/api/forget', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok }, body: '{}' })
     .then(function() { localStorage.removeItem('mhs_remote_token'); location.reload(); });
 }
 function makeBtn(cls, label, actName, itemId) {

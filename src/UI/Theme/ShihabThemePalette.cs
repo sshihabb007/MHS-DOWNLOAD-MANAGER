@@ -303,7 +303,7 @@ namespace ShihabMehediIDM
 
     public static class ShihabThemePalette
     {
-        public const string ShihabMainHeaderTitle = "MHS Download Manager 1.2.2 (Mehedi Hasan Shihab)";
+        public const string ShihabMainHeaderTitle = "MHS Download Manager 1.2.3 (Mehedi Hasan Shihab)";
 
         internal static readonly Font UiRegular76Font = new Font("Segoe UI", 7.6f, FontStyle.Regular);
         internal static readonly Font UiBold78Font = new Font("Segoe UI", 7.8f, FontStyle.Bold);
@@ -621,11 +621,18 @@ namespace ShihabMehediIDM
 
         private static ShihabCustomThemePreset _activeThemePreset;
         private static bool _activeThemeIsDark = true;
+        private static int _themePaletteVersion = 0;
+
+        internal static int ThemePaletteVersion
+        {
+            get { return _themePaletteVersion; }
+        }
 
         public static void ApplyThemePreset(ShihabCustomThemePreset preset)
         {
             _activeThemePreset = preset;
             _activeThemeIsDark = preset == null || ShihabThemeManager.IsDarkThemePreset(preset);
+            System.Threading.Interlocked.Increment(ref _themePaletteVersion);
         }
 
         public static Color BlendThemeColor(Color a, Color b, double weightB)
@@ -799,7 +806,8 @@ namespace ShihabMehediIDM
         private static Icon _shihabCachedSmallIcon;
         private static Icon _shihabCachedBigIcon;
         private static Bitmap _mehediCachedOfficialPng;
-        private static Bitmap _shihabCachedAuthorPortrait;
+        private static Bitmap _shihabCachedCircularAuthor;
+        private static int _shihabCachedCircularAuthorDiameter;
 
         private static void EnsureOfficialIconCacheLoaded()
         {
@@ -885,12 +893,15 @@ namespace ShihabMehediIDM
             }
         }
 
+        /// <summary>
+        /// Returns the shared process-wide application Icon. Callers MUST NOT dispose the returned Icon.
+        /// </summary>
         public static Icon CreateShihabAppIcon()
         {
             EnsureOfficialIconCacheLoaded();
             if (_shihabCachedOfficialIcon != null)
             {
-                try { return (Icon)_shihabCachedOfficialIcon.Clone(); } catch { return _shihabCachedOfficialIcon; }
+                return _shihabCachedOfficialIcon;
             }
             return SystemIcons.Application;
         }
@@ -956,85 +967,118 @@ namespace ShihabMehediIDM
 
         public static Bitmap CreateShihabCircularAuthorBitmap(int shihabDiameterPx)
         {
-            if (_shihabCachedAuthorPortrait == null)
-            {
-                try
-                {
-                    Stream mehediJpgStream = typeof(ShihabThemePalette).Assembly.GetManifestResourceStream("ShihabMehediIDM.author_shihab.jpg");
-                    if (mehediJpgStream != null)
-                    {
-                        using (mehediJpgStream)
-                        using (Image shihabLoaded = Image.FromStream(mehediJpgStream))
-                        {
-                            _shihabCachedAuthorPortrait = new Bitmap(shihabLoaded);
-                        }
-                    }
-                }
-                catch { }
+            int mehediDiam = Math.Max(32, shihabDiameterPx);
 
-                if (_shihabCachedAuthorPortrait == null)
+            lock (_iconCacheLock)
+            {
+                if (_shihabCachedCircularAuthor != null && _shihabCachedCircularAuthorDiameter == mehediDiam)
                 {
                     try
                     {
-                        string mehediLocalAsset = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..\\assets\\author_shihab.jpg");
-                        if (File.Exists(mehediLocalAsset))
-                        {
-                            using (Image shihabDiskImg = Image.FromFile(mehediLocalAsset))
-                            {
-                                _shihabCachedAuthorPortrait = new Bitmap(shihabDiskImg);
-                            }
-                        }
+                        return new Bitmap(_shihabCachedCircularAuthor);
                     }
                     catch { }
                 }
             }
 
-            int mehediDiam = Math.Max(32, shihabDiameterPx);
-            if (_shihabCachedAuthorPortrait == null)
+            Bitmap mehediScaledSquare = null;
+            try
+            {
+                Stream mehediJpgStream = typeof(ShihabThemePalette).Assembly.GetManifestResourceStream("ShihabMehediIDM.author_shihab.jpg");
+                if (mehediJpgStream != null)
+                {
+                    using (mehediJpgStream)
+                    using (Image shihabLoaded = Image.FromStream(mehediJpgStream))
+                    {
+                        mehediScaledSquare = CreateCenterCroppedScaledSquare(shihabLoaded, mehediDiam);
+                    }
+                }
+            }
+            catch { }
+
+            if (mehediScaledSquare == null)
+            {
+                try
+                {
+                    string mehediLocalAsset = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..\\assets\\author_shihab.jpg");
+                    if (File.Exists(mehediLocalAsset))
+                    {
+                        using (Image shihabDiskImg = Image.FromFile(mehediLocalAsset))
+                        {
+                            mehediScaledSquare = CreateCenterCroppedScaledSquare(shihabDiskImg, mehediDiam);
+                        }
+                    }
+                }
+                catch { }
+            }
+
+            if (mehediScaledSquare == null)
             {
                 return CreateMehediLogoBitmap(mehediDiam);
             }
 
             Bitmap shihabResult = new Bitmap(mehediDiam, mehediDiam);
-            using (Bitmap mehediScaledSquare = new Bitmap(mehediDiam, mehediDiam))
+            using (mehediScaledSquare)
+            using (Graphics mehediOutG = Graphics.FromImage(shihabResult))
+            using (TextureBrush shihabTexBrush = new TextureBrush(mehediScaledSquare, WrapMode.Clamp))
+            using (Pen mehediOuterRing = new Pen(Color.FromArgb(46, 62, 88), 2.2f))
+            using (Pen shihabInnerGlow = new Pen(Color.FromArgb(75, 130, 210, 255), 1f))
             {
-                using (Graphics shihabScaleG = Graphics.FromImage(mehediScaledSquare))
+                mehediOutG.SmoothingMode = SmoothingMode.AntiAlias;
+                mehediOutG.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                mehediOutG.PixelOffsetMode = PixelOffsetMode.HighQuality;
+
+                RectangleF shihabCircleRect = new RectangleF(1.5f, 1.5f, mehediDiam - 3f, mehediDiam - 3f);
+                mehediOutG.FillEllipse(shihabTexBrush, shihabCircleRect);
+                mehediOutG.DrawEllipse(mehediOuterRing, shihabCircleRect);
+
+                RectangleF mehediInnerRect = new RectangleF(2.8f, 2.8f, mehediDiam - 5.6f, mehediDiam - 5.6f);
+                mehediOutG.DrawEllipse(shihabInnerGlow, mehediInnerRect);
+            }
+
+            if (mehediDiam <= 256)
+            {
+                lock (_iconCacheLock)
                 {
-                    shihabScaleG.SmoothingMode = SmoothingMode.HighQuality;
-                    shihabScaleG.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                    shihabScaleG.PixelOffsetMode = PixelOffsetMode.HighQuality;
-
-                    int mehediSrcW = _shihabCachedAuthorPortrait.Width;
-                    int shihabSrcH = _shihabCachedAuthorPortrait.Height;
-                    int mehediCrop = Math.Min(mehediSrcW, shihabSrcH);
-                    int shihabSrcX = (mehediSrcW - mehediCrop) / 2;
-                    int mehediSrcY = (shihabSrcH - mehediCrop) / 2;
-
-                    shihabScaleG.DrawImage(
-                        _shihabCachedAuthorPortrait,
-                        new Rectangle(0, 0, mehediDiam, mehediDiam),
-                        new Rectangle(shihabSrcX, mehediSrcY, mehediCrop, mehediCrop),
-                        GraphicsUnit.Pixel);
-                }
-
-                using (Graphics mehediOutG = Graphics.FromImage(shihabResult))
-                using (TextureBrush shihabTexBrush = new TextureBrush(mehediScaledSquare, WrapMode.Clamp))
-                using (Pen mehediOuterRing = new Pen(Color.FromArgb(46, 62, 88), 2.2f))
-                using (Pen shihabInnerGlow = new Pen(Color.FromArgb(75, 130, 210, 255), 1f))
-                {
-                    mehediOutG.SmoothingMode = SmoothingMode.AntiAlias;
-                    mehediOutG.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                    mehediOutG.PixelOffsetMode = PixelOffsetMode.HighQuality;
-
-                    RectangleF shihabCircleRect = new RectangleF(1.5f, 1.5f, mehediDiam - 3f, mehediDiam - 3f);
-                    mehediOutG.FillEllipse(shihabTexBrush, shihabCircleRect);
-                    mehediOutG.DrawEllipse(mehediOuterRing, shihabCircleRect);
-
-                    RectangleF mehediInnerRect = new RectangleF(2.8f, 2.8f, mehediDiam - 5.6f, mehediDiam - 5.6f);
-                    mehediOutG.DrawEllipse(shihabInnerGlow, mehediInnerRect);
+                    try
+                    {
+                        Bitmap smallCopy = new Bitmap(shihabResult);
+                        if (_shihabCachedCircularAuthor != null)
+                        {
+                            _shihabCachedCircularAuthor.Dispose();
+                        }
+                        _shihabCachedCircularAuthor = smallCopy;
+                        _shihabCachedCircularAuthorDiameter = mehediDiam;
+                    }
+                    catch { }
                 }
             }
+
             return shihabResult;
+        }
+
+        private static Bitmap CreateCenterCroppedScaledSquare(Image sourceImg, int diameterPx)
+        {
+            Bitmap scaled = new Bitmap(diameterPx, diameterPx);
+            using (Graphics scaleG = Graphics.FromImage(scaled))
+            {
+                scaleG.SmoothingMode = SmoothingMode.HighQuality;
+                scaleG.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                scaleG.PixelOffsetMode = PixelOffsetMode.HighQuality;
+
+                int srcW = sourceImg.Width;
+                int srcH = sourceImg.Height;
+                int crop = Math.Min(srcW, srcH);
+                int srcX = (srcW - crop) / 2;
+                int srcY = (srcH - crop) / 2;
+
+                scaleG.DrawImage(
+                    sourceImg,
+                    new Rectangle(0, 0, diameterPx, diameterPx),
+                    new Rectangle(srcX, srcY, crop, crop),
+                    GraphicsUnit.Pixel);
+            }
+            return scaled;
         }
 
         public static Bitmap DrawMehediLargeToolbarIcon(string shihabKind, bool mehediActive)

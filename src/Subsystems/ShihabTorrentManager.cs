@@ -89,6 +89,326 @@ namespace ShihabMehediIDM
         }
     }
 
+    internal sealed class TorrentDiskIoCache : IDisposable
+    {
+        private const int MaxCachedHandles = 16;
+
+        private sealed class CachedHandle
+        {
+            public int FileIndex;
+            public FileStream Stream;
+            public bool CanWrite;
+            public LinkedListNode<int> LruNode;
+        }
+
+        private readonly ShihabTorrentMetadata _meta;
+        private readonly string _rootSaveDir;
+        private readonly bool _allowSparse;
+        private readonly object _diskLock;
+        private readonly long[] _fileEnds;
+        private readonly Dictionary<int, string> _validatedPaths = new Dictionary<int, string>();
+        private readonly Dictionary<int, CachedHandle> _openHandles = new Dictionary<int, CachedHandle>();
+        private readonly LinkedList<int> _lruOrder = new LinkedList<int>();
+        private bool _disposed;
+
+        public TorrentDiskIoCache(ShihabTorrentMetadata meta, string rootSaveDir, bool allowSparse, object diskLock)
+        {
+            _meta = meta;
+            _rootSaveDir = rootSaveDir;
+            _allowSparse = allowSparse;
+            _diskLock = diskLock;
+            int fileCount = (meta != null && meta.Files != null) ? meta.Files.Count : 0;
+            _fileEnds = new long[fileCount];
+            for (int i = 0; i < fileCount; i++)
+            {
+                ShihabTorrentFileEntry fe = meta.Files[i];
+                _fileEnds[i] = fe != null ? (fe.ByteOffsetInTorrent + Math.Max(0L, fe.SizeBytes)) : 0L;
+            }
+        }
+
+        public int FindFirstOverlappingFileIndex(long globalStart)
+        {
+            int lo = 0;
+            int hi = _fileEnds.Length - 1;
+            int ans = _fileEnds.Length;
+            while (lo <= hi)
+            {
+                int mid = lo + ((hi - lo) >> 1);
+                if (_fileEnds[mid] > globalStart)
+                {
+                    ans = mid;
+                    hi = mid - 1;
+                }
+                else
+                {
+                    lo = mid + 1;
+                }
+            }
+            return ans;
+        }
+
+        public long ComputeSelectedBytesForPiece(int pieceIndex)
+        {
+            if (_meta == null || _meta.Files == null || pieceIndex < 0 || pieceIndex >= _meta.PieceCount) return 0L;
+            long pStart = (long)pieceIndex * _meta.PieceLength;
+            long pRem = _meta.TotalSizeBytes - pStart;
+            long pLen = Math.Max(0L, Math.Min(_meta.PieceLength, pRem));
+            if (pLen <= 0L) return 0L;
+            long pEnd = pStart + pLen;
+            long sum = 0L;
+            int startIdx = FindFirstOverlappingFileIndex(pStart);
+            for (int f = startIdx; f < _meta.Files.Count; f++)
+            {
+                ShihabTorrentFileEntry fe = _meta.Files[f];
+                if (fe == null) continue;
+                if (fe.ByteOffsetInTorrent >= pEnd) break;
+                if (!fe.Selected || fe.IsPaddingFile || fe.SizeBytes <= 0L) continue;
+                long fStart = fe.ByteOffsetInTorrent;
+                long fEnd = fStart + fe.SizeBytes;
+                long ov = Math.Min(pEnd, fEnd) - Math.Max(pStart, fStart);
+                if (ov > 0L) sum += ov;
+            }
+            return sum;
+        }
+
+        private bool TryGetStreamLocked(int fileIdx, ShihabTorrentFileEntry fe, bool forWrite, out FileStream stream)
+        {
+            stream = null;
+            if (_disposed) return false;
+
+            CachedHandle existing;
+            if (_openHandles.TryGetValue(fileIdx, out existing))
+            {
+                if (!forWrite || existing.CanWrite)
+                {
+                    if (existing.LruNode != null && existing.LruNode.List == _lruOrder)
+                    {
+                        _lruOrder.Remove(existing.LruNode);
+                        _lruOrder.AddFirst(existing.LruNode);
+                    }
+                    stream = existing.Stream;
+                    return true;
+                }
+                if (existing.LruNode != null && existing.LruNode.List == _lruOrder)
+                {
+                    _lruOrder.Remove(existing.LruNode);
+                }
+                _openHandles.Remove(fileIdx);
+                try { existing.Stream.Dispose(); } catch { }
+            }
+
+            string fullFilePath;
+            if (!_validatedPaths.TryGetValue(fileIdx, out fullFilePath))
+            {
+                if (!ShihabProcessAndPathSafety.ResolvePathStrictlyUnderRoot(_rootSaveDir, fe.RelativePath, out fullFilePath))
+                {
+                    if (forWrite)
+                    {
+                        throw new InvalidOperationException("Blocked torrent path traversal: " + fe.RelativePath);
+                    }
+                    return false;
+                }
+                if (forWrite)
+                {
+                    string parentDir = Path.GetDirectoryName(fullFilePath);
+                    if (!string.IsNullOrEmpty(parentDir))
+                    {
+                        Directory.CreateDirectory(parentDir);
+                    }
+                }
+                if (ShihabProcessAndPathSafety.HasReparsePointUnderRoot(_rootSaveDir, fullFilePath))
+                {
+                    if (forWrite)
+                    {
+                        throw new InvalidOperationException("Blocked symlink/reparse point in torrent destination: " + fe.RelativePath);
+                    }
+                    return false;
+                }
+                if (!forWrite && !File.Exists(fullFilePath))
+                {
+                    return false;
+                }
+                _validatedPaths[fileIdx] = fullFilePath;
+            }
+            else if (!forWrite && !File.Exists(fullFilePath))
+            {
+                return false;
+            }
+
+            while (_openHandles.Count >= MaxCachedHandles && _lruOrder.Last != null)
+            {
+                int evictIdx = _lruOrder.Last.Value;
+                _lruOrder.RemoveLast();
+                CachedHandle evictHandle;
+                if (_openHandles.TryGetValue(evictIdx, out evictHandle))
+                {
+                    _openHandles.Remove(evictIdx);
+                    try
+                    {
+                        if (evictHandle.CanWrite) evictHandle.Stream.Flush();
+                        evictHandle.Stream.Dispose();
+                    }
+                    catch { }
+                }
+            }
+
+            FileStream fs;
+            if (forWrite)
+            {
+                fs = new FileStream(fullFilePath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite, 65536);
+                if (fs.Length != fe.SizeBytes)
+                {
+                    if (_allowSparse && fs.Length == 0 && fe.SizeBytes > 65536)
+                    {
+                        ShihabOsAndDiskSafety.TryMarkFileSparse(fs);
+                    }
+                    if (fs.Length > fe.SizeBytes)
+                    {
+                        fs.SetLength(fe.SizeBytes);
+                    }
+                }
+            }
+            else
+            {
+                fs = new FileStream(fullFilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 65536);
+            }
+
+            LinkedListNode<int> node = _lruOrder.AddFirst(fileIdx);
+            _openHandles[fileIdx] = new CachedHandle
+            {
+                FileIndex = fileIdx,
+                Stream = fs,
+                CanWrite = forWrite,
+                LruNode = node
+            };
+            stream = fs;
+            return true;
+        }
+
+        public bool ReadSlice(int pieceIndex, int sliceOffset, int sliceLength, byte[] destBuf, int destOffset)
+        {
+            if (_meta == null || destBuf == null || pieceIndex < 0 || pieceIndex >= _meta.PieceCount) return false;
+            long pStart = (long)pieceIndex * _meta.PieceLength;
+            int pSize = (int)Math.Max(0L, Math.Min(_meta.PieceLength, _meta.TotalSizeBytes - pStart));
+            if (sliceOffset < 0 || sliceLength <= 0 || (long)sliceOffset + (long)sliceLength > (long)pSize) return false;
+            if (destOffset < 0 || (long)destOffset + (long)sliceLength > (long)destBuf.Length) return false;
+
+            long reqGlobalStart = pStart + sliceOffset;
+            long reqGlobalEnd = reqGlobalStart + sliceLength;
+
+            lock (_diskLock)
+            {
+                if (_disposed) return false;
+                int startIdx = FindFirstOverlappingFileIndex(reqGlobalStart);
+                for (int f = startIdx; f < _meta.Files.Count; f++)
+                {
+                    ShihabTorrentFileEntry fe = _meta.Files[f];
+                    if (fe.ByteOffsetInTorrent >= reqGlobalEnd) break;
+                    if (fe.SizeBytes <= 0) continue;
+                    long fStart = fe.ByteOffsetInTorrent;
+                    long fEnd = fStart + fe.SizeBytes;
+                    long ovStart = Math.Max(reqGlobalStart, fStart);
+                    long ovEnd = Math.Min(reqGlobalEnd, fEnd);
+                    if (ovEnd <= ovStart) continue;
+
+                    int need = (int)(ovEnd - ovStart);
+                    int dstOff = destOffset + (int)(ovStart - reqGlobalStart);
+                    if (fe.IsPaddingFile)
+                    {
+                        Array.Clear(destBuf, dstOff, need);
+                        continue;
+                    }
+                    if (!fe.Selected) return false;
+
+                    FileStream fs;
+                    if (!TryGetStreamLocked(f, fe, false, out fs))
+                    {
+                        return false;
+                    }
+                    long fileOff = ovStart - fStart;
+                    if (fs.Length < fileOff + need) return false;
+                    fs.Seek(fileOff, SeekOrigin.Begin);
+                    int readTot = 0;
+                    while (readTot < need)
+                    {
+                        int r = fs.Read(destBuf, dstOff + readTot, need - readTot);
+                        if (r <= 0) return false;
+                        readTot += r;
+                    }
+                }
+            }
+            return true;
+        }
+
+        public void WritePiece(int pieceIndex, byte[] pieceData, int pieceDataLength)
+        {
+            long pieceGlobalStart = (long)pieceIndex * _meta.PieceLength;
+            long pieceGlobalEnd = pieceGlobalStart + pieceDataLength;
+
+            lock (_diskLock)
+            {
+                if (_disposed) throw new ObjectDisposedException("TorrentDiskIoCache");
+                int startIdx = FindFirstOverlappingFileIndex(pieceGlobalStart);
+                for (int f = startIdx; f < _meta.Files.Count; f++)
+                {
+                    ShihabTorrentFileEntry fe = _meta.Files[f];
+                    if (fe.ByteOffsetInTorrent >= pieceGlobalEnd) break;
+                    if (!fe.Selected || fe.IsPaddingFile || fe.SizeBytes <= 0) continue;
+                    long fStart = fe.ByteOffsetInTorrent;
+                    long fEnd = fStart + fe.SizeBytes;
+                    long ovStart = Math.Max(pieceGlobalStart, fStart);
+                    long ovEnd = Math.Min(pieceGlobalEnd, fEnd);
+                    if (ovEnd <= ovStart) continue;
+
+                    FileStream fs;
+                    if (!TryGetStreamLocked(f, fe, true, out fs))
+                    {
+                        throw new IOException("Unable to open torrent destination file: " + fe.RelativePath);
+                    }
+                    fs.Seek(ovStart - fStart, SeekOrigin.Begin);
+                    fs.Write(pieceData, (int)(ovStart - pieceGlobalStart), (int)(ovEnd - ovStart));
+                }
+            }
+        }
+
+        public void FlushWritableHandles()
+        {
+            lock (_diskLock)
+            {
+                foreach (KeyValuePair<int, CachedHandle> kv in _openHandles)
+                {
+                    if (kv.Value != null && kv.Value.CanWrite && kv.Value.Stream != null)
+                    {
+                        try { kv.Value.Stream.Flush(); } catch { }
+                    }
+                }
+            }
+        }
+
+        public void Dispose()
+        {
+            lock (_diskLock)
+            {
+                if (_disposed) return;
+                _disposed = true;
+                foreach (KeyValuePair<int, CachedHandle> kv in _openHandles)
+                {
+                    if (kv.Value != null && kv.Value.Stream != null)
+                    {
+                        try
+                        {
+                            if (kv.Value.CanWrite) kv.Value.Stream.Flush();
+                            kv.Value.Stream.Dispose();
+                        }
+                        catch { }
+                    }
+                }
+                _openHandles.Clear();
+                _lruOrder.Clear();
+            }
+        }
+    }
+
     public static class ShihabTorrentManager
     {
         private const int MaxTorrentDownloadBytes = 10 * 1024 * 1024;
@@ -97,6 +417,129 @@ namespace ShihabMehediIDM
         private const int MaxPieceLengthBytes = 64 * 1024 * 1024;
         private const int MinPieceLengthBytes = 16384;
         private const int MaxHttpRedirects = 5;
+        private const int MaxPiecePoolBuffers = 8;
+        private const int MaxTrackedPeers = 500;
+        private const int MaxTelemetryPieceBuckets = 512;
+
+        private sealed class TorrentPieceBufferPool
+        {
+            private readonly int _pieceLength;
+            private readonly int _maxPooled;
+            private readonly ConcurrentStack<byte[]> _pool = new ConcurrentStack<byte[]>();
+            private int _count;
+
+            public TorrentPieceBufferPool(int pieceLength, int maxPooled)
+            {
+                _pieceLength = pieceLength;
+                _maxPooled = Math.Max(1, maxPooled);
+            }
+
+            public byte[] Rent(int size)
+            {
+                if (size == _pieceLength)
+                {
+                    byte[] buf;
+                    if (_pool.TryPop(out buf))
+                    {
+                        Interlocked.Decrement(ref _count);
+                        return buf;
+                    }
+                }
+                return new byte[size];
+            }
+
+            public void Return(byte[] buf)
+            {
+                if (buf == null || buf.Length != _pieceLength) return;
+                if (Interlocked.Increment(ref _count) <= _maxPooled)
+                {
+                    _pool.Push(buf);
+                }
+                else
+                {
+                    Interlocked.Decrement(ref _count);
+                }
+            }
+        }
+
+        private sealed class TorrentPieceState
+        {
+            public readonly int PieceCount;
+            public readonly bool[] Needed;
+            public readonly bool[] Done;
+            public readonly bool[] InFlight;
+            public readonly object LockObj;
+            public readonly int TotalNeededPieces;
+            public readonly int FirstNeededPiece;
+            public readonly int LastNeededPiece;
+            public int RemainingNeededPieces;
+            public int CompletedNeededPieces;
+            public int SequentialScanCursor;
+            public long CompletedSelectedBytes;
+
+            public TorrentPieceState(
+                int pieceCount,
+                bool[] needed,
+                bool[] done,
+                bool[] inFlight,
+                object lockObj,
+                int totalNeededPieces,
+                long initialCompletedSelectedBytes)
+            {
+                PieceCount = pieceCount;
+                Needed = needed;
+                Done = done;
+                InFlight = inFlight;
+                LockObj = lockObj;
+                TotalNeededPieces = totalNeededPieces;
+                CompletedSelectedBytes = initialCompletedSelectedBytes;
+
+                int first = -1;
+                int last = -1;
+                int remaining = 0;
+                int completed = 0;
+                for (int p = 0; p < pieceCount; p++)
+                {
+                    if (needed[p])
+                    {
+                        if (first < 0) first = p;
+                        last = p;
+                        if (done[p]) completed++;
+                        else remaining++;
+                    }
+                }
+                FirstNeededPiece = first;
+                LastNeededPiece = last;
+                RemainingNeededPieces = remaining;
+                CompletedNeededPieces = completed;
+                SequentialScanCursor = first >= 0 ? first : pieceCount;
+            }
+
+            public bool HasUnfinishedNeededPieces()
+            {
+                return Volatile.Read(ref RemainingNeededPieces) > 0;
+            }
+
+            public bool MarkPieceDone(int pieceIndex, TorrentDiskIoCache diskIo)
+            {
+                lock (LockObj)
+                {
+                    bool newlyDone = !Done[pieceIndex];
+                    Done[pieceIndex] = true;
+                    InFlight[pieceIndex] = false;
+                    if (newlyDone && Needed[pieceIndex])
+                    {
+                        if (RemainingNeededPieces > 0) RemainingNeededPieces--;
+                        CompletedNeededPieces++;
+                        if (diskIo != null)
+                        {
+                            CompletedSelectedBytes += diskIo.ComputeSelectedBytesForPiece(pieceIndex);
+                        }
+                    }
+                    return newlyDone;
+                }
+            }
+        }
 
         private struct IpRangeEntry : IComparable<IpRangeEntry>
         {
@@ -429,9 +872,9 @@ namespace ShihabMehediIDM
             {
                 return ParseMagnetUri(trimmed);
             }
-            if (File.Exists(trimmed))
+            if (ShihabProcessAndPathSafety.IsUncOrDevicePath(trimmed))
             {
-                return InspectTorrentFile(trimmed);
+                return new ShihabTorrentMetadata { ErrorMessage = "Blocked UNC or device path for .torrent input." };
             }
             Uri remoteUri;
             if (ShihabProcessAndPathSafety.TryValidateHttpUrl(trimmed, false, out remoteUri))
@@ -451,7 +894,22 @@ namespace ShihabMehediIDM
                     return new ShihabTorrentMetadata { ErrorMessage = "Failed to download .torrent file: " + ex.Message };
                 }
             }
-            return new ShihabTorrentMetadata { ErrorMessage = "Torrent file not found: " + trimmed };
+            string localCandidate = trimmed;
+            Uri fileUri;
+            if (Uri.TryCreate(trimmed, UriKind.Absolute, out fileUri) && fileUri.IsFile)
+            {
+                if (fileUri.IsUnc)
+                {
+                    return new ShihabTorrentMetadata { ErrorMessage = "Blocked UNC file URI for .torrent input." };
+                }
+                localCandidate = fileUri.LocalPath;
+            }
+            string validatedLocalTorrentPath;
+            if (ShihabProcessAndPathSafety.TryValidateLocalTorrentFilePath(localCandidate, out validatedLocalTorrentPath))
+            {
+                return InspectTorrentFile(validatedLocalTorrentPath);
+            }
+            return new ShihabTorrentMetadata { ErrorMessage = "Torrent file not found or rejected by security validation: " + trimmed };
         }
 
         private static bool IsUriAllowedForTorrentHttp(Uri uri)
@@ -538,6 +996,10 @@ namespace ShihabMehediIDM
 
         public static ShihabTorrentMetadata InspectTorrentFile(string torrentFilePath)
         {
+            if (string.IsNullOrWhiteSpace(torrentFilePath) || ShihabProcessAndPathSafety.IsUncOrDevicePath(torrentFilePath))
+            {
+                return new ShihabTorrentMetadata { ErrorMessage = "Blocked invalid, UNC, or device path for .torrent file." };
+            }
             FileInfo fi = new FileInfo(torrentFilePath);
             if (!fi.Exists || fi.Length <= 0 || fi.Length > 32 * 1024 * 1024)
             {
@@ -876,13 +1338,28 @@ namespace ShihabMehediIDM
 
             try
             {
-                byte[] rawBytes = null;
-                if (File.Exists(src))
+                if (ShihabProcessAndPathSafety.IsUncOrDevicePath(src))
                 {
-                    FileInfo fi = new FileInfo(src);
-                    if (fi.Length <= MaxBlocklistBytes)
+                    return;
+                }
+                byte[] rawBytes = null;
+                bool isHttpUrl = src.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+                                 src.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
+                if (!isHttpUrl)
+                {
+                    string localPath = src.Trim('"');
+                    if (ShihabProcessAndPathSafety.IsUncOrDevicePath(localPath) ||
+                        ShihabProcessAndPathSafety.HasAnyReparsePointInPath(localPath))
                     {
-                        rawBytes = File.ReadAllBytes(src);
+                        return;
+                    }
+                    if (File.Exists(localPath))
+                    {
+                        FileInfo fi = new FileInfo(localPath);
+                        if (fi.Length <= MaxBlocklistBytes)
+                        {
+                            rawBytes = File.ReadAllBytes(localPath);
+                        }
                     }
                 }
                 else
@@ -1571,7 +2048,7 @@ namespace ShihabMehediIDM
                                 {
                                     break;
                                 }
-                                Thread.Sleep(80);
+                                try { raceToken.WaitHandle.WaitOne(80); } catch { break; }
                                 continue;
                             }
                             Interlocked.Increment(ref activeFetchers);
@@ -1779,489 +2256,680 @@ namespace ShihabMehediIDM
                 }
             }
 
-            // 4. Hash-verified Resume & Force Recheck
+            // 4. Hash-verified Resume & Force Recheck (with pooled piece buffer, reusable SHA1, and cached LRU file handles)
             string safeHashPrefix = ShihabProcessAndPathSafety.SanitizeFileName(
                 meta.InfoHashHex.Substring(0, Math.Min(16, meta.InfoHashHex.Length)),
                 "bt");
             string stateFile = Path.Combine(rootSaveDir, "." + safeHashPrefix + ".mhs.btstate");
             object pieceLock = new object();
             object diskLock = new object();
+            bool allowSparse = cfg == null || cfg.ShihabEnableSparseFiles;
+            TorrentPieceBufferPool piecePool = new TorrentPieceBufferPool((int)meta.PieceLength, MaxPiecePoolBuffers);
 
-            bool anyExistingFileOnDisk = false;
-            for (int f = 0; f < meta.Files.Count; f++)
+            using (TorrentDiskIoCache diskIo = new TorrentDiskIoCache(meta, rootSaveDir, allowSparse, diskLock))
             {
-                ShihabTorrentFileEntry fe = meta.Files[f];
-                if (!fe.Selected || fe.IsPaddingFile || fe.SizeBytes <= 0) continue;
-                string fp;
-                if (ShihabProcessAndPathSafety.ResolvePathStrictlyUnderRoot(rootSaveDir, fe.RelativePath, out fp) && File.Exists(fp))
-                {
-                    anyExistingFileOnDisk = true;
-                    break;
-                }
-            }
-
-            if (item.ShihabTorrentForceRecheck || File.Exists(stateFile) || anyExistingFileOnDisk)
-            {
-                item.ShihabStatusText = "Verifying existing torrent pieces (SHA-1)...";
-                if (onProgressChanged != null) onProgressChanged();
-
-                bool[] candidatePieces = new bool[meta.PieceCount];
-                if (!item.ShihabTorrentForceRecheck && File.Exists(stateFile))
-                {
-                    try
-                    {
-                        string bits = File.ReadAllText(stateFile, Encoding.ASCII).Trim();
-                        for (int p = 0; p < Math.Min(bits.Length, meta.PieceCount); p++)
-                        {
-                            if (bits[p] == '1' && pieceNeeded[p]) candidatePieces[p] = true;
-                        }
-                    }
-                    catch { }
-                }
-                else
-                {
-                    for (int p = 0; p < meta.PieceCount; p++) candidatePieces[p] = pieceNeeded[p];
-                }
-
-                // Always verify actual disk bytes against SHA-1 so deleted/corrupt files are re-downloaded!
-                for (int p = 0; p < meta.PieceCount; p++)
-                {
-                    cancelToken.ThrowIfCancellationRequested();
-                    if (!candidatePieces[p]) continue;
-                    int pSize = GetPieceSize(meta, p);
-                    byte[] diskData = ReadPieceSliceFromDisk(meta, p, 0, pSize, rootSaveDir, diskLock);
-                    if (diskData != null && diskData.Length == pSize && VerifyPieceSha1(meta, p, diskData))
-                    {
-                        pieceDone[p] = true;
-                    }
-                }
-                item.ShihabTorrentForceRecheck = false;
-                WriteStateFileAtomically(stateFile, pieceDone);
-            }
-
-            item.MehediDownloadedBytes = ComputeCompletedSelectedBytes(meta, pieceDone);
-
-            // 5. Start Real Incoming Listener / Seeding Server FIRST so real port is announced
-            long uploadedWindowBytes = 0;
-            Stopwatch uploadSw = Stopwatch.StartNew();
-            object progressSync = new object();
-            long downloadWindowBytes = 0;
-            Stopwatch downloadSw = Stopwatch.StartNew();
-
-            ConcurrentDictionary<string, ShihabTorrentPeerTelemetry> peerStatsMap =
-                new ConcurrentDictionary<string, ShihabTorrentPeerTelemetry>(StringComparer.OrdinalIgnoreCase);
-            List<ShihabTorrentTrackerTelemetry> trackerStats = new List<ShihabTorrentTrackerTelemetry>();
-            object trackerStatsLock = new object();
-            int dhtPeersFound = 0;
-            int pexPeersFound = 0;
-            int lsdPeersFound = 0;
-            int activeOutPeers = 0;
-            int totalKnownPeersCount = 0;
-            bool isSeedingPhase = false;
-
-            ShihabTorrentSeedServer seedServer = null;
-            int listenPort = 0;
-
-            Action publishTelemetry = delegate
-            {
-                ShihabTorrentLiveSnapshot snap = new ShihabTorrentLiveSnapshot();
-                snap.ItemId = item.ShihabId;
-                snap.InfoHashHex = meta.InfoHashHex;
-                snap.IsPrivate = meta.IsPrivate;
-                snap.IsSeeding = isSeedingPhase;
-                snap.ListenPort = listenPort;
-                snap.PieceCount = meta.PieceCount;
-                snap.NeededPieces = totalNeededPieces;
-                snap.ActivePeers = Volatile.Read(ref activeOutPeers) + (seedServer != null ? seedServer.ActiveIncomingPeers : 0);
-                snap.TotalKnownPeers = Volatile.Read(ref totalKnownPeersCount);
-                snap.DhtPeersFound = Volatile.Read(ref dhtPeersFound);
-                snap.PexPeersFound = Volatile.Read(ref pexPeersFound);
-                snap.LsdPeersFound = Volatile.Read(ref lsdPeersFound);
-                snap.UploadedBytes = item.ShihabTorrentUploadedBytes;
-                snap.UploadSpeedBps = item.ShihabTorrentUploadSpeedBps;
-                snap.ShareRatio = item.ShihabTotalBytes > 0 ? ((double)item.ShihabTorrentUploadedBytes / (double)item.ShihabTotalBytes) : 0.0;
-
-                byte[] pStates = new byte[meta.PieceCount];
-                int compCount = 0;
-                lock (pieceLock)
-                {
-                    for (int p = 0; p < meta.PieceCount; p++)
-                    {
-                        if (pieceDone[p])
-                        {
-                            pStates[p] = 2;
-                            if (pieceNeeded[p]) compCount++;
-                        }
-                        else if (pieceInFlight[p]) pStates[p] = 1;
-                        else pStates[p] = 0;
-                    }
-                }
-                snap.CompletedPieces = compCount;
-                snap.PieceStates = pStates;
-
-                foreach (KeyValuePair<string, ShihabTorrentPeerTelemetry> kv in peerStatsMap)
-                {
-                    snap.Peers.Add(kv.Value);
-                }
-                lock (trackerStatsLock)
-                {
-                    snap.Trackers.AddRange(trackerStats);
-                }
+                bool anyExistingFileOnDisk = false;
                 for (int f = 0; f < meta.Files.Count; f++)
                 {
                     ShihabTorrentFileEntry fe = meta.Files[f];
-                    if (fe.IsPaddingFile) continue;
-                    long fDone = ComputeFileCompletedBytes(meta, fe, pieceDone, pieceLock);
-                    snap.Files.Add(new ShihabTorrentFileProgressTelemetry
+                    if (!fe.Selected || fe.IsPaddingFile || fe.SizeBytes <= 0) continue;
+                    string fp;
+                    if (ShihabProcessAndPathSafety.ResolvePathStrictlyUnderRoot(rootSaveDir, fe.RelativePath, out fp) && File.Exists(fp))
                     {
-                        Index = fe.Index,
-                        RelativePath = fe.RelativePath,
-                        SizeBytes = fe.SizeBytes,
-                        CompletedBytes = fDone,
-                        Selected = fe.Selected
-                    });
-                }
-                ShihabTorrentLiveTelemetry.Publish(item.ShihabId, snap);
-            };
-
-            Action<int> recordUploaded = delegate(int upLen)
-            {
-                item.ShihabTorrentUploadedBytes += upLen;
-                Interlocked.Add(ref uploadedWindowBytes, upLen);
-                lock (progressSync)
-                {
-                    long ms = uploadSw.ElapsedMilliseconds;
-                    if (ms >= 350)
-                    {
-                        long delta = Interlocked.Exchange(ref uploadedWindowBytes, 0);
-                        uploadSw.Restart();
-                        item.ShihabTorrentUploadSpeedBps = ms > 0 ? (delta * 1000.0 / ms) : 0.0;
-                    }
-                }
-            };
-
-            using (seedServer = new ShihabTorrentSeedServer(
-                meta, peerId, rootSaveDir, pieceDone, pieceLock, diskLock,
-                recordUploaded,
-                delegate(ShihabTorrentPeerTelemetry pt) { peerStatsMap[pt.Endpoint] = pt; }))
-            {
-                if (seedServer.TryStart(cfg, cancelToken))
-                {
-                    listenPort = seedServer.ListenPort;
-                    item.ShihabTorrentListenPort = listenPort;
-                }
-
-                // 6. Dynamic Peer Queue + Bad-Peer Banning + Multi-Source Discovery (Trackers + x.pe + DHT + LSD + PEX)
-                ConcurrentQueue<IPEndPoint> peerQueue = new ConcurrentQueue<IPEndPoint>();
-                HashSet<string> knownPeers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                Dictionary<string, int> badPeerStrikes = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-                HashSet<string> bannedPeers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                object peerPoolLock = new object();
-
-                Action<IPEndPoint, string> pushPeer = delegate(IPEndPoint ep, string sourceTag)
-                {
-                    if (ep == null || ep.Port <= 0 || ep.Port > 65535) return;
-                    if (listenPort > 0 && ep.Port == listenPort && IPAddress.IsLoopback(ep.Address)) return;
-                    if (!IsPeerAddressAllowed(ep.Address, allowLocalTest)) return;
-                    string key = ep.ToString();
-                    bool added = false;
-                    lock (peerPoolLock)
-                    {
-                        if (bannedPeers.Contains(key)) return;
-                        if (knownPeers.Add(key))
-                        {
-                            added = true;
-                            totalKnownPeersCount = knownPeers.Count;
-                        }
-                    }
-                    if (added)
-                    {
-                        peerQueue.Enqueue(ep);
-                        if (sourceTag == "dht") Interlocked.Increment(ref dhtPeersFound);
-                        else if (sourceTag == "pex") Interlocked.Increment(ref pexPeersFound);
-                        else if (sourceTag == "lsd") Interlocked.Increment(ref lsdPeersFound);
-                    }
-                };
-
-                // Enqueue direct x.pe peer hints immediately
-                for (int i = 0; i < meta.DirectPeerHints.Count; i++)
-                {
-                    IPEndPoint hintEp;
-                    if (ShihabTorrentDhtClient.TryParseHostPortEndPoint(meta.DirectPeerHints[i], out hintEp))
-                    {
-                        pushPeer(hintEp, "xpe");
+                        anyExistingFileOnDisk = true;
+                        break;
                     }
                 }
 
-                // Initial Announce (if pieces still needed or seeding)
-                bool needMorePieces = HasUnfinishedNeededPieces(meta.PieceCount, pieceNeeded, pieceDone, pieceLock);
-                if (needMorePieces || item.ShihabTorrentKeepSeeding)
+                if (item.ShihabTorrentForceRecheck || File.Exists(stateFile) || anyExistingFileOnDisk)
                 {
-                    item.ShihabStatusText = "Announcing to trackers & DHT...";
+                    item.ShihabStatusText = "Verifying existing torrent pieces (SHA-1)...";
                     if (onProgressChanged != null) onProgressChanged();
 
-                    List<ShihabTorrentTrackerTelemetry> initTStats;
-                    List<IPEndPoint> initPeers = AnnounceAllTrackers(
-                        meta, peerId, listenPort, item.ShihabTorrentUploadedBytes, item.MehediDownloadedBytes,
-                        Math.Max(0L, item.ShihabTotalBytes - item.MehediDownloadedBytes),
-                        "started", cfg, cancelToken, out initTStats);
-                    lock (trackerStatsLock) { trackerStats = initTStats; }
-                    for (int i = 0; i < initPeers.Count; i++) pushPeer(initPeers[i], "tracker");
-
-                    if (!meta.IsPrivate)
+                    bool[] candidatePieces = new bool[meta.PieceCount];
+                    if (!item.ShihabTorrentForceRecheck && File.Exists(stateFile))
                     {
-                        ShihabTorrentLsdClient.AnnounceOnce(meta.InfoHashHex, listenPort, cfg);
+                        try
+                        {
+                            string bits = File.ReadAllText(stateFile, Encoding.ASCII).Trim();
+                            for (int p = 0; p < Math.Min(bits.Length, meta.PieceCount); p++)
+                            {
+                                if (bits[p] == '1' && pieceNeeded[p]) candidatePieces[p] = true;
+                            }
+                        }
+                        catch { }
                     }
+                    else
+                    {
+                        for (int p = 0; p < meta.PieceCount; p++) candidatePieces[p] = pieceNeeded[p];
+                    }
+
+                    // Always verify actual disk bytes against SHA-1 so deleted/corrupt files are re-downloaded!
+                    byte[] checkBuf = piecePool.Rent((int)meta.PieceLength);
+                    try
+                    {
+                        using (SHA1 checkSha1 = SHA1.Create())
+                        {
+                            for (int p = 0; p < meta.PieceCount; p++)
+                            {
+                                cancelToken.ThrowIfCancellationRequested();
+                                if (!candidatePieces[p]) continue;
+                                int pSize = GetPieceSize(meta, p);
+                                if (pSize <= 0 || pSize > checkBuf.Length) continue;
+                                if (diskIo.ReadSlice(p, 0, pSize, checkBuf, 0) && VerifyPieceSha1(meta, p, checkBuf, pSize, checkSha1))
+                                {
+                                    pieceDone[p] = true;
+                                }
+                            }
+                        }
+                    }
+                    finally
+                    {
+                        piecePool.Return(checkBuf);
+                    }
+                    item.ShihabTorrentForceRecheck = false;
+                    WriteStateFileAtomically(stateFile, pieceDone);
                 }
 
-                bool sequential = item.ShihabTorrentSequential || (cfg != null && cfg.ShihabTorrentSequentialDefault);
-                long lastStateFlushTick = Environment.TickCount;
+                long initialCompletedBytes = ComputeCompletedSelectedBytes(meta, pieceDone);
+                TorrentPieceState pieceState = new TorrentPieceState(
+                    meta.PieceCount, pieceNeeded, pieceDone, pieceInFlight, pieceLock, totalNeededPieces, initialCompletedBytes);
+                item.MehediDownloadedBytes = initialCompletedBytes;
 
-                Action<int> onDownloadBytes = delegate(int gotLen)
+                // 5. Start Real Incoming Listener / Seeding Server FIRST so real port is announced
+                long uploadedWindowBytes = 0;
+                Stopwatch uploadSw = Stopwatch.StartNew();
+                object progressSync = new object();
+                long downloadWindowBytes = 0;
+                Stopwatch downloadSw = Stopwatch.StartNew();
+
+                ConcurrentDictionary<string, ShihabTorrentPeerTelemetry> peerStatsMap =
+                    new ConcurrentDictionary<string, ShihabTorrentPeerTelemetry>(StringComparer.OrdinalIgnoreCase);
+                object peerStatsMetaLock = new object();
+                Dictionary<string, long> peerLastSeenTicks = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+                HashSet<string> activePeerEndpoints = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                int peerStatsVersion = 0;
+
+                Action<ShihabTorrentPeerTelemetry, bool> upsertPeerStats = delegate(ShihabTorrentPeerTelemetry pt, bool isActive)
                 {
-                    if (onRateAndQuotaBytes != null && gotLen > 0)
+                    if (pt == null || string.IsNullOrEmpty(pt.Endpoint)) return;
+                    peerStatsMap[pt.Endpoint] = pt;
+                    Interlocked.Increment(ref peerStatsVersion);
+                    lock (peerStatsMetaLock)
                     {
-                        onRateAndQuotaBytes(gotLen);
+                        peerLastSeenTicks[pt.Endpoint] = DateTime.UtcNow.Ticks;
+                        if (isActive) activePeerEndpoints.Add(pt.Endpoint);
+                        else activePeerEndpoints.Remove(pt.Endpoint);
+
+                        if (peerStatsMap.Count > MaxTrackedPeers)
+                        {
+                            int toEvict = peerStatsMap.Count - MaxTrackedPeers;
+                            List<KeyValuePair<string, long>> candidates = new List<KeyValuePair<string, long>>();
+                            foreach (KeyValuePair<string, long> kv in peerLastSeenTicks)
+                            {
+                                if (!activePeerEndpoints.Contains(kv.Key))
+                                {
+                                    candidates.Add(kv);
+                                }
+                            }
+                            candidates.Sort(delegate(KeyValuePair<string, long> a, KeyValuePair<string, long> b)
+                            {
+                                return a.Value.CompareTo(b.Value);
+                            });
+                            int removed = 0;
+                            for (int i = 0; i < candidates.Count && removed < toEvict; i++)
+                            {
+                                string oldKey = candidates[i].Key;
+                                ShihabTorrentPeerTelemetry ignored;
+                                if (peerStatsMap.TryRemove(oldKey, out ignored))
+                                {
+                                    peerLastSeenTicks.Remove(oldKey);
+                                    removed++;
+                                }
+                            }
+                        }
                     }
-                    Interlocked.Add(ref downloadWindowBytes, gotLen);
-                    bool shouldNotify = false;
+                };
+
+                Action<string> markPeerDisconnected = delegate(string epKey)
+                {
+                    if (string.IsNullOrEmpty(epKey)) return;
+                    lock (peerStatsMetaLock)
+                    {
+                        activePeerEndpoints.Remove(epKey);
+                        peerLastSeenTicks[epKey] = DateTime.UtcNow.Ticks;
+                    }
+                };
+
+                List<ShihabTorrentTrackerTelemetry> trackerStats = new List<ShihabTorrentTrackerTelemetry>();
+                object trackerStatsLock = new object();
+                int dhtPeersFound = 0;
+                int pexPeersFound = 0;
+                int lsdPeersFound = 0;
+                int activeOutPeers = 0;
+                int totalKnownPeersCount = 0;
+                bool isSeedingPhase = false;
+
+                ShihabTorrentSeedServer seedServer = null;
+                int listenPort = 0;
+
+                Action publishTelemetry = delegate
+                {
+                    ShihabTorrentLiveSnapshot snap = new ShihabTorrentLiveSnapshot();
+                    snap.ItemId = item.ShihabId;
+                    snap.InfoHashHex = meta.InfoHashHex;
+                    snap.IsPrivate = meta.IsPrivate;
+                    snap.IsSeeding = isSeedingPhase;
+                    snap.ListenPort = listenPort;
+                    snap.PieceCount = meta.PieceCount;
+                    snap.NeededPieces = totalNeededPieces;
+                    snap.ActivePeers = Volatile.Read(ref activeOutPeers) + (seedServer != null ? seedServer.ActiveIncomingPeers : 0);
+                    snap.TotalKnownPeers = Volatile.Read(ref totalKnownPeersCount);
+                    snap.DhtPeersFound = Volatile.Read(ref dhtPeersFound);
+                    snap.PexPeersFound = Volatile.Read(ref pexPeersFound);
+                    snap.LsdPeersFound = Volatile.Read(ref lsdPeersFound);
+                    snap.UploadedBytes = item.ShihabTorrentUploadedBytes;
+                    snap.UploadSpeedBps = item.ShihabTorrentUploadSpeedBps;
+                    snap.ShareRatio = item.ShihabTotalBytes > 0 ? ((double)item.ShihabTorrentUploadedBytes / (double)item.ShihabTotalBytes) : 0.0;
+
+                    int bucketCount = Math.Min(MaxTelemetryPieceBuckets, meta.PieceCount);
+                    byte[] pStates = new byte[bucketCount];
+                    int compCount = 0;
+                    lock (pieceLock)
+                    {
+                        compCount = pieceState.CompletedNeededPieces;
+                        if (bucketCount == meta.PieceCount)
+                        {
+                            for (int p = 0; p < meta.PieceCount; p++)
+                            {
+                                if (pieceDone[p]) pStates[p] = 2;
+                                else if (pieceInFlight[p]) pStates[p] = 1;
+                                else pStates[p] = 0;
+                            }
+                        }
+                        else if (bucketCount > 0)
+                        {
+                            for (int b = 0; b < bucketCount; b++)
+                            {
+                                int pStart = (int)(((long)b * meta.PieceCount) / bucketCount);
+                                int pEnd = (int)(((long)(b + 1) * meta.PieceCount) / bucketCount);
+                                if (pEnd <= pStart) pEnd = Math.Min(meta.PieceCount, pStart + 1);
+                                int span = pEnd - pStart;
+                                int doneInB = 0;
+                                bool anyInFlight = false;
+                                for (int p = pStart; p < pEnd; p++)
+                                {
+                                    if (pieceDone[p]) doneInB++;
+                                    else if (pieceInFlight[p]) anyInFlight = true;
+                                }
+                                if (doneInB == span) pStates[b] = 2;
+                                else if (anyInFlight) pStates[b] = 1;
+                                else if (doneInB * 2 >= span) pStates[b] = 2;
+                                else if (doneInB > 0) pStates[b] = 1;
+                                else pStates[b] = 0;
+                            }
+                        }
+                    }
+                    snap.CompletedPieces = compCount;
+                    snap.PieceStates = pStates;
+
+                    foreach (KeyValuePair<string, ShihabTorrentPeerTelemetry> kv in peerStatsMap)
+                    {
+                        snap.Peers.Add(kv.Value);
+                    }
+                    lock (trackerStatsLock)
+                    {
+                        snap.Trackers.AddRange(trackerStats);
+                    }
+                    for (int f = 0; f < meta.Files.Count; f++)
+                    {
+                        ShihabTorrentFileEntry fe = meta.Files[f];
+                        if (fe.IsPaddingFile) continue;
+                        long fDone = ComputeFileCompletedBytes(meta, fe, pieceDone, pieceLock);
+                        snap.Files.Add(new ShihabTorrentFileProgressTelemetry
+                        {
+                            Index = fe.Index,
+                            RelativePath = fe.RelativePath,
+                            SizeBytes = fe.SizeBytes,
+                            CompletedBytes = fDone,
+                            Selected = fe.Selected
+                        });
+                    }
+                    ShihabTorrentLiveTelemetry.Publish(item.ShihabId, snap);
+                };
+
+                Action<int> recordUploaded = delegate(int upLen)
+                {
+                    item.ShihabTorrentUploadedBytes += upLen;
+                    Interlocked.Add(ref uploadedWindowBytes, upLen);
                     lock (progressSync)
                     {
-                        long elapsedMs = downloadSw.ElapsedMilliseconds;
-                        if (elapsedMs >= 300)
+                        long ms = uploadSw.ElapsedMilliseconds;
+                        if (ms >= 350)
                         {
-                            long delta = Interlocked.Exchange(ref downloadWindowBytes, 0);
-                            downloadSw.Restart();
-                            double speed = elapsedMs > 0 ? (delta * 1000.0 / elapsedMs) : 0.0;
-                            item.ShihabCurrentSpeedBps = speed;
-                            long doneBytes = ComputeCompletedSelectedBytes(meta, pieceDone);
-                            item.MehediDownloadedBytes = Math.Min(item.ShihabTotalBytes, doneBytes);
-                            long remBytes = Math.Max(0L, item.ShihabTotalBytes - item.MehediDownloadedBytes);
-                            item.MehediEtaSeconds = speed > 1.0 ? (long)(remBytes / speed) : -1L;
-
-                            int doneCnt = 0;
-                            lock (pieceLock)
-                            {
-                                for (int p = 0; p < meta.PieceCount; p++) if (pieceNeeded[p] && pieceDone[p]) doneCnt++;
-                            }
-                            int totalPeersNow = Volatile.Read(ref activeOutPeers) + seedServer.ActiveIncomingPeers;
-                            item.ShihabTorrentActivePeers = totalPeersNow;
-                            item.ShihabStatusText = string.Format(CultureInfo.InvariantCulture,
-                                "Downloading ({0}/{1} pcs, {2} peers)", doneCnt, totalNeededPieces, totalPeersNow);
-                            shouldNotify = true;
+                            long delta = Interlocked.Exchange(ref uploadedWindowBytes, 0);
+                            uploadSw.Restart();
+                            item.ShihabTorrentUploadSpeedBps = ms > 0 ? (delta * 1000.0 / ms) : 0.0;
                         }
-                    }
-                    if (shouldNotify)
-                    {
-                        publishTelemetry();
-                        if (onProgressChanged != null) onProgressChanged();
                     }
                 };
 
-                Action maybeFlushState = delegate
+                object stateFlushLock = new object();
+                Stopwatch stateFlushSw = Stopwatch.StartNew();
+                int stateDirtyFlag = 0;
+
+                Action<bool> flushStateOffDiskLock = delegate(bool forceFlush)
                 {
-                    long nowTick = Environment.TickCount;
-                    if (Math.Abs(nowTick - lastStateFlushTick) >= 1500)
+                    if (!forceFlush)
                     {
-                        lastStateFlushTick = nowTick;
-                        WriteStateFileAtomically(stateFile, pieceDone);
+                        Interlocked.Exchange(ref stateDirtyFlag, 1);
+                        if (stateFlushSw.ElapsedMilliseconds < 3000L) return;
+                    }
+                    if (!Monitor.TryEnter(stateFlushLock))
+                    {
+                        if (!forceFlush) return;
+                        Monitor.Enter(stateFlushLock);
+                    }
+                    try
+                    {
+                        if (!forceFlush && stateFlushSw.ElapsedMilliseconds < 3000L) return;
+                        if (forceFlush && Interlocked.Exchange(ref stateDirtyFlag, 0) == 0) return;
+                        Interlocked.Exchange(ref stateDirtyFlag, 0);
+                        stateFlushSw.Restart();
+                        bool[] doneSnap = new bool[pieceDone.Length];
+                        lock (pieceLock)
+                        {
+                            Buffer.BlockCopy(pieceDone, 0, doneSnap, 0, pieceDone.Length);
+                        }
+                        WriteStateFileAtomically(stateFile, doneSnap);
+                    }
+                    finally
+                    {
+                        Monitor.Exit(stateFlushLock);
                     }
                 };
 
-                // 7. Download Phase (WebSeeds + Continuous Dynamic TCP Peer Workers + Background DHT/Tracker Re-Announce)
-                if (needMorePieces)
+                Action maybeFlushState = delegate { flushStateOffDiskLock(false); };
+
+                try
                 {
-                    using (CancellationTokenSource dlCts = CancellationTokenSource.CreateLinkedTokenSource(cancelToken))
+                    using (seedServer = new ShihabTorrentSeedServer(
+                        meta, peerId, rootSaveDir, pieceDone, pieceLock, diskLock, diskIo,
+                        recordUploaded,
+                        delegate(ShihabTorrentPeerTelemetry pt) { upsertPeerStats(pt, true); }))
                     {
-                        CancellationToken dlToken = dlCts.Token;
-                        bool dhtDiscoveryDone = meta.IsPrivate || ShihabTorrentSocketDialer.IsSocksProxyConfigured(cfg);
-                        Task bgDiscoveryTask = Task.Run(delegate
+                        if (seedServer.TryStart(cfg, cancelToken))
                         {
-                            if (!meta.IsPrivate && !ShihabTorrentSocketDialer.IsSocksProxyConfigured(cfg))
-                            {
-                                try
-                                {
-                                    ShihabTorrentDhtClient.QueryPeersViaDht(meta.InfoHashBytes, listenPort, cfg, allowLocalTest,
-                                        delegate(IPEndPoint ep) { pushPeer(ep, "dht"); }, dlToken);
-                                }
-                                catch { }
-                            }
-                            dhtDiscoveryDone = true;
-
-                            // Periodic tracker re-announce & DHT refresh while download is still active
-                            Stopwatch reSw = Stopwatch.StartNew();
-                            while (!dlToken.IsCancellationRequested && HasUnfinishedNeededPieces(meta.PieceCount, pieceNeeded, pieceDone, pieceLock))
-                            {
-                                if (reSw.ElapsedMilliseconds >= 25000)
-                                {
-                                    reSw.Restart();
-                                    List<ShihabTorrentTrackerTelemetry> nextStats;
-                                    List<IPEndPoint> more = AnnounceAllTrackers(
-                                        meta, peerId, listenPort, item.ShihabTorrentUploadedBytes, item.MehediDownloadedBytes,
-                                        Math.Max(0L, item.ShihabTotalBytes - item.MehediDownloadedBytes),
-                                        "", cfg, dlToken, out nextStats);
-                                    lock (trackerStatsLock) { trackerStats = nextStats; }
-                                    for (int i = 0; i < more.Count; i++) pushPeer(more[i], "tracker");
-                                }
-                                try { dlToken.WaitHandle.WaitOne(400); } catch { break; }
-                            }
-                        });
-
-                        List<Task> workers = new List<Task>();
-
-                        // WebSeeds (BEP-19): supports BOTH single-file AND multi-file torrents!
-                        for (int w = 0; w < meta.WebSeeds.Count; w++)
-                        {
-                            string wsUrl = meta.WebSeeds[w];
-                            workers.Add(Task.Run(delegate
-                            {
-                                DownloadPiecesFromWebSeed(
-                                    wsUrl, meta, cfg, pieceNeeded, pieceDone, pieceInFlight, pieceLock, diskLock,
-                                    rootSaveDir, maybeFlushState, onDownloadBytes, dlToken);
-                                if (!HasUnfinishedNeededPieces(meta.PieceCount, pieceNeeded, pieceDone, pieceLock))
-                                {
-                                    try { dlCts.Cancel(); } catch { }
-                                }
-                            }));
+                            listenPort = seedServer.ListenPort;
+                            item.ShihabTorrentListenPort = listenPort;
                         }
 
-                        // Up to 20 dynamic TCP Peer Workers continuously pulling from peerQueue (NEVER discards peers > 12!)
-                        int workerPoolSize = Math.Max(4, Math.Min(20, (cfg != null && cfg.ShihabDefaultMaxConnections > 0) ? cfg.ShihabDefaultMaxConnections * 2 : 16));
-                        for (int w = 0; w < workerPoolSize; w++)
+                        // 6. Dynamic Peer Queue + Bad-Peer Banning + Multi-Source Discovery (Trackers + x.pe + DHT + LSD + PEX)
+                        ConcurrentQueue<IPEndPoint> peerQueue = new ConcurrentQueue<IPEndPoint>();
+                        HashSet<string> knownPeers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        Queue<string> knownPeersOrder = new Queue<string>();
+                        Dictionary<string, int> badPeerStrikes = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                        HashSet<string> bannedPeers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        object peerPoolLock = new object();
+
+                        using (SemaphoreSlim peerAvailableSem = new SemaphoreSlim(0, 1))
                         {
-                            int workerSlot = w;
-                            workers.Add(Task.Run(delegate
+                            Action<IPEndPoint, string> pushPeer = delegate(IPEndPoint ep, string sourceTag)
                             {
-                                int idleWaits = 0;
-                                while (!dlToken.IsCancellationRequested && HasUnfinishedNeededPieces(meta.PieceCount, pieceNeeded, pieceDone, pieceLock))
+                                if (ep == null || ep.Port <= 0 || ep.Port > 65535) return;
+                                if (listenPort > 0 && ep.Port == listenPort && IPAddress.IsLoopback(ep.Address)) return;
+                                if (!IsPeerAddressAllowed(ep.Address, allowLocalTest)) return;
+                                string key = ep.ToString();
+                                bool added = false;
+                                lock (peerPoolLock)
                                 {
-                                    IPEndPoint peerEp;
-                                    if (!peerQueue.TryDequeue(out peerEp))
+                                    if (bannedPeers.Contains(key)) return;
+                                    if (knownPeers.Contains(key)) return;
+                                    while (knownPeers.Count >= MaxTrackedPeers && knownPeersOrder.Count > 0)
                                     {
-                                        if (dhtDiscoveryDone && Volatile.Read(ref activeOutPeers) == 0 && meta.WebSeeds.Count == 0)
-                                        {
-                                            if (++idleWaits > 15) break; // ~3s after everything idle and no peers
-                                        }
-                                        else
-                                        {
-                                            idleWaits = 0;
-                                        }
-                                        try { dlToken.WaitHandle.WaitOne(200); } catch { break; }
-                                        continue;
+                                        string oldest = knownPeersOrder.Dequeue();
+                                        knownPeers.Remove(oldest);
                                     }
+                                    if (knownPeers.Add(key))
+                                    {
+                                        knownPeersOrder.Enqueue(key);
+                                        added = true;
+                                        totalKnownPeersCount = knownPeers.Count;
+                                    }
+                                }
+                                if (added)
+                                {
+                                    peerQueue.Enqueue(ep);
+                                    if (peerAvailableSem.CurrentCount == 0)
+                                    {
+                                        try { peerAvailableSem.Release(); }
+                                        catch (SemaphoreFullException) { }
+                                        catch (ObjectDisposedException) { }
+                                    }
+                                    if (sourceTag == "dht") Interlocked.Increment(ref dhtPeersFound);
+                                    else if (sourceTag == "pex") Interlocked.Increment(ref pexPeersFound);
+                                    else if (sourceTag == "lsd") Interlocked.Increment(ref lsdPeersFound);
+                                }
+                            };
 
-                                    idleWaits = 0;
-                                    string peerKey = peerEp.ToString();
-                                    bool isBanned = false;
-                                    lock (peerPoolLock) { isBanned = bannedPeers.Contains(peerKey); }
-                                    if (isBanned) continue;
+                            // Enqueue direct x.pe peer hints immediately
+                            for (int i = 0; i < meta.DirectPeerHints.Count; i++)
+                            {
+                                IPEndPoint hintEp;
+                                if (ShihabTorrentDhtClient.TryParseHostPortEndPoint(meta.DirectPeerHints[i], out hintEp))
+                                {
+                                    pushPeer(hintEp, "xpe");
+                                }
+                            }
 
-                                    DownloadPiecesFromTcpPeer(
-                                        peerEp, meta, peerId, listenPort, cfg, sequential, workerSlot,
-                                        pieceNeeded, pieceDone, pieceInFlight, pieceLock, diskLock,
-                                        rootSaveDir, maybeFlushState, ref activeOutPeers,
-                                        onDownloadBytes, recordUploaded,
-                                        delegate(IPEndPoint pexEp)
+                            // Initial Announce (if pieces still needed or seeding)
+                            bool needMorePieces = pieceState.HasUnfinishedNeededPieces();
+                            if (needMorePieces || item.ShihabTorrentKeepSeeding)
+                            {
+                                item.ShihabStatusText = "Announcing to trackers & DHT...";
+                                if (onProgressChanged != null) onProgressChanged();
+
+                                List<ShihabTorrentTrackerTelemetry> initTStats;
+                                List<IPEndPoint> initPeers = AnnounceAllTrackers(
+                                    meta, peerId, listenPort, item.ShihabTorrentUploadedBytes, item.MehediDownloadedBytes,
+                                    Math.Max(0L, item.ShihabTotalBytes - item.MehediDownloadedBytes),
+                                    "started", cfg, cancelToken, out initTStats);
+                                lock (trackerStatsLock) { trackerStats = initTStats; }
+                                for (int i = 0; i < initPeers.Count; i++) pushPeer(initPeers[i], "tracker");
+
+                                if (!meta.IsPrivate)
+                                {
+                                    ShihabTorrentLsdClient.AnnounceOnce(meta.InfoHashHex, listenPort, cfg);
+                                }
+                            }
+
+                            bool sequential = item.ShihabTorrentSequential || (cfg != null && cfg.ShihabTorrentSequentialDefault);
+
+                            Action<int> onDownloadBytes = delegate(int gotLen)
+                            {
+                                if (onRateAndQuotaBytes != null && gotLen > 0)
+                                {
+                                    onRateAndQuotaBytes(gotLen);
+                                }
+                                Interlocked.Add(ref downloadWindowBytes, gotLen);
+                                bool shouldNotify = false;
+                                lock (progressSync)
+                                {
+                                    long elapsedMs = downloadSw.ElapsedMilliseconds;
+                                    if (elapsedMs >= 300)
+                                    {
+                                        long delta = Interlocked.Exchange(ref downloadWindowBytes, 0);
+                                        downloadSw.Restart();
+                                        double speed = elapsedMs > 0 ? (delta * 1000.0 / elapsedMs) : 0.0;
+                                        item.ShihabCurrentSpeedBps = speed;
+                                        long doneBytes;
+                                        int doneCnt;
+                                        lock (pieceLock)
                                         {
-                                            if (!meta.IsPrivate) pushPeer(pexEp, "pex");
-                                        },
-                                        delegate(string badKey)
+                                            doneBytes = pieceState.CompletedSelectedBytes;
+                                            doneCnt = pieceState.CompletedNeededPieces;
+                                        }
+                                        item.MehediDownloadedBytes = Math.Min(item.ShihabTotalBytes, doneBytes);
+                                        long remBytes = Math.Max(0L, item.ShihabTotalBytes - item.MehediDownloadedBytes);
+                                        item.MehediEtaSeconds = speed > 1.0 ? (long)(remBytes / speed) : -1L;
+
+                                        int totalPeersNow = Volatile.Read(ref activeOutPeers) + seedServer.ActiveIncomingPeers;
+                                        item.ShihabTorrentActivePeers = totalPeersNow;
+                                        item.ShihabStatusText = string.Format(CultureInfo.InvariantCulture,
+                                            "Downloading ({0}/{1} pcs, {2} peers)", doneCnt, totalNeededPieces, totalPeersNow);
+                                        shouldNotify = true;
+                                    }
+                                }
+                                if (shouldNotify)
+                                {
+                                    publishTelemetry();
+                                    if (onProgressChanged != null) onProgressChanged();
+                                }
+                            };
+
+                            // 7. Download Phase (WebSeeds + Continuous Dynamic TCP Peer Workers + Background DHT/Tracker Re-Announce)
+                            if (needMorePieces)
+                            {
+                                using (CancellationTokenSource dlCts = CancellationTokenSource.CreateLinkedTokenSource(cancelToken))
+                                {
+                                    CancellationToken dlToken = dlCts.Token;
+                                    bool dhtDiscoveryDone = meta.IsPrivate || ShihabTorrentSocketDialer.IsSocksProxyConfigured(cfg);
+                                    Task bgDiscoveryTask = Task.Run(delegate
+                                    {
+                                        if (!meta.IsPrivate && !ShihabTorrentSocketDialer.IsSocksProxyConfigured(cfg))
                                         {
-                                            lock (peerPoolLock)
+                                            try
                                             {
-                                                int st;
-                                                badPeerStrikes.TryGetValue(badKey, out st);
-                                                st++;
-                                                badPeerStrikes[badKey] = st;
-                                                if (st >= 1) bannedPeers.Add(badKey);
+                                                ShihabTorrentDhtClient.QueryPeersViaDht(meta.InfoHashBytes, listenPort, cfg, allowLocalTest,
+                                                    delegate(IPEndPoint ep) { pushPeer(ep, "dht"); }, dlToken);
                                             }
-                                        },
-                                        delegate(ShihabTorrentPeerTelemetry pt)
-                                        {
-                                            peerStatsMap[pt.Endpoint] = pt;
-                                        },
-                                        dlToken);
+                                            catch { }
+                                        }
+                                        dhtDiscoveryDone = true;
 
-                                    if (!HasUnfinishedNeededPieces(meta.PieceCount, pieceNeeded, pieceDone, pieceLock))
+                                        // Periodic tracker re-announce & DHT refresh while download is still active
+                                        Stopwatch reSw = Stopwatch.StartNew();
+                                        while (!dlToken.IsCancellationRequested && pieceState.HasUnfinishedNeededPieces())
+                                        {
+                                            if (reSw.ElapsedMilliseconds >= 25000)
+                                            {
+                                                reSw.Restart();
+                                                List<ShihabTorrentTrackerTelemetry> nextStats;
+                                                List<IPEndPoint> more = AnnounceAllTrackers(
+                                                    meta, peerId, listenPort, item.ShihabTorrentUploadedBytes, item.MehediDownloadedBytes,
+                                                    Math.Max(0L, item.ShihabTotalBytes - item.MehediDownloadedBytes),
+                                                    "", cfg, dlToken, out nextStats);
+                                                lock (trackerStatsLock) { trackerStats = nextStats; }
+                                                for (int i = 0; i < more.Count; i++) pushPeer(more[i], "tracker");
+                                            }
+                                            try { dlToken.WaitHandle.WaitOne(400); } catch { break; }
+                                        }
+                                    });
+
+                                    List<Task> workers = new List<Task>();
+
+                                    // WebSeeds (BEP-19): supports BOTH single-file AND multi-file torrents!
+                                    for (int w = 0; w < meta.WebSeeds.Count; w++)
                                     {
-                                        try { dlCts.Cancel(); } catch { }
-                                        break;
+                                        string wsUrl = meta.WebSeeds[w];
+                                        workers.Add(Task.Run(delegate
+                                        {
+                                            DownloadPiecesFromWebSeed(
+                                                wsUrl, meta, cfg, pieceState, diskIo, piecePool,
+                                                maybeFlushState, onDownloadBytes, dlToken);
+                                            if (!pieceState.HasUnfinishedNeededPieces())
+                                            {
+                                                try { dlCts.Cancel(); } catch { }
+                                            }
+                                        }));
                                     }
+
+                                    // Up to 20 dynamic TCP Peer Workers continuously pulling from peerQueue (NEVER discards peers > 12!)
+                                    int workerPoolSize = Math.Max(4, Math.Min(20, (cfg != null && cfg.ShihabDefaultMaxConnections > 0) ? cfg.ShihabDefaultMaxConnections * 2 : 16));
+                                    for (int w = 0; w < workerPoolSize; w++)
+                                    {
+                                        int workerSlot = w;
+                                        workers.Add(Task.Run(delegate
+                                        {
+                                            Stopwatch idleSw = new Stopwatch();
+                                            while (!dlToken.IsCancellationRequested && pieceState.HasUnfinishedNeededPieces())
+                                            {
+                                                IPEndPoint peerEp;
+                                                if (!peerQueue.TryDequeue(out peerEp))
+                                                {
+                                                    if (dhtDiscoveryDone && Volatile.Read(ref activeOutPeers) == 0 && meta.WebSeeds.Count == 0)
+                                                    {
+                                                        if (!idleSw.IsRunning) idleSw.Start();
+                                                        if (idleSw.ElapsedMilliseconds >= 3000) break;
+                                                    }
+                                                    else
+                                                    {
+                                                        if (idleSw.IsRunning) idleSw.Reset();
+                                                    }
+                                                    try
+                                                    {
+                                                        peerAvailableSem.Wait(200, dlToken);
+                                                    }
+                                                    catch (OperationCanceledException) { break; }
+                                                    catch (ObjectDisposedException) { break; }
+                                                    catch { break; }
+                                                    continue;
+                                                }
+
+                                                if (idleSw.IsRunning) idleSw.Reset();
+                                                string peerKey = peerEp.ToString();
+                                                bool isBanned = false;
+                                                lock (peerPoolLock) { isBanned = bannedPeers.Contains(peerKey); }
+                                                if (isBanned) continue;
+
+                                                DownloadPiecesFromTcpPeer(
+                                                    peerEp, meta, peerId, listenPort, cfg, sequential, workerSlot,
+                                                    pieceState, diskIo, piecePool, rootSaveDir, diskLock,
+                                                    maybeFlushState, ref activeOutPeers,
+                                                    onDownloadBytes, recordUploaded,
+                                                    delegate(IPEndPoint pexEp)
+                                                    {
+                                                        if (!meta.IsPrivate) pushPeer(pexEp, "pex");
+                                                    },
+                                                    delegate(string badKey)
+                                                    {
+                                                        lock (peerPoolLock)
+                                                        {
+                                                            if (badPeerStrikes.Count >= MaxTrackedPeers * 2 && !badPeerStrikes.ContainsKey(badKey))
+                                                            {
+                                                                badPeerStrikes.Clear();
+                                                            }
+                                                            int st;
+                                                            badPeerStrikes.TryGetValue(badKey, out st);
+                                                            st++;
+                                                            badPeerStrikes[badKey] = st;
+                                                            if (st >= 1)
+                                                            {
+                                                                if (bannedPeers.Count >= MaxTrackedPeers * 2) bannedPeers.Clear();
+                                                                bannedPeers.Add(badKey);
+                                                            }
+                                                        }
+                                                    },
+                                                    delegate(ShihabTorrentPeerTelemetry pt)
+                                                    {
+                                                        upsertPeerStats(pt, true);
+                                                    },
+                                                    markPeerDisconnected,
+                                                    dlToken);
+
+                                                if (!pieceState.HasUnfinishedNeededPieces())
+                                                {
+                                                    try { dlCts.Cancel(); } catch { }
+                                                    break;
+                                                }
+                                            }
+                                        }));
+                                    }
+
+                                    try { Task.WaitAll(workers.ToArray()); } catch { }
+                                    try { dlCts.Cancel(); } catch { }
+                                    try { bgDiscoveryTask.Wait(1500); } catch { }
                                 }
-                            }));
+                            }
                         }
 
-                        try { Task.WaitAll(workers.ToArray()); } catch { }
-                        try { dlCts.Cancel(); } catch { }
-                        try { bgDiscoveryTask.Wait(1500); } catch { }
-                    }
-                }
+                        cancelToken.ThrowIfCancellationRequested();
 
-                cancelToken.ThrowIfCancellationRequested();
+                        bool allDone = !pieceState.HasUnfinishedNeededPieces();
+                        if (!allDone)
+                        {
+                            flushStateOffDiskLock(true);
+                            diskIo.FlushWritableHandles();
+                            publishTelemetry();
+                            errorMessage = Volatile.Read(ref totalKnownPeersCount) == 0 && meta.WebSeeds.Count == 0
+                                ? "No active peers, DHT nodes, or WebSeeds found for this torrent."
+                                : "Incomplete torrent transfer: all reachable peers disconnected before remaining pieces finished (progress verified & saved for resume).";
+                            return false;
+                        }
 
-                bool allDone = !HasUnfinishedNeededPieces(meta.PieceCount, pieceNeeded, pieceDone, pieceLock);
-                if (!allDone)
-                {
-                    WriteStateFileAtomically(stateFile, pieceDone);
-                    publishTelemetry();
-                    errorMessage = Volatile.Read(ref totalKnownPeersCount) == 0 && meta.WebSeeds.Count == 0
-                        ? "No active peers, DHT nodes, or WebSeeds found for this torrent."
-                        : "Incomplete torrent transfer: all reachable peers disconnected before remaining pieces finished (progress verified & saved for resume).";
-                    return false;
-                }
+                        // Completed all needed pieces! Flush handles, clean up .mhs.btstate, and announce completed!
+                        diskIo.FlushWritableHandles();
+                        Interlocked.Exchange(ref stateDirtyFlag, 0);
+                        try { if (File.Exists(stateFile)) File.Delete(stateFile); } catch { }
+                        item.MehediDownloadedBytes = item.ShihabTotalBytes;
+                        item.ShihabCurrentSpeedBps = 0;
+                        item.MehediEtaSeconds = 0;
 
-                // Completed all needed pieces! Clean up .mhs.btstate and announce completed!
-                try { if (File.Exists(stateFile)) File.Delete(stateFile); } catch { }
-                item.MehediDownloadedBytes = item.ShihabTotalBytes;
-                item.ShihabCurrentSpeedBps = 0;
-                item.MehediEtaSeconds = 0;
-
-                List<ShihabTorrentTrackerTelemetry> compTStats;
-                AnnounceAllTrackers(meta, peerId, listenPort, item.ShihabTorrentUploadedBytes, item.MehediDownloadedBytes, 0L, "completed", cfg, CancellationToken.None, out compTStats);
-                lock (trackerStatsLock) { trackerStats = compTStats; }
-                publishTelemetry();
-                if (onProgressChanged != null) onProgressChanged();
-
-                // 8. Real Post-Completion Seeding Phase (when KeepSeeding is enabled!)
-                if (item.ShihabTorrentKeepSeeding && listenPort > 0 && !cancelToken.IsCancellationRequested)
-                {
-                    isSeedingPhase = true;
-                    double targetRatio = item.ShihabTorrentTargetShareRatio > 0.0
-                        ? item.ShihabTorrentTargetShareRatio
-                        : (cfg != null ? cfg.ShihabTorrentDefaultShareRatio : 0.0);
-                    int maxSeedMin = item.ShihabTorrentMaxSeedMinutes > 0
-                        ? item.ShihabTorrentMaxSeedMinutes
-                        : (cfg != null ? cfg.ShihabTorrentDefaultSeedMinutes : 0);
-                    Stopwatch seedSw = Stopwatch.StartNew();
-
-                    while (!cancelToken.IsCancellationRequested)
-                    {
-                        double ratio = item.ShihabTotalBytes > 0
-                            ? ((double)item.ShihabTorrentUploadedBytes / (double)item.ShihabTotalBytes)
-                            : 0.0;
-                        int incPeers = seedServer.ActiveIncomingPeers;
-                        item.ShihabTorrentActivePeers = incPeers;
-                        item.ShihabStatusText = string.Format(CultureInfo.InvariantCulture,
-                            "Seeding ({0} peers, ratio {1:0.00}, up {2})",
-                            incPeers, ratio, ShihabFormatHelpers.FormatMehediBytes(item.ShihabTorrentUploadedBytes));
+                        List<ShihabTorrentTrackerTelemetry> compTStats;
+                        AnnounceAllTrackers(meta, peerId, listenPort, item.ShihabTorrentUploadedBytes, item.MehediDownloadedBytes, 0L, "completed", cfg, CancellationToken.None, out compTStats);
+                        lock (trackerStatsLock) { trackerStats = compTStats; }
                         publishTelemetry();
                         if (onProgressChanged != null) onProgressChanged();
 
-                        if (targetRatio > 0.0 && ratio >= targetRatio) break;
-                        if (maxSeedMin > 0 && seedSw.Elapsed.TotalMinutes >= maxSeedMin) break;
+                        // 8. Real Post-Completion Seeding Phase (when KeepSeeding is enabled!)
+                        if (item.ShihabTorrentKeepSeeding && listenPort > 0 && !cancelToken.IsCancellationRequested)
+                        {
+                            isSeedingPhase = true;
+                            double targetRatio = item.ShihabTorrentTargetShareRatio > 0.0
+                                ? item.ShihabTorrentTargetShareRatio
+                                : (cfg != null ? cfg.ShihabTorrentDefaultShareRatio : 0.0);
+                            int maxSeedMin = item.ShihabTorrentMaxSeedMinutes > 0
+                                ? item.ShihabTorrentMaxSeedMinutes
+                                : (cfg != null ? cfg.ShihabTorrentDefaultSeedMinutes : 0);
+                            Stopwatch seedSw = Stopwatch.StartNew();
 
-                        try { cancelToken.WaitHandle.WaitOne(500); } catch { break; }
+                            long lastSeedUpBytes = -1L;
+                            int lastSeedPeers = -1;
+                            double lastSeedUpSpeed = -1.0;
+                            int lastSeedPeerVer = -1;
+
+                            while (!cancelToken.IsCancellationRequested)
+                            {
+                                double ratio = item.ShihabTotalBytes > 0
+                                    ? ((double)item.ShihabTorrentUploadedBytes / (double)item.ShihabTotalBytes)
+                                    : 0.0;
+                                int incPeers = seedServer.ActiveIncomingPeers;
+                                int curPeerVer = Volatile.Read(ref peerStatsVersion);
+                                bool statsChanged =
+                                    item.ShihabTorrentUploadedBytes != lastSeedUpBytes ||
+                                    incPeers != lastSeedPeers ||
+                                    Math.Abs(item.ShihabTorrentUploadSpeedBps - lastSeedUpSpeed) > 1.0 ||
+                                    curPeerVer != lastSeedPeerVer;
+
+                                if (statsChanged)
+                                {
+                                    lastSeedUpBytes = item.ShihabTorrentUploadedBytes;
+                                    lastSeedPeers = incPeers;
+                                    lastSeedUpSpeed = item.ShihabTorrentUploadSpeedBps;
+                                    lastSeedPeerVer = curPeerVer;
+
+                                    item.ShihabTorrentActivePeers = incPeers;
+                                    item.ShihabStatusText = string.Format(CultureInfo.InvariantCulture,
+                                        "Seeding ({0} peers, ratio {1:0.00}, up {2})",
+                                        incPeers, ratio, ShihabFormatHelpers.FormatMehediBytes(item.ShihabTorrentUploadedBytes));
+                                    publishTelemetry();
+                                    if (onProgressChanged != null) onProgressChanged();
+                                }
+
+                                if (targetRatio > 0.0 && ratio >= targetRatio) break;
+                                if (maxSeedMin > 0 && seedSw.Elapsed.TotalMinutes >= maxSeedMin) break;
+
+                                try { cancelToken.WaitHandle.WaitOne(500); } catch { break; }
+                            }
+                            isSeedingPhase = false;
+                        }
+
+                        // Send clean stopped event to trackers
+                        List<ShihabTorrentTrackerTelemetry> stopTStats;
+                        AnnounceAllTrackers(meta, peerId, listenPort, item.ShihabTorrentUploadedBytes, item.MehediDownloadedBytes, 0L, "stopped", cfg, CancellationToken.None, out stopTStats);
+                        item.ShihabTorrentUploadSpeedBps = 0;
+                        item.ShihabTorrentActivePeers = 0;
+                        publishTelemetry();
+                        return true;
                     }
-                    isSeedingPhase = false;
                 }
-
-                // Send clean stopped event to trackers
-                List<ShihabTorrentTrackerTelemetry> stopTStats;
-                AnnounceAllTrackers(meta, peerId, listenPort, item.ShihabTorrentUploadedBytes, item.MehediDownloadedBytes, 0L, "stopped", cfg, CancellationToken.None, out stopTStats);
-                item.ShihabTorrentUploadSpeedBps = 0;
-                item.ShihabTorrentActivePeers = 0;
-                publishTelemetry();
-                return true;
+                finally
+                {
+                    if (pieceState.HasUnfinishedNeededPieces())
+                    {
+                        flushStateOffDiskLock(true);
+                    }
+                }
             }
         }
 
@@ -2349,18 +3017,48 @@ namespace ShihabMehediIDM
 
         private static bool VerifyPieceSha1(ShihabTorrentMetadata meta, int pieceIndex, byte[] pieceData)
         {
-            if (pieceData == null || meta.PiecesSha1Concat == null || (pieceIndex + 1) * 20 > meta.PiecesSha1Concat.Length)
+            if (pieceData == null) return false;
+            using (SHA1 sha1 = SHA1.Create())
+            {
+                return VerifyPieceSha1(meta, pieceIndex, pieceData, pieceData.Length, sha1);
+            }
+        }
+
+        private static bool VerifyPieceSha1(ShihabTorrentMetadata meta, int pieceIndex, byte[] pieceData, int dataLength, SHA1 reusableSha1)
+        {
+            if (pieceData == null || dataLength < 0 || dataLength > pieceData.Length ||
+                meta == null || meta.PiecesSha1Concat == null || pieceIndex < 0 ||
+                (pieceIndex + 1) * 20 > meta.PiecesSha1Concat.Length)
             {
                 return false;
             }
-            using (SHA1 sha1 = SHA1.Create())
+            byte[] actual = reusableSha1.ComputeHash(pieceData, 0, dataLength);
+            int expectedOff = pieceIndex * 20;
+            for (int b = 0; b < 20; b++)
             {
-                byte[] actual = sha1.ComputeHash(pieceData);
-                for (int b = 0; b < 20; b++)
-                {
-                    if (actual[b] != meta.PiecesSha1Concat[pieceIndex * 20 + b]) return false;
-                }
+                if (actual[b] != meta.PiecesSha1Concat[expectedOff + b]) return false;
             }
+            return true;
+        }
+
+        internal static bool ReadPieceSliceIntoBuffer(
+            ShihabTorrentMetadata meta,
+            int pieceIndex,
+            int sliceOffset,
+            int sliceLength,
+            string rootSaveDir,
+            object diskLock,
+            TorrentDiskIoCache diskIo,
+            byte[] destBuf,
+            int destOffset)
+        {
+            if (diskIo != null)
+            {
+                return diskIo.ReadSlice(pieceIndex, sliceOffset, sliceLength, destBuf, destOffset);
+            }
+            byte[] slice = ReadPieceSliceFromDisk(meta, pieceIndex, sliceOffset, sliceLength, rootSaveDir, diskLock);
+            if (slice == null || slice.Length != sliceLength) return false;
+            Buffer.BlockCopy(slice, 0, destBuf, destOffset, sliceLength);
             return true;
         }
 
@@ -2372,9 +3070,9 @@ namespace ShihabMehediIDM
             string rootSaveDir,
             object diskLock)
         {
-            if (meta == null || sliceLength <= 0 || sliceOffset < 0) return null;
+            if (meta == null || pieceIndex < 0 || pieceIndex >= meta.PieceCount) return null;
             int pSize = GetPieceSize(meta, pieceIndex);
-            if (sliceOffset + sliceLength > pSize) return null;
+            if (sliceOffset < 0 || sliceLength <= 0 || (long)sliceOffset + (long)sliceLength > (long)pSize) return null;
 
             long reqGlobalStart = (long)pieceIndex * meta.PieceLength + sliceOffset;
             long reqGlobalEnd = reqGlobalStart + sliceLength;
@@ -2385,6 +3083,7 @@ namespace ShihabMehediIDM
                 for (int f = 0; f < meta.Files.Count; f++)
                 {
                     ShihabTorrentFileEntry fe = meta.Files[f];
+                    if (fe.ByteOffsetInTorrent >= reqGlobalEnd) break;
                     if (fe.SizeBytes <= 0) continue;
                     long fStart = fe.ByteOffsetInTorrent;
                     long fEnd = fStart + fe.SizeBytes;
@@ -2403,7 +3102,7 @@ namespace ShihabMehediIDM
                         return null;
                     }
                     int need = (int)(ovEnd - ovStart);
-                    using (FileStream fs = new FileStream(fullFilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                    using (FileStream fs = new FileStream(fullFilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 65536))
                     {
                         long fileOff = ovStart - fStart;
                         if (fs.Length < fileOff + need) return null;
@@ -2424,97 +3123,44 @@ namespace ShihabMehediIDM
 
         private static bool VerifyAndWritePieceToDisk(
             ShihabTorrentMetadata meta,
-            MehediAppConfiguration cfg,
             int pieceIndex,
             byte[] pieceData,
-            string rootSaveDir,
+            int pieceDataLength,
+            SHA1 reusableSha1,
+            TorrentDiskIoCache diskIo,
             Action maybeFlushState,
-            bool[] pieceDone,
-            bool[] pieceInFlight,
-            object pieceLock,
-            object diskWriteLock)
+            TorrentPieceState pieceState)
         {
-            if (pieceData == null || !VerifyPieceSha1(meta, pieceIndex, pieceData)) return false;
+            if (pieceData == null || !VerifyPieceSha1(meta, pieceIndex, pieceData, pieceDataLength, reusableSha1)) return false;
 
-            long pieceGlobalStart = (long)pieceIndex * meta.PieceLength;
-            long pieceGlobalEnd = pieceGlobalStart + pieceData.Length;
-            bool allowSparse = cfg == null || cfg.ShihabEnableSparseFiles;
+            diskIo.WritePiece(pieceIndex, pieceData, pieceDataLength);
+            pieceState.MarkPieceDone(pieceIndex, diskIo);
 
-            lock (diskWriteLock)
-            {
-                for (int f = 0; f < meta.Files.Count; f++)
-                {
-                    ShihabTorrentFileEntry fe = meta.Files[f];
-                    if (!fe.Selected || fe.IsPaddingFile || fe.SizeBytes <= 0) continue;
-                    long fStart = fe.ByteOffsetInTorrent;
-                    long fEnd = fStart + fe.SizeBytes;
-                    long ovStart = Math.Max(pieceGlobalStart, fStart);
-                    long ovEnd = Math.Min(pieceGlobalEnd, fEnd);
-                    if (ovEnd <= ovStart) continue;
-
-                    string fullFilePath;
-                    if (!ShihabProcessAndPathSafety.ResolvePathStrictlyUnderRoot(rootSaveDir, fe.RelativePath, out fullFilePath))
-                    {
-                        throw new InvalidOperationException("Blocked torrent path traversal: " + fe.RelativePath);
-                    }
-                    Directory.CreateDirectory(Path.GetDirectoryName(fullFilePath));
-                    if (ShihabProcessAndPathSafety.HasReparsePointUnderRoot(rootSaveDir, fullFilePath))
-                    {
-                        throw new InvalidOperationException("Blocked symlink/reparse point in torrent destination: " + fe.RelativePath);
-                    }
-                    using (FileStream fs = new FileStream(fullFilePath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.ReadWrite))
-                    {
-                        if (fs.Length != fe.SizeBytes)
-                        {
-                            if (allowSparse && fs.Length == 0 && fe.SizeBytes > 65536)
-                            {
-                                ShihabOsAndDiskSafety.TryMarkFileSparse(fs);
-                            }
-                            if (fs.Length > fe.SizeBytes)
-                            {
-                                fs.SetLength(fe.SizeBytes);
-                            }
-                        }
-                        fs.Seek(ovStart - fStart, SeekOrigin.Begin);
-                        fs.Write(pieceData, (int)(ovStart - pieceGlobalStart), (int)(ovEnd - ovStart));
-                    }
-                }
-
-                lock (pieceLock)
-                {
-                    pieceDone[pieceIndex] = true;
-                    pieceInFlight[pieceIndex] = false;
-                }
-                if (maybeFlushState != null) maybeFlushState();
-            }
+            // Debounced state persistence runs OUTSIDE diskLock!
+            if (maybeFlushState != null) maybeFlushState();
             return true;
         }
 
         private static int ClaimNextPieceIndex(
-            int pieceCount,
-            bool[] needed,
-            bool[] done,
-            bool[] inFlight,
+            TorrentPieceState pieceState,
             bool[] peerHasPiece,
             bool sequential,
-            int peerSeedHint,
-            object pieceLock)
+            int peerSeedHint)
         {
-            lock (pieceLock)
+            int pieceCount = pieceState.PieceCount;
+            bool[] needed = pieceState.Needed;
+            bool[] done = pieceState.Done;
+            bool[] inFlight = pieceState.InFlight;
+
+            lock (pieceState.LockObj)
             {
+                if (pieceState.RemainingNeededPieces <= 0) return -1;
+
                 if (sequential)
                 {
-                    // Prioritize first & last needed piece first (enables instant media previewing like MISTER ends_first!)
-                    int firstNeeded = -1;
-                    int lastNeeded = -1;
-                    for (int p = 0; p < pieceCount; p++)
-                    {
-                        if (needed[p])
-                        {
-                            if (firstNeeded < 0) firstNeeded = p;
-                            lastNeeded = p;
-                        }
-                    }
+                    // Prioritize first & last needed piece first (enables instant media previewing)
+                    int firstNeeded = pieceState.FirstNeededPiece;
+                    int lastNeeded = pieceState.LastNeededPiece;
                     if (firstNeeded >= 0 && !done[firstNeeded] && !inFlight[firstNeeded] && (peerHasPiece == null || peerHasPiece[firstNeeded]))
                     {
                         inFlight[firstNeeded] = true;
@@ -2525,7 +3171,12 @@ namespace ShihabMehediIDM
                         inFlight[lastNeeded] = true;
                         return lastNeeded;
                     }
-                    for (int p = 0; p < pieceCount; p++)
+                    while (pieceState.SequentialScanCursor < pieceCount &&
+                           (!needed[pieceState.SequentialScanCursor] || done[pieceState.SequentialScanCursor]))
+                    {
+                        pieceState.SequentialScanCursor++;
+                    }
+                    for (int p = pieceState.SequentialScanCursor; p < pieceCount; p++)
                     {
                         if (needed[p] && !done[p] && !inFlight[p] && (peerHasPiece == null || peerHasPiece[p]))
                         {
@@ -2548,7 +3199,15 @@ namespace ShihabMehediIDM
                     }
                 }
                 // Endgame mode: allow racing remaining in-flight pieces across fast idle peers
-                for (int p = 0; p < pieceCount; p++)
+                int endgameStart = sequential ? Math.Min(pieceCount, pieceState.SequentialScanCursor) : 0;
+                for (int p = endgameStart; p < pieceCount; p++)
+                {
+                    if (needed[p] && !done[p] && (peerHasPiece == null || peerHasPiece[p]))
+                    {
+                        return p;
+                    }
+                }
+                for (int p = 0; p < endgameStart; p++)
                 {
                     if (needed[p] && !done[p] && (peerHasPiece == null || peerHasPiece[p]))
                     {
@@ -2647,12 +3306,9 @@ namespace ShihabMehediIDM
             string wsUrl,
             ShihabTorrentMetadata meta,
             MehediAppConfiguration cfg,
-            bool[] needed,
-            bool[] done,
-            bool[] inFlight,
-            object pieceLock,
-            object diskWriteLock,
-            string rootSaveDir,
+            TorrentPieceState pieceState,
+            TorrentDiskIoCache diskIo,
+            TorrentPieceBufferPool piecePool,
             Action maybeFlushState,
             Action<int> onBytesRead,
             CancellationToken cancelToken)
@@ -2664,70 +3320,87 @@ namespace ShihabMehediIDM
             }
             string baseUrl = wsUri.AbsoluteUri;
             int consecutiveFailures = 0;
+            bool[] done = pieceState.Done;
+            bool[] inFlight = pieceState.InFlight;
+            object pieceLock = pieceState.LockObj;
 
-            while (!cancelToken.IsCancellationRequested)
+            using (SHA1 workerSha1 = SHA1.Create())
             {
-                int pIdx = ClaimNextPieceIndex(meta.PieceCount, needed, done, inFlight, null, true, 0, pieceLock);
-                if (pIdx < 0) break;
-                int pSize = GetPieceSize(meta, pIdx);
-                long pieceGlobalStart = (long)pIdx * meta.PieceLength;
-                long pieceGlobalEnd = pieceGlobalStart + pSize;
-                byte[] buf = new byte[pSize];
-                bool pieceOk = false;
-
-                try
+                while (!cancelToken.IsCancellationRequested)
                 {
-                    if (!meta.IsMultiFile)
-                    {
-                        string singleUrl = baseUrl.EndsWith("/", StringComparison.Ordinal)
-                            ? (baseUrl + Uri.EscapeDataString(meta.Name))
-                            : baseUrl;
-                        pieceOk = FetchHttpRangeWithRedirects(singleUrl, pieceGlobalStart, pieceGlobalEnd - 1L, cfg, buf, 0, onBytesRead, cancelToken);
-                    }
-                    else
-                    {
-                        // BEP-19 Multi-file WebSeed: <baseUrl>/<torrent-name>/<file-rel-path>
-                        string dirBase = baseUrl.EndsWith("/", StringComparison.Ordinal) ? baseUrl : (baseUrl + "/");
-                        string rootPrefix = dirBase + Uri.EscapeDataString(meta.Name) + "/";
-                        pieceOk = true;
-                        for (int f = 0; f < meta.Files.Count; f++)
-                        {
-                            ShihabTorrentFileEntry fe = meta.Files[f];
-                            if (fe.SizeBytes <= 0) continue;
-                            long fStart = fe.ByteOffsetInTorrent;
-                            long fEnd = fStart + fe.SizeBytes;
-                            long ovStart = Math.Max(pieceGlobalStart, fStart);
-                            long ovEnd = Math.Min(pieceGlobalEnd, fEnd);
-                            if (ovEnd <= ovStart) continue;
-                            if (fe.IsPaddingFile) continue; // padding bytes remain 0
+                    int pIdx = ClaimNextPieceIndex(pieceState, null, true, 0);
+                    if (pIdx < 0) break;
+                    int pSize = GetPieceSize(meta, pIdx);
+                    long pieceGlobalStart = (long)pIdx * meta.PieceLength;
+                    long pieceGlobalEnd = pieceGlobalStart + pSize;
+                    byte[] buf = piecePool.Rent(pSize);
+                    bool pieceOk = false;
 
-                            string fileUrl = rootPrefix + EncodeUrlPathSegments(fe.RelativePath);
-                            int dstOff = (int)(ovStart - pieceGlobalStart);
-                            if (!FetchHttpRangeWithRedirects(fileUrl, ovStart - fStart, ovEnd - fStart - 1L, cfg, buf, dstOff, onBytesRead, cancelToken))
+                    try
+                    {
+                        if (!meta.IsMultiFile)
+                        {
+                            string singleUrl = baseUrl.EndsWith("/", StringComparison.Ordinal)
+                                ? (baseUrl + Uri.EscapeDataString(meta.Name))
+                                : baseUrl;
+                            pieceOk = FetchHttpRangeWithRedirects(singleUrl, pieceGlobalStart, pieceGlobalEnd - 1L, cfg, buf, 0, onBytesRead, cancelToken);
+                        }
+                        else
+                        {
+                            // BEP-19 Multi-file WebSeed: <baseUrl>/<torrent-name>/<file-rel-path>
+                            string dirBase = baseUrl.EndsWith("/", StringComparison.Ordinal) ? baseUrl : (baseUrl + "/");
+                            string rootPrefix = dirBase + Uri.EscapeDataString(meta.Name) + "/";
+                            pieceOk = true;
+                            int startFileIdx = diskIo.FindFirstOverlappingFileIndex(pieceGlobalStart);
+                            for (int f = startFileIdx; f < meta.Files.Count; f++)
                             {
-                                pieceOk = false;
-                                break;
+                                ShihabTorrentFileEntry fe = meta.Files[f];
+                                if (fe.ByteOffsetInTorrent >= pieceGlobalEnd) break;
+                                if (fe.SizeBytes <= 0) continue;
+                                long fStart = fe.ByteOffsetInTorrent;
+                                long fEnd = fStart + fe.SizeBytes;
+                                long ovStart = Math.Max(pieceGlobalStart, fStart);
+                                long ovEnd = Math.Min(pieceGlobalEnd, fEnd);
+                                if (ovEnd <= ovStart) continue;
+                                int dstOff = (int)(ovStart - pieceGlobalStart);
+                                int spanLen = (int)(ovEnd - ovStart);
+                                if (fe.IsPaddingFile)
+                                {
+                                    Array.Clear(buf, dstOff, spanLen);
+                                    continue;
+                                }
+
+                                string fileUrl = rootPrefix + EncodeUrlPathSegments(fe.RelativePath);
+                                if (!FetchHttpRangeWithRedirects(fileUrl, ovStart - fStart, ovEnd - fStart - 1L, cfg, buf, dstOff, onBytesRead, cancelToken))
+                                {
+                                    pieceOk = false;
+                                    break;
+                                }
                             }
                         }
-                    }
 
-                    if (pieceOk && VerifyAndWritePieceToDisk(meta, cfg, pIdx, buf, rootSaveDir, maybeFlushState, done, inFlight, pieceLock, diskWriteLock))
+                        if (pieceOk && VerifyAndWritePieceToDisk(meta, pIdx, buf, pSize, workerSha1, diskIo, maybeFlushState, pieceState))
+                        {
+                            consecutiveFailures = 0;
+                            continue;
+                        }
+                    }
+                    catch (OperationCanceledException)
                     {
-                        consecutiveFailures = 0;
-                        continue;
+                        lock (pieceLock) { if (!done[pIdx]) inFlight[pIdx] = false; }
+                        break;
                     }
-                }
-                catch (OperationCanceledException)
-                {
-                    lock (pieceLock) { if (!done[pIdx]) inFlight[pIdx] = false; }
-                    break;
-                }
-                catch { }
+                    catch { }
+                    finally
+                    {
+                        piecePool.Return(buf);
+                    }
 
-                lock (pieceLock) { if (!done[pIdx]) inFlight[pIdx] = false; }
-                consecutiveFailures++;
-                if (consecutiveFailures >= 3) break;
-                try { cancelToken.WaitHandle.WaitOne(500 * consecutiveFailures); } catch { break; }
+                    lock (pieceLock) { if (!done[pIdx]) inFlight[pIdx] = false; }
+                    consecutiveFailures++;
+                    if (consecutiveFailures >= 3) break;
+                    try { cancelToken.WaitHandle.WaitOne(500 * consecutiveFailures); } catch { break; }
+                }
             }
         }
 
@@ -2740,12 +3413,11 @@ namespace ShihabMehediIDM
             MehediAppConfiguration cfg,
             bool sequential,
             int workerSlot,
-            bool[] needed,
-            bool[] done,
-            bool[] inFlight,
-            object pieceLock,
-            object diskWriteLock,
+            TorrentPieceState pieceState,
+            TorrentDiskIoCache diskIo,
+            TorrentPieceBufferPool piecePool,
             string rootSaveDir,
+            object diskWriteLock,
             Action maybeFlushState,
             ref int activePeersCounter,
             Action<int> onBytesRead,
@@ -2753,14 +3425,21 @@ namespace ShihabMehediIDM
             Action<IPEndPoint> onPexPeerDiscovered,
             Action<string> onBadPeerStrike,
             Action<ShihabTorrentPeerTelemetry> onPeerTelemetry,
+            Action<string> onPeerDisconnected,
             CancellationToken cancelToken)
         {
             if (IsPeerBlocked(peerEp.Address)) return;
             Socket sock = ShihabTorrentSocketDialer.ConnectPeerTcp(peerEp, cfg, 4500, cancelToken);
             if (sock == null) return;
 
+            bool[] needed = pieceState.Needed;
+            bool[] done = pieceState.Done;
+            bool[] inFlight = pieceState.InFlight;
+            object pieceLock = pieceState.LockObj;
+
             bool countedActive = false;
             int claimedPiece = -1;
+            byte[] currentPieceBuf = null;
             string epStr = peerEp.ToString();
             long peerDownBytes = 0;
             long peerUpBytes = 0;
@@ -2771,12 +3450,14 @@ namespace ShihabMehediIDM
                 sock.ReceiveTimeout = 25000;
                 sock.SendTimeout = 10000;
 
+                using (SHA1 workerSha1 = SHA1.Create())
                 using (NetworkStream ns = new NetworkStream(sock, true))
                 using (cancelToken.Register(delegate { try { sock.Close(); } catch { } }))
                 {
                     byte[] hs = BuildHandshakePublic(meta.InfoHashBytes, peerId20, true, true, !meta.IsPrivate);
                     ns.Write(hs, 0, 68);
-                    byte[] peerHs = ReadExactStreamPublic(ns, 68);
+                    byte[] peerHs = new byte[68];
+                    ReadExactStreamPublic(ns, peerHs, 0, 68, cancelToken);
                     if (!IsValidBitTorrentHandshake(peerHs, meta.InfoHashBytes)) return;
 
                     bool peerSupportsExt = (peerHs[25] & 0x10) != 0;
@@ -2800,7 +3481,6 @@ namespace ShihabMehediIDM
                     bool weAreInterested = false;
                     int peerUtMetadataId = 0;
 
-                    byte[] currentPieceBuf = null;
                     int currentPieceSize = 0;
                     int currentBlockCount = 0;
                     bool[] blockRequested = null;
@@ -2809,6 +3489,15 @@ namespace ShihabMehediIDM
                     int outstandingBlocks = 0;
                     Stopwatch lastActivitySw = Stopwatch.StartNew();
                     Stopwatch keepAliveSw = Stopwatch.StartNew();
+
+                    // Reusable per-peer wire buffers (eliminates per-message allocations!)
+                    byte[] lenBuf = new byte[4];
+                    byte[] reqMsgBuf = new byte[17];
+                    byte[] wirePayloadBuf = new byte[16384 + 9];
+                    byte[] singleByteMsgBuf = new byte[] { 0, 0, 0, 1, 0 };
+                    byte[] keepAliveBuf = new byte[4];
+                    byte[] haveMsgBuf = new byte[9];
+                    byte[] pieceSendBuf = null;
 
                     Action releaseCurrentPiece = delegate
                     {
@@ -2820,7 +3509,11 @@ namespace ShihabMehediIDM
                             }
                             claimedPiece = -1;
                         }
-                        currentPieceBuf = null;
+                        if (currentPieceBuf != null)
+                        {
+                            piecePool.Return(currentPieceBuf);
+                            currentPieceBuf = null;
+                        }
                         blockRequested = null;
                         blockReceived = null;
                         blocksCompleted = 0;
@@ -2831,7 +3524,8 @@ namespace ShihabMehediIDM
                     {
                         if (want == weAreInterested) return;
                         weAreInterested = want;
-                        ns.Write(new byte[] { 0, 0, 0, 1, (byte)(want ? 2 : 3) }, 0, 5);
+                        singleByteMsgBuf[4] = (byte)(want ? 2 : 3);
+                        ns.Write(singleByteMsgBuf, 0, 5);
                     };
 
                     Action emitTelemetry = delegate
@@ -2857,7 +3551,7 @@ namespace ShihabMehediIDM
 
                     while (!cancelToken.IsCancellationRequested)
                     {
-                        if (!HasUnfinishedNeededPieces(meta.PieceCount, needed, done, pieceLock))
+                        if (!pieceState.HasUnfinishedNeededPieces())
                         {
                             break;
                         }
@@ -2867,11 +3561,11 @@ namespace ShihabMehediIDM
                         {
                             if (claimedPiece < 0)
                             {
-                                claimedPiece = ClaimNextPieceIndex(meta.PieceCount, needed, done, inFlight, peerHas, sequential, peerEp.Port + workerSlot, pieceLock);
+                                claimedPiece = ClaimNextPieceIndex(pieceState, peerHas, sequential, peerEp.Port + workerSlot);
                                 if (claimedPiece >= 0)
                                 {
                                     currentPieceSize = GetPieceSize(meta, claimedPiece);
-                                    currentPieceBuf = new byte[currentPieceSize];
+                                    currentPieceBuf = piecePool.Rent(currentPieceSize);
                                     currentBlockCount = (currentPieceSize + 16383) / 16384;
                                     blockRequested = new bool[currentBlockCount];
                                     blockReceived = new bool[currentBlockCount];
@@ -2892,13 +3586,12 @@ namespace ShihabMehediIDM
                                     if (blockReceived[bIdx] || blockRequested[bIdx]) continue;
                                     int blkOff = bIdx * 16384;
                                     int blkLen = Math.Min(16384, currentPieceSize - blkOff);
-                                    byte[] reqMsg = new byte[17];
-                                    WriteBeUInt32Public(reqMsg, 0, 13u);
-                                    reqMsg[4] = 6;
-                                    WriteBeUInt32Public(reqMsg, 5, (uint)claimedPiece);
-                                    WriteBeUInt32Public(reqMsg, 9, (uint)blkOff);
-                                    WriteBeUInt32Public(reqMsg, 13, (uint)blkLen);
-                                    ns.Write(reqMsg, 0, 17);
+                                    WriteBeUInt32Public(reqMsgBuf, 0, 13u);
+                                    reqMsgBuf[4] = 6;
+                                    WriteBeUInt32Public(reqMsgBuf, 5, (uint)claimedPiece);
+                                    WriteBeUInt32Public(reqMsgBuf, 9, (uint)blkOff);
+                                    WriteBeUInt32Public(reqMsgBuf, 13, (uint)blkLen);
+                                    ns.Write(reqMsgBuf, 0, 17);
                                     blockRequested[bIdx] = true;
                                     outstandingBlocks++;
                                 }
@@ -2909,7 +3602,7 @@ namespace ShihabMehediIDM
                         if (keepAliveSw.ElapsedMilliseconds >= 60000)
                         {
                             keepAliveSw.Restart();
-                            ns.Write(new byte[] { 0, 0, 0, 0 }, 0, 4);
+                            ns.Write(keepAliveBuf, 0, 4);
                         }
 
                         // Non-blocking poll so we can react quickly to cancellation / completion
@@ -2919,13 +3612,24 @@ namespace ShihabMehediIDM
                             continue;
                         }
 
-                        byte[] lenBytes = ReadExactStreamPublic(ns, 4);
+                        ReadExactStreamPublic(ns, lenBuf, 0, 4, cancelToken);
                         lastActivitySw.Restart();
-                        uint msgLen = ReadBeUInt32Public(lenBytes, 0);
+                        uint msgLen = ReadBeUInt32Public(lenBuf, 0);
                         if (msgLen == 0) continue; // Keep-alive
                         if (msgLen > 2 * 1024 * 1024) break;
 
-                        byte[] payload = ReadExactStreamPublic(ns, (int)msgLen);
+                        int payloadLen = (int)msgLen;
+                        byte[] payload;
+                        if (payloadLen <= wirePayloadBuf.Length)
+                        {
+                            ReadExactStreamPublic(ns, wirePayloadBuf, 0, payloadLen, cancelToken);
+                            payload = wirePayloadBuf;
+                        }
+                        else
+                        {
+                            payload = new byte[payloadLen];
+                            ReadExactStreamPublic(ns, payload, 0, payloadLen, cancelToken);
+                        }
                         byte msgId = payload[0];
 
                         if (msgId == 0) // Choke: BEP-3 peers discard pending requests! Reset cleanly so zero deadlock!
@@ -2945,9 +3649,10 @@ namespace ShihabMehediIDM
                         }
                         else if (msgId == 2) // Interested from remote peer -> unchoke for tit-for-tat
                         {
-                            ns.Write(new byte[] { 0, 0, 0, 1, 1 }, 0, 5);
+                            singleByteMsgBuf[4] = 1;
+                            ns.Write(singleByteMsgBuf, 0, 5);
                         }
-                        else if (msgId == 4 && payload.Length >= 5) // Have
+                        else if (msgId == 4 && payloadLen >= 5) // Have
                         {
                             int p = (int)ReadBeUInt32Public(payload, 1);
                             if (p >= 0 && p < peerHas.Length)
@@ -2962,7 +3667,7 @@ namespace ShihabMehediIDM
                             for (int p = 0; p < peerHas.Length; p++)
                             {
                                 int byteIdx = 1 + (p >> 3);
-                                if (byteIdx < payload.Length && ((payload[byteIdx] >> (7 - (p & 7))) & 1) != 0)
+                                if (byteIdx < payloadLen && ((payload[byteIdx] >> (7 - (p & 7))) & 1) != 0)
                                 {
                                     peerHas[p] = true;
                                 }
@@ -2971,7 +3676,7 @@ namespace ShihabMehediIDM
                             updateInterest(PeerHasAnyNeededPiece(meta.PieceCount, needed, done, peerHas, pieceLock));
                             emitTelemetry();
                         }
-                        else if (msgId == 6 && payload.Length >= 13) // Incoming Request -> serve piece from disk!
+                        else if (msgId == 6 && payloadLen >= 13) // Incoming Request -> serve piece from disk!
                         {
                             int reqP = (int)ReadBeUInt32Public(payload, 1);
                             int reqBegin = (int)ReadBeUInt32Public(payload, 5);
@@ -2982,27 +3687,34 @@ namespace ShihabMehediIDM
                                 lock (pieceLock) { weHave = done[reqP]; }
                                 if (weHave)
                                 {
-                                    byte[] blk = ReadPieceSliceFromDisk(meta, reqP, reqBegin, reqLen, rootSaveDir, diskWriteLock);
-                                    if (blk != null && blk.Length == reqLen)
+                                    byte[] sendBuf;
+                                    if (reqLen <= 16384)
                                     {
-                                        byte[] pm = new byte[13 + reqLen];
-                                        WriteBeUInt32Public(pm, 0, (uint)(9 + reqLen));
-                                        pm[4] = 7;
-                                        WriteBeUInt32Public(pm, 5, (uint)reqP);
-                                        WriteBeUInt32Public(pm, 9, (uint)reqBegin);
-                                        Buffer.BlockCopy(blk, 0, pm, 13, reqLen);
-                                        ns.Write(pm, 0, pm.Length);
+                                        if (pieceSendBuf == null) pieceSendBuf = new byte[16384 + 13];
+                                        sendBuf = pieceSendBuf;
+                                    }
+                                    else
+                                    {
+                                        sendBuf = new byte[13 + reqLen];
+                                    }
+                                    if (ReadPieceSliceIntoBuffer(meta, reqP, reqBegin, reqLen, rootSaveDir, diskWriteLock, diskIo, sendBuf, 13))
+                                    {
+                                        WriteBeUInt32Public(sendBuf, 0, (uint)(9 + reqLen));
+                                        sendBuf[4] = 7;
+                                        WriteBeUInt32Public(sendBuf, 5, (uint)reqP);
+                                        WriteBeUInt32Public(sendBuf, 9, (uint)reqBegin);
+                                        ns.Write(sendBuf, 0, 13 + reqLen);
                                         peerUpBytes += reqLen;
                                         if (onUploadedBytes != null) onUploadedBytes(reqLen);
                                     }
                                 }
                             }
                         }
-                        else if (msgId == 7 && payload.Length > 9) // Piece block
+                        else if (msgId == 7 && payloadLen > 9) // Piece block
                         {
                             int pIndex = (int)ReadBeUInt32Public(payload, 1);
                             int begin = (int)ReadBeUInt32Public(payload, 5);
-                            int blkDataLen = payload.Length - 9;
+                            int blkDataLen = payloadLen - 9;
                             if (outstandingBlocks > 0) outstandingBlocks--;
 
                             if (pIndex == claimedPiece && currentPieceBuf != null && blockReceived != null &&
@@ -3021,10 +3733,8 @@ namespace ShihabMehediIDM
                                     if (blocksCompleted >= currentBlockCount)
                                     {
                                         int finishedIdx = claimedPiece;
-                                        bool verified = VerifyAndWritePieceToDisk(
-                                            meta, cfg, finishedIdx, currentPieceBuf, rootSaveDir,
-                                            maybeFlushState, done, inFlight, pieceLock, diskWriteLock);
-
+                                        byte[] completedBuf = currentPieceBuf;
+                                        int completedSize = currentPieceSize;
                                         claimedPiece = -1;
                                         currentPieceBuf = null;
                                         blockRequested = null;
@@ -3032,14 +3742,25 @@ namespace ShihabMehediIDM
                                         blocksCompleted = 0;
                                         outstandingBlocks = 0;
 
+                                        bool verified = false;
+                                        try
+                                        {
+                                            verified = VerifyAndWritePieceToDisk(
+                                                meta, finishedIdx, completedBuf, completedSize, workerSha1,
+                                                diskIo, maybeFlushState, pieceState);
+                                        }
+                                        finally
+                                        {
+                                            piecePool.Return(completedBuf);
+                                        }
+
                                         if (verified)
                                         {
                                             // Broadcast HAVE to this peer
-                                            byte[] haveMsg = new byte[9];
-                                            WriteBeUInt32Public(haveMsg, 0, 5u);
-                                            haveMsg[4] = 4;
-                                            WriteBeUInt32Public(haveMsg, 5, (uint)finishedIdx);
-                                            ns.Write(haveMsg, 0, 9);
+                                            WriteBeUInt32Public(haveMsgBuf, 0, 5u);
+                                            haveMsgBuf[4] = 4;
+                                            WriteBeUInt32Public(haveMsgBuf, 5, (uint)finishedIdx);
+                                            ns.Write(haveMsgBuf, 0, 9);
                                             emitTelemetry();
                                         }
                                         else
@@ -3065,7 +3786,7 @@ namespace ShihabMehediIDM
                             peerHasInfoReceived = true;
                             updateInterest(false);
                         }
-                        else if (msgId == 16 && payload.Length >= 13) // BEP-6 Fast Extension: Reject Request
+                        else if (msgId == 16 && payloadLen >= 13) // BEP-6 Fast Extension: Reject Request
                         {
                             int rejP = (int)ReadBeUInt32Public(payload, 1);
                             int rejBegin = (int)ReadBeUInt32Public(payload, 5);
@@ -3076,13 +3797,19 @@ namespace ShihabMehediIDM
                                 if (bIdx >= 0 && bIdx < blockRequested.Length) blockRequested[bIdx] = false;
                             }
                         }
-                        else if (msgId == 20 && payload.Length >= 2) // BEP-10 Extended (handshake / ut_pex / ut_metadata)
+                        else if (msgId == 20 && payloadLen >= 2) // BEP-10 Extended (handshake / ut_pex / ut_metadata)
                         {
-                            byte extId = payload[1];
+                            byte[] extPayload = payload;
+                            if (object.ReferenceEquals(payload, wirePayloadBuf) && payloadLen != wirePayloadBuf.Length)
+                            {
+                                extPayload = new byte[payloadLen];
+                                Buffer.BlockCopy(wirePayloadBuf, 0, extPayload, 0, payloadLen);
+                            }
+                            byte extId = extPayload[1];
                             if (extId == 0)
                             {
                                 int pos = 2;
-                                ShihabBencodeNode d = ShihabBencodeParser.Parse(payload, ref pos);
+                                ShihabBencodeNode d = ShihabBencodeParser.Parse(extPayload, ref pos);
                                 if (d != null && d.DictValue != null)
                                 {
                                     ShihabBencodeNode vNode, mNode, utMetaNode;
@@ -3101,7 +3828,7 @@ namespace ShihabMehediIDM
                             {
                                 // BEP-11 ut_pex (our advertised ID = 1)
                                 int pos = 2;
-                                ShihabBencodeNode pex = ShihabBencodeParser.Parse(payload, ref pos);
+                                ShihabBencodeNode pex = ShihabBencodeParser.Parse(extPayload, ref pos);
                                 if (pex != null && pex.DictValue != null)
                                 {
                                     List<IPEndPoint> pexList = new List<IPEndPoint>();
@@ -3119,7 +3846,7 @@ namespace ShihabMehediIDM
                             }
                             else if (extId == 2 && peerUtMetadataId > 0 && meta.RawInfoBytes != null && meta.RawInfoBytes.Length > 0)
                             {
-                                ShihabTorrentSeedServer.HandleUtMetadataRequest(ns, payload, (byte)peerUtMetadataId, meta.RawInfoBytes);
+                                ShihabTorrentSeedServer.HandleUtMetadataRequest(ns, extPayload, (byte)peerUtMetadataId, meta.RawInfoBytes);
                             }
                         }
                     }
@@ -3132,7 +3859,13 @@ namespace ShihabMehediIDM
                 {
                     lock (pieceLock) { if (!done[claimedPiece]) inFlight[claimedPiece] = false; }
                 }
+                if (currentPieceBuf != null)
+                {
+                    piecePool.Return(currentPieceBuf);
+                    currentPieceBuf = null;
+                }
                 if (countedActive) Interlocked.Decrement(ref activePeersCounter);
+                if (onPeerDisconnected != null) onPeerDisconnected(epStr);
                 try { sock.Close(); } catch { }
             }
         }
@@ -3356,14 +4089,20 @@ namespace ShihabMehediIDM
         internal static byte[] ReadExactStreamPublic(Stream s, int count)
         {
             byte[] b = new byte[count];
+            ReadExactStreamPublic(s, b, 0, count, CancellationToken.None);
+            return b;
+        }
+
+        internal static void ReadExactStreamPublic(Stream s, byte[] buffer, int offset, int count, CancellationToken cancelToken)
+        {
             int off = 0;
             while (off < count)
             {
-                int r = s.Read(b, off, count - off);
+                if (cancelToken.IsCancellationRequested) throw new OperationCanceledException(cancelToken);
+                int r = s.Read(buffer, offset + off, count - off);
                 if (r <= 0) throw new EndOfStreamException();
                 off += r;
             }
-            return b;
         }
 
         internal static void WriteBeUInt32Public(byte[] buf, int off, uint v)

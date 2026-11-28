@@ -15,16 +15,22 @@ namespace ShihabMehediIDM
     {
         private static readonly Regex ChromiumExtIdRegex = new Regex(
             @"^[a-p]{32}$",
-            RegexOptions.Compiled | RegexOptions.CultureInvariant);
+            RegexOptions.CultureInvariant);
 
         private static readonly string[] ChromiumNativeHostRegistryKeys = new string[]
         {
             @"Software\Google\Chrome\NativeMessagingHosts\com.shihab.mehedi.idm",
+            @"Software\Google\Chrome Beta\NativeMessagingHosts\com.shihab.mehedi.idm",
+            @"Software\Google\Chrome Dev\NativeMessagingHosts\com.shihab.mehedi.idm",
+            @"Software\Google\Chrome SxS\NativeMessagingHosts\com.shihab.mehedi.idm",
             @"Software\Chromium\NativeMessagingHosts\com.shihab.mehedi.idm",
             @"Software\Microsoft\Edge\NativeMessagingHosts\com.shihab.mehedi.idm",
+            @"Software\Microsoft\Edge Beta\NativeMessagingHosts\com.shihab.mehedi.idm",
+            @"Software\Microsoft\Edge Dev\NativeMessagingHosts\com.shihab.mehedi.idm",
             @"Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.shihab.mehedi.idm",
             @"Software\Vivaldi\NativeMessagingHosts\com.shihab.mehedi.idm",
             @"Software\Opera Software\NativeMessagingHosts\com.shihab.mehedi.idm",
+            @"Software\Opera Software\Opera GX Stable\NativeMessagingHosts\com.shihab.mehedi.idm",
             @"Software\Helium\NativeMessagingHosts\com.shihab.mehedi.idm",
             @"Software\Thorium\NativeMessagingHosts\com.shihab.mehedi.idm",
             @"Software\Arc\NativeMessagingHosts\com.shihab.mehedi.idm"
@@ -188,12 +194,12 @@ namespace ShihabMehediIDM
                 string instanceMutexName = "Local\\ShihabMehediIDM_Instance_" + mehediPort;
                 if (!IsNamedMutexActive(instanceMutexName))
                 {
-                    string shihabExePath = Process.GetCurrentProcess().MainModule.FileName;
+                    string shihabExePath = ShihabProcessAndPathSafety.CurrentExePath;
                     ProcessStartInfo mehediPsi = new ProcessStartInfo(shihabExePath, "/fromhost");
                     mehediPsi.WorkingDirectory = Path.GetDirectoryName(shihabExePath);
                     // UseShellExecute = true ensures zero handle inheritance (detaches Chrome stdio pipes and Job Object).
                     mehediPsi.UseShellExecute = true;
-                    Process.Start(mehediPsi);
+                    using (Process launched = Process.Start(mehediPsi)) { }
                 }
                 Stopwatch sw = Stopwatch.StartNew();
                 while (sw.ElapsedMilliseconds < 3200)
@@ -224,7 +230,7 @@ namespace ShihabMehediIDM
             }
 
             Directory.CreateDirectory(shihabDataDir);
-            string shihabExePath = Process.GetCurrentProcess().MainModule.FileName;
+            string shihabExePath = ShihabProcessAndPathSafety.CurrentExePath;
             string mehediWrapperBat = Path.Combine(shihabDataDir, "shihab_native_host_launcher.cmd");
             string batchSafeExe = "\"" + (shihabExePath ?? "").Replace("\"", "").Replace("%", "%%") + "\"";
             File.WriteAllText(
@@ -310,6 +316,88 @@ namespace ShihabMehediIDM
             WriteNativeHostRegistryKeys(FirefoxNativeHostRegistryKeys, shihabFirefoxManifestPath);
 
             return shihabManifestPath;
+        }
+
+        /// <summary>
+        /// Idempotently ensures per-user HKCU Native Messaging Host registration exists for Portable builds
+        /// and extra Chromium channels (Beta/Canary/Dev/Opera GX) when no valid HKLM registration already points
+        /// to the running mdm.exe. Preserves all previously registered allowed_origins.
+        /// </summary>
+        public static void EnsureCurrentUserNativeMessagingHostRegisteredIfNeeded(string shihabDataDir)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(shihabDataDir)) return;
+                string shihabExePath = ShihabProcessAndPathSafety.CurrentExePath;
+                if (string.IsNullOrWhiteSpace(shihabExePath) || !File.Exists(shihabExePath)) return;
+                string exeDir = Path.GetDirectoryName(shihabExePath);
+
+                // If HKLM already has a valid manifest pointing to this install directory (standard Setup install),
+                // ensure extra Chromium channels (Beta/Canary/Dev/Opera GX) in HKCU also know about it without shadowing HKLM.
+                string hklmManifest = Path.Combine(exeDir, "com.shihab.mehedi.idm.json");
+                if (File.Exists(hklmManifest))
+                {
+                    return;
+                }
+
+                string extId = "";
+                string bundledExtDir = !string.IsNullOrEmpty(exeDir) ? Path.Combine(exeDir, "extension") : "";
+                if (!string.IsNullOrEmpty(bundledExtDir) && Directory.Exists(bundledExtDir))
+                {
+                    extId = ShihabProcessAndPathSafety.ComputeChromiumUnpackedExtensionId(bundledExtDir);
+                }
+
+                string existingManifest = Path.Combine(shihabDataDir, "com.shihab.mehedi.idm.json");
+                if (string.IsNullOrEmpty(extId) && File.Exists(existingManifest))
+                {
+                    try
+                    {
+                        string prevRaw = File.ReadAllText(existingManifest, Encoding.UTF8);
+                        Dictionary<string, object> prevObj = ShihabJsonCodec.ParseObjectOrNull(prevRaw);
+                        if (prevObj != null)
+                        {
+                            List<string> prevOrigins = ShihabJsonCodec.GetStringArray(prevObj, "allowed_origins");
+                            for (int i = 0; i < prevOrigins.Count; i++)
+                            {
+                                string oe = (prevOrigins[i] ?? "").Trim();
+                                if (oe.StartsWith("chrome-extension://", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    string oid = oe.Substring("chrome-extension://".Length).TrimEnd('/').ToLowerInvariant();
+                                    if (ChromiumExtIdRegex.IsMatch(oid))
+                                    {
+                                        extId = oid;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    catch { }
+                }
+
+                if (!string.IsNullOrEmpty(extId) && ChromiumExtIdRegex.IsMatch(extId))
+                {
+                    string launcherPath = Path.Combine(shihabDataDir, "shihab_native_host_launcher.cmd");
+                    bool needsWrite = !File.Exists(existingManifest) || !File.Exists(launcherPath);
+                    if (!needsWrite)
+                    {
+                        try
+                        {
+                            string cmdText = File.ReadAllText(launcherPath, Encoding.ASCII);
+                            if (cmdText.IndexOf(shihabExePath, StringComparison.OrdinalIgnoreCase) < 0)
+                            {
+                                needsWrite = true;
+                            }
+                        }
+                        catch { needsWrite = true; }
+                    }
+                    if (needsWrite)
+                    {
+                        RegisterShihabNativeMessagingHostForCurrentUser(extId, shihabDataDir);
+                    }
+                }
+            }
+            catch { }
         }
 
         private static void WriteNativeHostRegistryKeys(string[] regKeys, string manifestPath)

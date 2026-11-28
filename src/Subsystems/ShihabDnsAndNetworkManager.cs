@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Net;
@@ -40,43 +41,101 @@ namespace ShihabMehediIDM
             public DateTime ExpiresUtc;
         }
 
+        private sealed class CachedBoundAdapterIp
+        {
+            public int Epoch;
+            public bool Success;
+            public IPAddress Address;
+            public string FailReason;
+        }
+
         private const int MaxDohCacheEntries = 512;
         private const int MaxDohResponseBytes = 512 * 1024;
         private static readonly TimeSpan DohRegexTimeout = TimeSpan.FromMilliseconds(250);
         private static readonly Regex DohIpv4DataRegex = new Regex(
             "\"data\"\\s*:\\s*\"([0-9]{1,3}(?:\\.[0-9]{1,3}){3})\"",
-            RegexOptions.Compiled | RegexOptions.CultureInvariant,
+            RegexOptions.CultureInvariant,
             DohRegexTimeout);
 
         private static readonly Dictionary<string, DnsCacheRecord> DohCache = new Dictionary<string, DnsCacheRecord>(StringComparer.OrdinalIgnoreCase);
-        private static int _netwatchRegistered = 0;
+        private static readonly ConcurrentDictionary<string, CachedBoundAdapterIp> BoundAdapterIpCache =
+            new ConcurrentDictionary<string, CachedBoundAdapterIp>(StringComparer.OrdinalIgnoreCase);
+        private static readonly object _restoreDebounceLock = new object();
+        private static Timer _restoreDebounceTimer;
+        private static int _adapterCacheEpoch;
+        private static int _netChangeEventsHooked;
+        private static volatile bool _notifyRestoreEnabled;
         public static event Action OnNetworkRestored;
 
-        public static void EnsureNetworkWatcherStarted()
+        static ShihabDnsAndNetworkManager()
         {
-            if (Interlocked.CompareExchange(ref _netwatchRegistered, 1, 0) != 0) return;
+            EnsureNetworkChangeEventsHooked();
+        }
+
+        private static void EnsureNetworkChangeEventsHooked()
+        {
+            if (Interlocked.CompareExchange(ref _netChangeEventsHooked, 1, 0) != 0) return;
             try
             {
                 NetworkChange.NetworkAvailabilityChanged += delegate(object sender, NetworkAvailabilityEventArgs e)
                 {
-                    lock (DohCache) { DohCache.Clear(); }
-                    if (e != null && e.IsAvailable && OnNetworkRestored != null)
+                    InvalidateNetworkCaches();
+                    if (_notifyRestoreEnabled && e != null && e.IsAvailable && OnNetworkRestored != null)
                     {
-                        OnNetworkRestored();
+                        ScheduleDebouncedNetworkRestored();
                     }
                 };
                 NetworkChange.NetworkAddressChanged += delegate(object sender, EventArgs e)
                 {
-                    lock (DohCache) { DohCache.Clear(); }
-                    if (NetworkInterface.GetIsNetworkAvailable() && OnNetworkRestored != null)
+                    InvalidateNetworkCaches();
+                    if (_notifyRestoreEnabled && NetworkInterface.GetIsNetworkAvailable() && OnNetworkRestored != null)
                     {
-                        OnNetworkRestored();
+                        ScheduleDebouncedNetworkRestored();
                     }
                 };
             }
             catch
             {
             }
+        }
+
+        private static void InvalidateNetworkCaches()
+        {
+            Interlocked.Increment(ref _adapterCacheEpoch);
+            BoundAdapterIpCache.Clear();
+            lock (DohCache) { DohCache.Clear(); }
+        }
+
+        private static void ScheduleDebouncedNetworkRestored()
+        {
+            lock (_restoreDebounceLock)
+            {
+                if (_restoreDebounceTimer == null)
+                {
+                    _restoreDebounceTimer = new Timer(delegate
+                    {
+                        try
+                        {
+                            if (NetworkInterface.GetIsNetworkAvailable())
+                            {
+                                Action handler = OnNetworkRestored;
+                                if (handler != null) handler();
+                            }
+                        }
+                        catch { }
+                    }, null, 1500, Timeout.Infinite);
+                }
+                else
+                {
+                    _restoreDebounceTimer.Change(1500, Timeout.Infinite);
+                }
+            }
+        }
+
+        public static void EnsureNetworkWatcherStarted()
+        {
+            _notifyRestoreEnabled = true;
+            EnsureNetworkChangeEventsHooked();
         }
 
         public static List<ShihabNetworkAdapterChoice> GetAvailableNetworkAdapters()
@@ -133,11 +192,9 @@ namespace ShihabMehediIDM
         public static IPAddress GetBoundAdapterLocalIp(string adapterNameOrId)
         {
             if (string.IsNullOrWhiteSpace(adapterNameOrId)) return null;
-            MehediAppConfiguration tmp = new MehediAppConfiguration();
-            tmp.ShihabBoundNetworkAdapter = adapterNameOrId.Trim();
             IPAddress ip;
             string reason;
-            if (TryGetBoundAdapterLocalIp(tmp, out ip, out reason))
+            if (TryGetBoundAdapterLocalIpCore(adapterNameOrId, AddressFamily.InterNetwork, out ip, out reason))
             {
                 return ip;
             }
@@ -158,15 +215,45 @@ namespace ShihabMehediIDM
             {
                 return true;
             }
-            string wanted = cfg.ShihabBoundNetworkAdapter.Trim();
+            return TryGetBoundAdapterLocalIpCore(cfg.ShihabBoundNetworkAdapter, AddressFamily.InterNetwork, out boundIp, out failReason);
+        }
+
+        private static bool TryGetBoundAdapterLocalIpCore(
+            string adapterNameOrId,
+            AddressFamily addressFamily,
+            out IPAddress boundIp,
+            out string failReason)
+        {
+            boundIp = null;
+            failReason = "";
+            if (string.IsNullOrWhiteSpace(adapterNameOrId))
+            {
+                return true;
+            }
+            string wanted = adapterNameOrId.Trim();
             if (string.Equals(wanted, "Any", StringComparison.OrdinalIgnoreCase) ||
                 wanted.StartsWith("Any ", StringComparison.OrdinalIgnoreCase))
             {
                 return true;
             }
+
+            int epoch = Volatile.Read(ref _adapterCacheEpoch);
+            string cacheKey = wanted.ToLowerInvariant() + "|" + ((int)addressFamily).ToString();
+            CachedBoundAdapterIp cached;
+            if (BoundAdapterIpCache.TryGetValue(cacheKey, out cached) && cached != null && cached.Epoch == epoch)
+            {
+                boundIp = cached.Address;
+                failReason = cached.FailReason ?? "";
+                return cached.Success;
+            }
+
+            bool resolvedOk = false;
+            IPAddress foundIp = null;
+            string resolvedReason = "";
             try
             {
                 NetworkInterface[] nics = NetworkInterface.GetAllNetworkInterfaces();
+                bool matchedAdapter = false;
                 for (int i = 0; i < nics.Length; i++)
                 {
                     NetworkInterface nic = nics[i];
@@ -175,24 +262,33 @@ namespace ShihabMehediIDM
                         string.Equals(nic.Id, wanted, StringComparison.OrdinalIgnoreCase) ||
                         string.Equals(nic.Description, wanted, StringComparison.OrdinalIgnoreCase))
                     {
+                        matchedAdapter = true;
                         if (nic.OperationalStatus != OperationalStatus.Up)
                         {
-                            failReason = string.Format("VPN/Adapter Kill-Switch triggered: Bound network adapter '{0}' is currently DOWN.", nic.Name);
-                            return false;
+                            resolvedReason = string.Format("VPN/Adapter Kill-Switch triggered: Bound network adapter '{0}' is currently DOWN.", nic.Name);
+                            break;
                         }
                         IPInterfaceProperties props = nic.GetIPProperties();
                         for (int u = 0; u < props.UnicastAddresses.Count; u++)
                         {
                             IPAddress addr = props.UnicastAddresses[u].Address;
-                            if (addr != null && addr.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(addr))
+                            if (addr != null && addr.AddressFamily == addressFamily && !IPAddress.IsLoopback(addr))
                             {
-                                boundIp = addr;
-                                return true;
+                                foundIp = addr;
+                                resolvedOk = true;
+                                break;
                             }
                         }
-                        failReason = string.Format("VPN/Adapter Kill-Switch triggered: Bound network adapter '{0}' has no active IPv4 address.", nic.Name);
-                        return false;
+                        if (!resolvedOk)
+                        {
+                            resolvedReason = string.Format("VPN/Adapter Kill-Switch triggered: Bound network adapter '{0}' has no active IPv4 address.", nic.Name);
+                        }
+                        break;
                     }
+                }
+                if (!matchedAdapter)
+                {
+                    resolvedReason = string.Format("VPN/Adapter Kill-Switch triggered: Bound network adapter '{0}' was not found.", wanted);
                 }
             }
             catch (Exception ex)
@@ -200,8 +296,23 @@ namespace ShihabMehediIDM
                 failReason = "Adapter lookup failed: " + ex.Message;
                 return false;
             }
-            failReason = string.Format("VPN/Adapter Kill-Switch triggered: Bound network adapter '{0}' was not found.", wanted);
-            return false;
+
+            // Only store if epoch did not change while enumerating adapters
+            if (Volatile.Read(ref _adapterCacheEpoch) == epoch)
+            {
+                if (BoundAdapterIpCache.Count > 64) BoundAdapterIpCache.Clear();
+                BoundAdapterIpCache[cacheKey] = new CachedBoundAdapterIp
+                {
+                    Epoch = epoch,
+                    Success = resolvedOk,
+                    Address = foundIp,
+                    FailReason = resolvedReason
+                };
+            }
+
+            boundIp = foundIp;
+            failReason = resolvedReason;
+            return resolvedOk;
         }
 
         public static IPAddress ResolveHostIpWithDohAndGeo(

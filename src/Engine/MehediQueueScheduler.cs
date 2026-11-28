@@ -13,6 +13,41 @@ namespace ShihabMehediIDM
     {
         private int _periodicSyncProbeInFlight = 0;
 
+        private void InitializePeriodicSyncTimestampsOnStartup()
+        {
+            if (_mehediConfig == null || _mehediConfig.MehediQueues == null) return;
+            DateTime nowUtc = DateTime.UtcNow;
+            for (int i = 0; i < _mehediConfig.MehediQueues.Count; i++)
+            {
+                MehediQueueConfig q = _mehediConfig.MehediQueues[i];
+                if (q != null &&
+                    q.MehediEnablePeriodicSync &&
+                    q.ShihabLastPeriodicSyncUtc == DateTime.MinValue &&
+                    !HasEligiblePeriodicSyncItems(q.ShihabQueueName))
+                {
+                    q.ShihabLastPeriodicSyncUtc = nowUtc;
+                }
+            }
+        }
+
+        private bool HasEligiblePeriodicSyncItems(string queueName)
+        {
+            string targetQueue = ResolveCanonicalQueueName(queueName);
+            lock (_shihabEngineLock)
+            {
+                for (int i = 0; i < _shihabDownloads.Count; i++)
+                {
+                    ShihabDownloadItem item = _shihabDownloads[i];
+                    if (item == null || string.IsNullOrWhiteSpace(item.MehediQueueName)) continue;
+                    if (!string.Equals(ResolveCanonicalQueueName(item.MehediQueueName), targetQueue, StringComparison.OrdinalIgnoreCase)) continue;
+                    if (item.GetShihabStatusEnum() != ShihabDownloadStatus.ShihabCompleted) continue;
+                    if (item.ShihabIsTorrent || item.ShihabIsYtDlpJob || item.ShihabIsGalleryJob || string.IsNullOrWhiteSpace(item.MehediUrl)) continue;
+                    return true;
+                }
+            }
+            return false;
+        }
+
         public static string ResolveCanonicalQueueName(string queueName)
         {
             if (string.IsNullOrWhiteSpace(queueName)) return "Main Download Queue";
@@ -134,10 +169,14 @@ namespace ShihabMehediIDM
                 if (shihabQueue.MehediEnablePeriodicSync && shihabQueue.ShihabPeriodicSyncMinutes > 0)
                 {
                     int intervalMin = Math.Max(5, shihabQueue.ShihabPeriodicSyncMinutes);
-                    if ((DateTime.UtcNow - shihabQueue.ShihabLastPeriodicSyncUtc).TotalMinutes >= intervalMin)
+                    if (shihabQueue.ShihabLastPeriodicSyncUtc == DateTime.MinValue ||
+                        (DateTime.UtcNow - shihabQueue.ShihabLastPeriodicSyncUtc).TotalMinutes >= intervalMin)
                     {
                         shihabQueue.ShihabLastPeriodicSyncUtc = DateTime.UtcNow;
-                        TriggerPeriodicQueueSyncProbeAsync(shihabQueue.ShihabQueueName);
+                        if (HasEligiblePeriodicSyncItems(shihabQueue.ShihabQueueName))
+                        {
+                            TriggerPeriodicQueueSyncProbeAsync(shihabQueue.ShihabQueueName);
+                        }
                     }
                 }
 
@@ -184,10 +223,10 @@ namespace ShihabMehediIDM
                             adoptedAny = true;
                         }
                     }
-                    if (adoptedAny)
-                    {
-                        _shihabStore.SaveShihabDownloads(_shihabDownloads);
-                    }
+                }
+                if (adoptedAny)
+                {
+                    ScheduleDebouncedDownloadsSave();
                 }
             }
 
@@ -428,17 +467,39 @@ namespace ShihabMehediIDM
                 {
                     try
                     {
-                        string cmdExePath = ShihabProcessAndPathSafety.ResolveSystem32ToolPath("cmd.exe");
-                        if (!string.IsNullOrEmpty(cmdExePath) && File.Exists(cmdExePath))
+                        string rawPostCmd = shihabQueue.ShihabRunCommandWhenDone.Trim();
+                        bool wasSealed =
+                            rawPostCmd.StartsWith("dpapi2:", StringComparison.Ordinal) ||
+                            rawPostCmd.StartsWith("aes2:", StringComparison.Ordinal) ||
+                            rawPostCmd.StartsWith("aes3:", StringComparison.Ordinal) ||
+                            rawPostCmd.StartsWith("dpapi:", StringComparison.Ordinal);
+                        string effectiveCmd = wasSealed
+                            ? ShihabSecretsVault.UnprotectSecret(rawPostCmd)
+                            : rawPostCmd;
+
+                        if (string.IsNullOrWhiteSpace(effectiveCmd) ||
+                            (wasSealed && string.Equals(effectiveCmd, rawPostCmd, StringComparison.Ordinal)))
                         {
-                            EmitShihabLog("[Scheduler] Running post-queue command: " + shihabQueue.ShihabRunCommandWhenDone);
-                            ProcessStartInfo psi = new ProcessStartInfo(cmdExePath, "/C " + shihabQueue.ShihabRunCommandWhenDone)
+                            EmitShihabLog("[Scheduler] Skipped post-queue command: protected command could not be unsealed.");
+                        }
+                        else if (effectiveCmd.IndexOf('\0') >= 0 || effectiveCmd.IndexOf('\r') >= 0 || effectiveCmd.IndexOf('\n') >= 0)
+                        {
+                            EmitShihabLog("[Scheduler] Blocked post-queue command containing control/newline characters.");
+                        }
+                        else
+                        {
+                            string cmdExePath = ShihabProcessAndPathSafety.ResolveSystem32ToolPath("cmd.exe");
+                            if (!string.IsNullOrEmpty(cmdExePath) && File.Exists(cmdExePath))
                             {
-                                UseShellExecute = false,
-                                CreateNoWindow = true
-                            };
-                            using (Process postCmdProc = Process.Start(psi))
-                            {
+                                EmitShihabLog("[Scheduler] Running post-queue command: " + (wasSealed ? "<protected command>" : effectiveCmd));
+                                ProcessStartInfo psi = new ProcessStartInfo(cmdExePath, "/C " + effectiveCmd)
+                                {
+                                    UseShellExecute = false,
+                                    CreateNoWindow = true
+                                };
+                                using (Process postCmdProc = Process.Start(psi))
+                                {
+                                }
                             }
                         }
                     }

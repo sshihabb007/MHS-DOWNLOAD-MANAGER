@@ -3,12 +3,10 @@
 (() => {
   const SHIHAB_HOST_ID = "shihab-mehedi-idm-video-panel-host";
   const SHIHAB_HOST_ATTR = "data-shihab-mehedi-idm-host";
-  const SHIHAB_DOM_OWNER_ATTR = "data-shihab-mehedi-idm-owner";
-  const MEHEDI_SUPERSEDE_EVENT = "shihab-mehedi-idm-supersede";
   const shihabInstanceToken = "shihab_idm_" + Date.now() + "_" + Math.random().toString(36).slice(2, 10);
   let mehediInstanceDisposed = false;
 
-  // Cleanly tear down any older injected instance (across both same-world and isolated-world reloads) so only ONE icon ever exists!
+  // Cleanly tear down any older injected instance purely in isolated-world JS (zero document_start DOM mutations!)
   if (typeof window.__shihabMehediIdmCleanupPrev === "function") {
     try {
       window.__shihabMehediIdmCleanupPrev();
@@ -16,15 +14,32 @@
       // Ignore cleanup errors
     }
   }
-  try {
-    document.dispatchEvent(new CustomEvent(MEHEDI_SUPERSEDE_EVENT, {
-      detail: { shihabOwnerToken: shihabInstanceToken }
-    }));
-    if (document.documentElement) {
-      document.documentElement.setAttribute(SHIHAB_DOM_OWNER_ATTR, shihabInstanceToken);
+
+  function shihabSafeSameWindowOrigin() {
+    try {
+      return /^https?:\/\//i.test(location.origin) ? location.origin : "*";
+    } catch (_) {
+      return "*";
     }
-  } catch (shihabDomClaimErr) {
-    // Ignore early document_start edge cases
+  }
+
+  function shihabMakeWeakRef(mehediEl) {
+    if (!mehediEl) return null;
+    return typeof WeakRef === "function" ? new WeakRef(mehediEl) : mehediEl;
+  }
+
+  function shihabReadWeakRef(mehediRef) {
+    if (!mehediRef) return null;
+    return typeof mehediRef.deref === "function" ? (mehediRef.deref() || null) : mehediRef;
+  }
+
+  function shihabSetBoundedMap(shihabMap, mehediKey, shihabVal, mehediMax) {
+    if (!mehediKey) return;
+    shihabMap.set(mehediKey, shihabVal);
+    while (shihabMap.size > mehediMax) {
+      const shihabFirst = shihabMap.keys().next().value;
+      shihabMap.delete(shihabFirst);
+    }
   }
 
   function shihabIsExtensionContextAlive() {
@@ -45,53 +60,130 @@
       }
     } catch (_) {}
   }
-  shihabSweepForeignHostElements(null);
 
   // Official MHS Download Manager 24x24 icon embedded inline so strict site CSP img-src never blocks it
   const SHIHAB_MHS_ICON_DATA_URI =
     "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAZGSURBVEhL3dBpUBN2HsZx3nU7ba0hBxSrGJUWBBISAgQ55QiEMxFMgIRwJITLEEIMoAmE1KCIhAiEgAkgWlGUs4BQq5VKD0ZUMAVKa0cZrT1GO53dmR136jHPjnnhTH21+7bf17//85n5u7j8beqYWGF3TN7ld86sZ7dPrxe0TayXmS/8qG7qul2oNlxhvn7/f8VKrFElygYfCyxr/8ma+v1P4dijZ8IzvzzPstx9IW64/VSonn0klE/UvP7uf2r+0R/vSM1fzCdWzSGw/2cEDT0Ge+A37LLeR6TxO8SqriNJegXpWcP/3Jc9bD5WdclwtPyiqbFwpNuYc/ZUQ7ptWBdnGtLu0tcZaIqA1/dd1gBi7chdR45pDYzu+2Da7oNlWUfI4e8RVr2IyOI5xAgmkZBwBryYPuRwTkIU1Q1xyHHkMpqR529Evncdir1qofZVLHWnVrv/BXAAxJrBO47cQyuIPHYPnNaH4Db9hDTdPWQo1yAsWII442sUcC6jJHoK5eHjqGQPozr4PLSsc/go8GOYmF04QDNgH3v/E3mSpiIvVrnzFXD9+Quipm/VIVMtIV/5EIXlDyFVr0JjeQCV+T4qjT+iSuNAY80ibHoHerW30KeeR1/ZF+jNv4TenIs4nTmJvtQLMKT1Q8GzPM1M0D6sSDpU7ASu/vsZseL4DYc09yuU712HSDCNWL4ZnJbvEN+xjnjjHaSoV5EldUCeswiVYAlq7jwUIdMoDxiFwncYB73HYPW+hI9YM6iJHURC6EHIuZYb9tLJDS5jvz4hyo3XHJK0acjjb6LddAMxyjnQDXfA1K6CrbiN3ZKb2MNbgJh3E2Wyb2GqXkWb4jpUkSOQ7ziN6m3nYKN+giN+IzgQ2Yc0tg4V0k+v2sw/veliX/6NmF877RDFDKI0+gqsrYuIKPgSNPnXYBR8iWDBLKKSr4AfcxVxETOITh+F1rqAnrlf0CAaR/FmK6o3dcO+aQCtXqdRH9qBbLYe1eJPbc4vMnxyiyQsOb8sDLZBGTuKJv0cghPHQEsdRwB3FEGxw4gMG0JK0CjC6WcQEWVHZdstHLn2GPWZ57HvvWbUuh1FD6UTVk8LGgMPQxashy51TOMESkzj5DTBiZVMvxaokwewv2QMjKAToIXawQixISywB3H0fnB8+xHs1YYIdgtU7YtoufwrtBw71JQ61JN0OElqRL+HEWb/g1AGaJ/qw3oynECGspvMiW9a4e/QoyrdDlFyF2jeRtB8DyPAx4gI71YIAofAY54Da/Mh7GYbsd96G8dnHsCwqx11bho0EipxxrUWw5Qa2D9Qoe5DzR9GvyMsJxCXZSRFsw8u8zyrUcI9hkRmPfy37geNqgHdswoB7ysQTa1FergNghQbiksGoD25ihOXH8CumELbrma0uJZgkLAPM2QFzlLLcNSz4vtj1BoPJxDKqSKF0SqWU7dUICu8FuHUMvh5yEHzKALdvRA+ZCG83k1FsJsYxYVdaD61gNKiITSe/QEDU2toZupwfKMEQ4R8zJIKMblJig73os+aN5f+wwkwQmWkEG/5MndLKXiMMgS558KPIgKdkgMmORt0Yga83uWC/nYS+P5q1BsuQl40hubhe2jNtcNEyYOVIMAYQYhvSDmYdZfATpZYneMv8w8Qk4K2F37L9ZSD7yMDgyyAPykTDNJeBBEzEeLKR+DGZLDeiUXmBh4UnBZ0jt9Bu34CRzcXoJOYgT4CDxOufCyQ9uIrtyycJAkqXwF+vgISiypd5lKLkLFD5hymk/Yg0JUPtisf4YR0RG9Mxu4NHOx9Ox5KjyLUJR2B8cMitBJScYKQjAHXFHzmIYSDWoC5LeJnFrc9Ka+AkJ0iQsRO1VJ2gA7ZPmoEUkQIouQglCxCNDkXCSQJ+EQJcol5KHcVQ0/Kg9lNhn5KIUbc8jHtLsHse2IsbpNiJewARiIb5hv8iza9Al4mjKjpUQssLwQxvc8jgzv/jGN1PklmWv+VSe/8XeJr+bnEu/2eeodptYHadKONeuhaP1V3cWSrZnBqa4X9ErW49fNtBQ0LfqVVi0Jz/qjy7Pa/jL/MkGOmHq66oEhPOl0cH/dxNjfqVEpKWG8UP6SLJWB2+OT6mrbKPmh0V24zEIyeurfs26veeH3j79t/AWa8dlz2H5A+AAAAAElFTkSuQmCC";
 
+  const SHIHAB_SHADOW_VIDEO_HOSTS_SELECTOR =
+    "shreddit-player, shreddit-player-2, video-player, media-player, mux-player, vimeo-player, videojs-player, ytd-player, amp-video, faceplate-video, brightcove-player, jw-player, plyr-player";
+  const SHIHAB_SHADOW_HOST_TAG_SET = new Set([
+    "SHREDDIT-PLAYER", "SHREDDIT-PLAYER-2", "VIDEO-PLAYER", "MEDIA-PLAYER",
+    "MUX-PLAYER", "VIMEO-PLAYER", "VIDEOJS-PLAYER", "YTD-PLAYER",
+    "AMP-VIDEO", "FACEPLATE-VIDEO", "BRIGHTCOVE-PLAYER", "JW-PLAYER", "PLYR-PLAYER"
+  ]);
+  const MEHEDI_RESERVED_IG_PATHS = new Set([
+    "explore", "reels", "reel", "p", "tv", "stories", "direct", "accounts", "audio", "ar", "about", "legal"
+  ]);
+
   let shihabTabStreamsCache = [];
+  let shihabStreamCacheVersion = 0;
+  const shihabStreamsByUrlMap = new Map();
+  const shihabStreamsByParentMasterMap = new Map();
+  const shihabStreamsByGroupKeyMap = new Map();
+  const shihabStreamsByAltIdMap = new Map();
+  const shihabMaxDetectedAtByGroupMap = new Map();
+
+  function shihabSetTabStreamsCache(mehediNextStreams) {
+    const shihabList = Array.isArray(mehediNextStreams) ? mehediNextStreams : [];
+    shihabTabStreamsCache = shihabList;
+    shihabStreamCacheVersion++;
+    shihabStreamsByUrlMap.clear();
+    shihabStreamsByParentMasterMap.clear();
+    shihabStreamsByGroupKeyMap.clear();
+    shihabStreamsByAltIdMap.clear();
+    shihabMaxDetectedAtByGroupMap.clear();
+
+    const shihabPushIdx = (map, key, rec) => {
+      if (!key) return;
+      let arr = map.get(key);
+      if (!arr) {
+        arr = [];
+        map.set(key, arr);
+      }
+      arr.push(rec);
+    };
+
+    for (let i = 0; i < shihabList.length; i++) {
+      const rec = shihabList[i];
+      if (!rec) continue;
+      if (rec.shihabStreamUrl) shihabPushIdx(shihabStreamsByUrlMap, rec.shihabStreamUrl, rec);
+      if (rec.mehediParentMasterUrl) shihabPushIdx(shihabStreamsByParentMasterMap, rec.mehediParentMasterUrl, rec);
+      if (rec.shihabGroupKey) {
+        shihabPushIdx(shihabStreamsByGroupKeyMap, rec.shihabGroupKey, rec);
+        shihabPushIdx(shihabStreamsByAltIdMap, rec.shihabGroupKey, rec);
+        const ts = rec.shihabDetectedAt || 0;
+        const prevTs = shihabMaxDetectedAtByGroupMap.get(rec.shihabGroupKey);
+        if (prevTs === undefined || ts > prevTs) {
+          shihabMaxDetectedAtByGroupMap.set(rec.shihabGroupKey, ts);
+        }
+      }
+      if (rec.mehediShortcode) shihabPushIdx(shihabStreamsByAltIdMap, String(rec.mehediShortcode), rec);
+      if (Array.isArray(rec.mehediAltIds)) {
+        for (let j = 0; j < rec.mehediAltIds.length; j++) {
+          const alt = rec.mehediAltIds[j];
+          if (alt) shihabPushIdx(shihabStreamsByAltIdMap, String(alt), rec);
+        }
+      }
+    }
+  }
+
   let mehediShowFloatingBar = true;
   let mehediPanelMiniMode = false;
   let shihabHideVideoInFullscreen = false;
   let shihabConfiguredPreventKey = "Alt";
   let mehediConfiguredForceKey = "Ins";
   let shihabPanelDismissedUrl = "";
-  const SHIHAB_SHADOW_VIDEO_HOSTS_SELECTOR =
-    "shreddit-player, shreddit-player-2, video-player, media-player, mux-player, vimeo-player, videojs-player, ytd-player, amp-video, faceplate-video, brightcove-player, jw-player, plyr-player";
 
   let mehediShadowHost = null;
   let shihabRefs = null;
   let shihabDropdownOpen = false;
-  let mehediLockedDropdownVideoEl = null;
+  let mehediLockedDropdownVideoRef = null;
   let shihabLastRenderedMenuSig = "";
   let shihabRenderedMenuRows = [];
-  let shihabRenderedMenuTargetVideo = null;
+  let shihabRenderedMenuTargetVideoRef = null;
+  let shihabLastDataTargetVideoRef = null;
+  let shihabLastDataStreamVersion = -1;
+  let shihabCachedTargetStreams = [];
+  let shihabCachedSnifferRows = [];
   let mehediPointerDownInMenuAtMs = 0;
   let shihabPointerReleaseTimerId = null;
   let shihabDeferredMenuRender = false;
   let shihabHasHiddenVideoInDom = false;
-  let mehediHoveredVideoEl = null;
-  let mehediLastSelectedVideoEl = null;
+  let mehediHoveredVideoRef = null;
+  let mehediLastSelectedVideoRef = null;
   let shihabHoveredUntilMs = 0;
+  let shihabHoverExpireTimerId = null;
+  let shihabSubframeExpireTimerId = null;
+  let shihabTopActiveExpireTimerId = null;
   let mehediPointerInsideBar = false;
   let shihabLastMeasuredFullBarW = 178;
+  let shihabLastMeasuredBarH = 28;
+  let shihabBarDimensionsMeasured = false;
+  let shihabLastTransformCss = "";
   let mehediSubframeHoveredUntilMs = 0;
   let shihabTopFrameActiveUntilMs = 0;
   let shihabTopFrameVideoArea = 0;
   let mehediMyFrameId = window === window.top ? 0 : -1;
-  let mehediLastTopFrameNotifyMs = 0;
+  let shihabLastNotifiedTopActiveKey = "";
   let mehediLastBgSyncMs = 0;
   let shihabToastClearTimer = null;
-  let mehediPeriodicTimerId = null;
   let shihabDomObserver = null;
+  let shihabVideoIntersectionObserver = null;
+  let shihabVideoResizeObserver = null;
+  let shihabVideoAttrObserver = null;
+  const shihabObservedVideosSet = new WeakSet();
+  let shihabVideoFeaturesActivated = false;
+  let shihabVideoModeListenersAttached = false;
+  let shihabDropdownListenersAttached = false;
+  let shihabLastKnownLightVideoCount = 0;
   let shihabPageHasDrmProtectedMedia = false;
   let mehediDetectedDrmKeySystem = "";
   let mehediLastObservedPageHref = location.href;
   let shihabLocalVidUidCounter = 1;
   let mehediLastSentGestureMs = 0;
   let shihabLastSentGestureHref = "";
+  let mehediLastSentGesturePageUrl = "";
   let mehediLastSentAltState = false;
   let shihabLastSentForceState = false;
 
@@ -102,6 +194,20 @@
   const shihabBlobToStreamUrlsMap = new Map();
   const mehediShortcodeMetaMap = new Map();
   const shihabGroupKeyTitleMap = new Map();
+
+  function shihabArmHoverExpiryTimer(mehediUntilMs) {
+    if (shihabHoverExpireTimerId) {
+      clearTimeout(shihabHoverExpireTimerId);
+      shihabHoverExpireTimerId = null;
+    }
+    const shihabDelay = Math.max(50, mehediUntilMs - Date.now() + 40);
+    shihabHoverExpireTimerId = setTimeout(() => {
+      shihabHoverExpireTimerId = null;
+      if (!mehediInstanceDisposed && !mehediPointerInsideBar && !shihabDropdownOpen) {
+        shihabScheduleFloatingPanelRender(false);
+      }
+    }, shihabDelay);
+  }
 
   function shihabFormatBytesHuman(mehediBytes) {
     if (!mehediBytes || mehediBytes <= 0) return "";
@@ -293,11 +399,11 @@
     if (!mehediForceRefresh && mehediNow - shihabPrevMs < 8000) {
       return;
     }
-    shihabRequestedYtVideoIdsMs.set(shihabVidId, mehediNow);
+    shihabSetBoundedMap(shihabRequestedYtVideoIdsMs, shihabVidId, mehediNow, 100);
 
     const mehediYtGrp = `yt:${shihabVidId}`;
     if (mehediTitleHint) {
-      shihabGroupKeyTitleMap.set(mehediYtGrp, mehediTitleHint);
+      shihabSetBoundedMap(shihabGroupKeyTitleMap, mehediYtGrp, mehediTitleHint, 150);
     }
     mehediIndexIdentifierToGroup(shihabVidId, mehediYtGrp, mehediTitleHint || "");
 
@@ -310,14 +416,14 @@
         mehediForce: Boolean(mehediForceRefresh)
       }).then((shihabAck) => {
         if (shihabAck && Array.isArray(shihabAck.mehediStreams) && shihabAck.mehediStreams.length > 0) {
-          shihabTabStreamsCache = shihabAck.mehediStreams;
-          shihabRenderFloatingIdmVideoPanel();
+          shihabSetTabStreamsCache(shihabAck.mehediStreams);
+          shihabRenderFloatingIdmVideoPanel(false);
         } else if (shihabAck && shihabAck.shihabUsePageFallback) {
           try {
             window.postMessage({
               __shihabResolveYtInMainWorld: shihabVidId,
               mehediVisitorData: shihabVisitorData || ""
-            }, "*");
+            }, shihabSafeSameWindowOrigin());
           } catch (_) {}
         }
       }).catch(() => {});
@@ -336,7 +442,7 @@
     if (mehediForceInspect || (!shihabVidUidIdentityMap.has(mehediUid) && shihabNow - mehediLastMs > 1400)) {
       mehediVidLastInspectMs.set(shihabVidEl, shihabNow);
       try {
-        window.postMessage({ __shihabInspectVideoUid: mehediUid }, "*");
+        window.postMessage({ __shihabInspectVideoUid: mehediUid }, shihabSafeSameWindowOrigin());
       } catch (_) {}
     }
     return mehediUid;
@@ -351,6 +457,13 @@
       if (shihabEvent.source === window.top) {
         shihabTopFrameActiveUntilMs = Date.now() + 2200;
         shihabTopFrameVideoArea = Number(shihabEvent.data.shihabTopVideoArea || 0);
+        if (shihabTopActiveExpireTimerId) clearTimeout(shihabTopActiveExpireTimerId);
+        shihabTopActiveExpireTimerId = setTimeout(() => {
+          shihabTopActiveExpireTimerId = null;
+          if (!mehediInstanceDisposed && shihabVideoFeaturesActivated) {
+            shihabScheduleFloatingPanelRender(false);
+          }
+        }, 2250);
       }
       return;
     }
@@ -360,6 +473,13 @@
         if (!mehediPointerInsideBar && !shihabDropdownOpen && mehediShadowHost && mehediShadowHost.style.display !== "none") {
           mehediShadowHost.style.display = "none";
         }
+        if (shihabSubframeExpireTimerId) clearTimeout(shihabSubframeExpireTimerId);
+        shihabSubframeExpireTimerId = setTimeout(() => {
+          shihabSubframeExpireTimerId = null;
+          if (!mehediInstanceDisposed && shihabVideoFeaturesActivated) {
+            shihabScheduleFloatingPanelRender(false);
+          }
+        }, 4550);
       }
       return;
     }
@@ -370,10 +490,13 @@
     const shihabPayload = shihabEvent.data.shihabPayload;
     if (!shihabPayload) return;
 
+    shihabActivateVideoFeaturesOnce();
+
     if (mehediKind === "shihab_eme_drm_detected") {
       shihabPageHasDrmProtectedMedia = true;
       mehediDetectedDrmKeySystem = String(shihabPayload.keySystem || "EME");
-      shihabRenderFloatingIdmVideoPanel();
+      shihabStreamCacheVersion++;
+      shihabRenderFloatingIdmVideoPanel(false);
       return;
     }
 
@@ -402,23 +525,20 @@
         ].filter(Boolean)));
         const shihabTitleHint = String(shihabPayload.shihabTitleHint || shihabPrevIdent.shihabTitleHint || "");
 
-        shihabVidUidIdentityMap.set(mehediVidUid, {
+        shihabSetBoundedMap(shihabVidUidIdentityMap, mehediVidUid, {
           mehediGroupKeys: mehediMergedGroups,
           shihabAltIds: shihabMergedAlts,
           mehediBoundUrls: mehediMergedUrls,
           shihabTitleHint
-        });
-        if (shihabVidUidIdentityMap.size > 120) {
-          const mehediOldUid = shihabVidUidIdentityMap.keys().next().value;
-          shihabVidUidIdentityMap.delete(mehediOldUid);
-        }
+        }, 120);
         for (const mehediGrp of mehediMergedGroups) {
-          if (shihabTitleHint) shihabGroupKeyTitleMap.set(mehediGrp, shihabTitleHint);
+          if (shihabTitleHint) shihabSetBoundedMap(shihabGroupKeyTitleMap, mehediGrp, shihabTitleHint, 150);
           for (const shihabAlt of shihabMergedAlts) {
             mehediIndexIdentifierToGroup(shihabAlt, mehediGrp, shihabTitleHint);
           }
         }
-        shihabScheduleFloatingPanelRender();
+        shihabStreamCacheVersion++;
+        shihabScheduleFloatingPanelRender(false);
       }
       return;
     }
@@ -432,28 +552,21 @@
           let shihabExactSet = shihabExactBlobToStreamUrlsMap.get(mehediBlobUrl);
           if (!shihabExactSet) {
             shihabExactSet = new Set();
-            shihabExactBlobToStreamUrlsMap.set(mehediBlobUrl, shihabExactSet);
-            if (shihabExactBlobToStreamUrlsMap.size > 80) {
-              const mehediFirstExact = shihabExactBlobToStreamUrlsMap.keys().next().value;
-              shihabExactBlobToStreamUrlsMap.delete(mehediFirstExact);
-            }
+            shihabSetBoundedMap(shihabExactBlobToStreamUrlsMap, mehediBlobUrl, shihabExactSet, 150);
           }
           shihabExactSet.add(shihabStreamClean);
-          // Overwrite fallback set with exact byte-matched URLs so any earlier preloaded-Reel guess is purged!
-          shihabBlobToStreamUrlsMap.set(mehediBlobUrl, new Set(shihabExactSet));
+          // Overwrite fallback set with exact byte-matched URLs (bounded at 150) so any earlier preloaded-Reel guess is purged!
+          shihabSetBoundedMap(shihabBlobToStreamUrlsMap, mehediBlobUrl, new Set(shihabExactSet), 150);
         } else if (!shihabExactBlobToStreamUrlsMap.has(mehediBlobUrl)) {
           let mehediUrlSet = shihabBlobToStreamUrlsMap.get(mehediBlobUrl);
           if (!mehediUrlSet) {
             mehediUrlSet = new Set();
-            shihabBlobToStreamUrlsMap.set(mehediBlobUrl, mehediUrlSet);
-            if (shihabBlobToStreamUrlsMap.size > 80) {
-              const shihabFirstKey = shihabBlobToStreamUrlsMap.keys().next().value;
-              shihabBlobToStreamUrlsMap.delete(shihabFirstKey);
-            }
+            shihabSetBoundedMap(shihabBlobToStreamUrlsMap, mehediBlobUrl, mehediUrlSet, 150);
           }
           mehediUrlSet.add(shihabStreamClean);
         }
-        shihabScheduleFloatingPanelRender();
+        shihabStreamCacheVersion++;
+        shihabScheduleFloatingPanelRender(false);
       }
       return;
     }
@@ -475,7 +588,7 @@
       const mehediTopAlts = Array.isArray(shihabPayload.mehediAltIds) ? shihabPayload.mehediAltIds : [];
 
       if (shihabGroupKey && shihabTitleHint) {
-        shihabGroupKeyTitleMap.set(shihabGroupKey, shihabTitleHint);
+        shihabSetBoundedMap(shihabGroupKeyTitleMap, shihabGroupKey, shihabTitleHint, 150);
       }
       if (mehediShortcode) {
         mehediIndexIdentifierToGroup(mehediShortcode, shihabGroupKey, shihabTitleHint);
@@ -490,7 +603,7 @@
           const shihabItemGrp = mehediItem.shihabGroupKey || shihabGroupKey;
           const mehediItemTitle = mehediItem.shihabTitleHint || shihabTitleHint;
           if (shihabItemGrp && mehediItemTitle) {
-            shihabGroupKeyTitleMap.set(shihabItemGrp, mehediItemTitle);
+            shihabSetBoundedMap(shihabGroupKeyTitleMap, shihabItemGrp, mehediItemTitle, 150);
           }
           if (mehediItem.mehediShortcode) {
             mehediIndexIdentifierToGroup(mehediItem.mehediShortcode, shihabItemGrp, mehediItemTitle);
@@ -614,6 +727,12 @@
 
   function mehediMapBoundUrlsToGroups(shihabUrlIterable, mehediTargetGroupSet, shihabTargetUrlSet) {
     if (!shihabUrlIterable) return;
+    const shihabAddGroupsFromList = (arr) => {
+      if (!arr) return;
+      for (let i = 0; i < arr.length; i++) {
+        if (arr[i] && arr[i].shihabGroupKey) mehediTargetGroupSet.add(arr[i].shihabGroupKey);
+      }
+    };
     for (const mehediBoundUrl of shihabUrlIterable) {
       shihabTargetUrlSet.add(mehediBoundUrl);
       const mehediBoundPathKey = mehediBoundUrl.split("?")[0].split("#")[0];
@@ -626,28 +745,16 @@
         if (shihabMapped && shihabMapped.mehediGroupKey) {
           mehediTargetGroupSet.add(shihabMapped.mehediGroupKey);
         }
+        shihabAddGroupsFromList(shihabStreamsByAltIdMap.get(String(mehediAlt)));
       }
       const shihabDirectMap = mehediShortcodeMetaMap.get(mehediBoundUrl) || mehediShortcodeMetaMap.get(mehediBoundPathKey);
       if (shihabDirectMap && shihabDirectMap.mehediGroupKey) {
         mehediTargetGroupSet.add(shihabDirectMap.mehediGroupKey);
       }
-      for (const shihabCached of shihabTabStreamsCache) {
-        if (!shihabCached) continue;
-        if (
-          (shihabCached.shihabStreamUrl === mehediBoundUrl ||
-           shihabCached.mehediParentMasterUrl === mehediBoundUrl ||
-           (Array.isArray(shihabCached.mehediAltIds) &&
-            (shihabCached.mehediAltIds.includes(mehediBoundUrl) || shihabCached.mehediAltIds.includes(mehediBoundPathKey)))) &&
-          shihabCached.shihabGroupKey
-        ) {
-          mehediTargetGroupSet.add(shihabCached.shihabGroupKey);
-        } else if (shihabExtracted.shihabAltIds.length > 0 && shihabCached.shihabGroupKey) {
-          if (shihabExtracted.shihabAltIds.includes(shihabCached.shihabGroupKey) ||
-              (Array.isArray(shihabCached.mehediAltIds) && shihabCached.mehediAltIds.some((mehediId) => shihabExtracted.shihabAltIds.includes(String(mehediId))))) {
-            mehediTargetGroupSet.add(shihabCached.shihabGroupKey);
-          }
-        }
-      }
+      shihabAddGroupsFromList(shihabStreamsByUrlMap.get(mehediBoundUrl));
+      shihabAddGroupsFromList(shihabStreamsByParentMasterMap.get(mehediBoundUrl));
+      shihabAddGroupsFromList(shihabStreamsByAltIdMap.get(mehediBoundUrl));
+      shihabAddGroupsFromList(shihabStreamsByAltIdMap.get(mehediBoundPathKey));
     }
   }
 
@@ -683,15 +790,14 @@
           mehediMapBoundUrlsToGroups(mehediIdent.mehediBoundUrls, shihabDirectDomGroupKeys, shihabExactBoundUrls);
           for (const shihabBu of shihabExactBoundUrls) shihabBoundUrls.add(shihabBu);
         }
-        // Cross-check fiber altIds against shihabTabStreamsCache
+        // O(1) cross-check fiber altIds against indexed streams map
         for (const shihabAlt of mehediIdent.shihabAltIds) {
-          for (const mehediCached of shihabTabStreamsCache) {
-            if (!mehediCached || !mehediCached.shihabGroupKey) continue;
-            if (
-              mehediCached.shihabGroupKey === shihabAlt ||
-              (Array.isArray(mehediCached.mehediAltIds) && mehediCached.mehediAltIds.includes(shihabAlt))
-            ) {
-              shihabDirectDomGroupKeys.add(mehediCached.shihabGroupKey);
+          const mehediHits = shihabStreamsByAltIdMap.get(String(shihabAlt));
+          if (mehediHits) {
+            for (let i = 0; i < mehediHits.length; i++) {
+              if (mehediHits[i] && mehediHits[i].shihabGroupKey) {
+                shihabDirectDomGroupKeys.add(mehediHits[i].shihabGroupKey);
+              }
             }
           }
         }
@@ -806,20 +912,18 @@
       }
     }
 
-    // Cross-resolve shortcodes & route IDs -> manifest groupKeys (via mehediShortcodeMetaMap + mehediAltIds in shihabTabStreamsCache)
+    // O(1) cross-resolve shortcodes & route IDs -> manifest groupKeys
     for (const shihabCode of shihabShortcodes) {
       const mehediMeta = mehediShortcodeMetaMap.get(shihabCode);
       if (mehediMeta && mehediMeta.mehediGroupKey) {
         mehediRouteAndCardGroupKeys.add(mehediMeta.mehediGroupKey);
       }
-      for (const shihabCached of shihabTabStreamsCache) {
-        if (!shihabCached || !shihabCached.shihabGroupKey) continue;
-        if (
-          shihabCached.shihabGroupKey === shihabCode ||
-          shihabCached.mehediShortcode === shihabCode ||
-          (Array.isArray(shihabCached.mehediAltIds) && shihabCached.mehediAltIds.some((mehediAlt) => String(mehediAlt) === shihabCode))
-        ) {
-          mehediRouteAndCardGroupKeys.add(shihabCached.shihabGroupKey);
+      const shihabIndexedHits = shihabStreamsByAltIdMap.get(String(shihabCode));
+      if (shihabIndexedHits) {
+        for (let i = 0; i < shihabIndexedHits.length; i++) {
+          if (shihabIndexedHits[i] && shihabIndexedHits[i].shihabGroupKey) {
+            mehediRouteAndCardGroupKeys.add(shihabIndexedHits[i].shihabGroupKey);
+          }
         }
       }
     }
@@ -844,12 +948,15 @@
     }
     if (!shihabManifestTitleHint) {
       for (const mehediGrp of mehediGroupKeys) {
-        const shihabStreamWithHint = shihabTabStreamsCache.find(
-          (mehediRec) => mehediRec && mehediRec.shihabGroupKey === mehediGrp && Boolean(mehediRec.shihabTitleHint)
-        );
-        if (shihabStreamWithHint) {
-          shihabManifestTitleHint = shihabStreamWithHint.shihabTitleHint;
-          break;
+        const shihabGrpStreams = shihabStreamsByGroupKeyMap.get(mehediGrp);
+        if (shihabGrpStreams) {
+          for (let i = 0; i < shihabGrpStreams.length; i++) {
+            if (shihabGrpStreams[i] && shihabGrpStreams[i].shihabTitleHint) {
+              shihabManifestTitleHint = shihabGrpStreams[i].shihabTitleHint;
+              break;
+            }
+          }
+          if (shihabManifestTitleHint) break;
         }
       }
     }
@@ -931,16 +1038,13 @@
       const shihabIgCard = shihabCtx.mehediCardRoot;
       let mehediAuthorHandle = "";
       let shihabBestCaption = "";
-      const mehediReservedIgPaths = new Set([
-        "explore", "reels", "reel", "p", "tv", "stories", "direct", "accounts", "audio", "ar", "about", "legal"
-      ]);
 
       if (shihabIgCard) {
         const mehediLinks = shihabIgCard.querySelectorAll("header a[href^='/'], a[href^='/']");
         for (const shihabLink of mehediLinks) {
           const mehediHref = shihabLink.getAttribute("href") || "";
           const shihabUserMatch = mehediHref.match(/^\/([A-Za-z0-9._]{2,30})\/?$/);
-          if (shihabUserMatch && !mehediReservedIgPaths.has(shihabUserMatch[1].toLowerCase())) {
+          if (shihabUserMatch && !MEHEDI_RESERVED_IG_PATHS.has(shihabUserMatch[1].toLowerCase())) {
             const mehediLinkText = (shihabLink.textContent || "").trim();
             if (mehediLinkText && /^[A-Za-z0-9._]{2,30}$/.test(mehediLinkText)) {
               mehediAuthorHandle = mehediLinkText;
@@ -1216,9 +1320,16 @@
       mehediIsDownloadGesture = true;
     } else if (shihabEvtType === "keydown") {
       const shihabKey = String(shihabEvent.key || "");
+      const shihabKeyTarget = shihabEvent.target;
+      const shihabTargetTag = shihabKeyTarget && shihabKeyTarget.tagName ? shihabKeyTarget.tagName.toUpperCase() : "";
+      const shihabIsEditableTarget = Boolean(
+        shihabTargetTag === "INPUT" ||
+        shihabTargetTag === "TEXTAREA" ||
+        shihabTargetTag === "SELECT" ||
+        (shihabKeyTarget && shihabKeyTarget.isContentEditable)
+      );
       mehediIsDownloadGesture =
-        shihabKey === "Enter" ||
-        shihabKey === " " ||
+        (!shihabIsEditableTarget && (shihabKey === "Enter" || shihabKey === " ")) ||
         mehediForceHit ||
         ((shihabEvent.ctrlKey || shihabEvent.metaKey) &&
           (shihabKey === "s" || shihabKey === "S" || shihabKey === "j" || shihabKey === "J"));
@@ -1250,9 +1361,32 @@
       return;
     }
     const shihabNow = Date.now();
+    const shihabCurrentPageUrl = location.href;
+    let shihabIsActionButtonClick = false;
+    try {
+      const shihabTargetEl = shihabEvent.target && shihabEvent.target.nodeType === 1
+        ? shihabEvent.target
+        : (shihabEvent.target && shihabEvent.target.parentElement);
+      if (shihabTargetEl && typeof shihabTargetEl.closest === "function") {
+        shihabIsActionButtonClick = Boolean(
+          shihabTargetEl.closest('button, [role="button"], input[type="button"], input[type="submit"], [download]')
+        );
+      }
+    } catch (_) {}
+    const shihabPlainNoHrefGesture = !mehediClickedHref && !shihabIsActionButtonClick && !shihabPreventHit && !mehediForceHit;
+    if (
+      shihabPlainNoHrefGesture &&
+      !mehediLastSentAltState &&
+      !shihabLastSentForceState &&
+      shihabCurrentPageUrl === mehediLastSentGesturePageUrl &&
+      shihabNow - mehediLastSentGestureMs < 1500
+    ) {
+      return;
+    }
     if (
       shihabNow - mehediLastSentGestureMs < 160 &&
       mehediClickedHref === shihabLastSentGestureHref &&
+      shihabCurrentPageUrl === mehediLastSentGesturePageUrl &&
       shihabPreventHit === mehediLastSentAltState &&
       mehediForceHit === shihabLastSentForceState
     ) {
@@ -1261,13 +1395,14 @@
 
     mehediLastSentGestureMs = shihabNow;
     shihabLastSentGestureHref = mehediClickedHref;
+    mehediLastSentGesturePageUrl = shihabCurrentPageUrl;
     mehediLastSentAltState = shihabPreventHit;
     shihabLastSentForceState = mehediForceHit;
 
     try {
       chrome.runtime.sendMessage({
         shihabCmd: "mehedi_user_download_gesture",
-        shihabPageUrl: location.href,
+        shihabPageUrl: shihabCurrentPageUrl,
         mehediClickedHref: mehediClickedHref,
         shihabAltPressed: shihabPreventHit,
         mehediInsertPressed: mehediForceHit,
@@ -1380,17 +1515,8 @@
     let mehediBestTs = -1;
     for (const shihabGrp of mehediCandidateSet) {
       if (!shihabGrp) continue;
-      let mehediGrpMaxTs = -1;
-      let shihabExistsInCache = false;
-      for (const mehediRec of shihabTabStreamsCache) {
-        if (mehediRec && mehediRec.shihabGroupKey === shihabGrp) {
-          shihabExistsInCache = true;
-          if ((mehediRec.shihabDetectedAt || 0) > mehediGrpMaxTs) {
-            mehediGrpMaxTs = mehediRec.shihabDetectedAt || 0;
-          }
-        }
-      }
-      if (shihabExistsInCache && mehediGrpMaxTs >= mehediBestTs) {
+      const mehediGrpMaxTs = shihabMaxDetectedAtByGroupMap.get(shihabGrp);
+      if (mehediGrpMaxTs !== undefined && mehediGrpMaxTs >= mehediBestTs) {
         mehediBestTs = mehediGrpMaxTs;
         shihabBestGroup = shihabGrp;
       }
@@ -1513,14 +1639,16 @@
     // Priority 5: Aspect/duration-compatible newest group in shihabTabStreamsCache (preferring streams from THIS frame!)
     // On non-FB/IG/YT multi-video feeds (X, LinkedIn, Reddit, Vimeo, movie grids), allow Priority 5 when this <video>
     // is actively playing or MSE blob:-backed or explicitly selected, so real streams are never dropped to 0!
+    const shihabHoveredVidCur = shihabReadWeakRef(mehediHoveredVideoRef);
+    const shihabLockedVidCur = shihabReadWeakRef(mehediLockedDropdownVideoRef);
     const mehediAllowMultiFeedMatch =
       !mehediIsMultiVideoFeed ||
       Boolean(
         mehediActiveVideo &&
         ((!mehediActiveVideo.paused && !mehediActiveVideo.ended) ||
          String(mehediActiveVideo.currentSrc || mehediActiveVideo.src || "").startsWith("blob:") ||
-         mehediActiveVideo === mehediHoveredVideoEl ||
-         mehediActiveVideo === mehediLockedDropdownVideoEl)
+         mehediActiveVideo === shihabHoveredVidCur ||
+         mehediActiveVideo === shihabLockedVidCur)
       );
     if (!mehediAllowMultiFeedMatch) {
       return "";
@@ -1553,14 +1681,15 @@
     for (const shihabV of mehediVidList) {
       if (!shihabV || !shihabV.isConnected) continue;
       try {
+        const shihabR = shihabV.getBoundingClientRect();
+        if (!((shihabR.width >= 100 && shihabR.height >= 60) || shihabV.readyState >= 1)) {
+          continue;
+        }
         const mehediSt = window.getComputedStyle(shihabV);
         if (mehediSt.display === "none" || mehediSt.visibility === "hidden" || parseFloat(mehediSt.opacity || "1") < 0.05) {
           continue;
         }
-        const shihabR = shihabV.getBoundingClientRect();
-        if ((shihabR.width >= 100 && shihabR.height >= 60) || shihabV.readyState >= 1) {
-          shihabCount++;
-        }
+        shihabCount++;
       } catch (_) {
         shihabCount++;
       }
@@ -1657,13 +1786,25 @@
     );
 
     if (mehediWinningGroupKey) {
-      shihabScopedBgStreams = shihabTabStreamsCache.filter((mehediItem) => {
-        if (!mehediItem || !mehediItem.shihabStreamUrl) return false;
-        if (!mehediIsStreamCompatibleWithVideoElement(mehediItem, mehediActiveVideo)) return false;
-        if (mehediItem.shihabGroupKey === mehediWinningGroupKey) return true;
-        if (!mehediItem.shihabGroupKey && shihabCtx.shihabExactBoundUrls.has(mehediItem.shihabStreamUrl)) return true;
-        return false;
-      });
+      const shihabGroupCandidates = shihabStreamsByGroupKeyMap.get(mehediWinningGroupKey) || [];
+      for (let i = 0; i < shihabGroupCandidates.length; i++) {
+        const mehediItem = shihabGroupCandidates[i];
+        if (mehediItem && mehediItem.shihabStreamUrl && mehediIsStreamCompatibleWithVideoElement(mehediItem, mehediActiveVideo)) {
+          shihabScopedBgStreams.push(mehediItem);
+        }
+      }
+      if (shihabCtx.shihabExactBoundUrls.size > 0) {
+        for (const shihabExUrl of shihabCtx.shihabExactBoundUrls) {
+          const shihabUrlHits = shihabStreamsByUrlMap.get(shihabExUrl);
+          if (!shihabUrlHits) continue;
+          for (let i = 0; i < shihabUrlHits.length; i++) {
+            const mehediItem = shihabUrlHits[i];
+            if (mehediItem && !mehediItem.shihabGroupKey && mehediIsStreamCompatibleWithVideoElement(mehediItem, mehediActiveVideo)) {
+              shihabScopedBgStreams.push(mehediItem);
+            }
+          }
+        }
+      }
     } else if (shihabCtx.shihabBoundUrls.size > 0 || shihabCtx.shihabShortcodes.size > 0) {
       shihabScopedBgStreams = shihabTabStreamsCache.filter((mehediItem) => {
         if (!mehediItem || !mehediItem.shihabStreamUrl) return false;
@@ -1690,6 +1831,8 @@
       (shihabCtx.shihabExactGroupKeys && shihabCtx.shihabExactGroupKeys.size > 0) ||
       (shihabCtx.mehediRouteAndCardGroupKeys && shihabCtx.mehediRouteAndCardGroupKeys.size > 0)
     );
+    const shihabHovVid = shihabReadWeakRef(mehediHoveredVideoRef);
+    const shihabLckVid = shihabReadWeakRef(mehediLockedDropdownVideoRef);
     const mehediAllowMultiFeedFallback =
       !mehediIsMultiVideoFeed ||
       Boolean(
@@ -1698,8 +1841,8 @@
         mehediActiveVideo &&
         ((!mehediActiveVideo.paused && !mehediActiveVideo.ended) ||
          String(mehediActiveVideo.currentSrc || mehediActiveVideo.src || "").startsWith("blob:") ||
-         mehediActiveVideo === mehediHoveredVideoEl ||
-         mehediActiveVideo === mehediLockedDropdownVideoEl)
+         mehediActiveVideo === shihabHovVid ||
+         mehediActiveVideo === shihabLckVid)
       );
 
     const mehediCanUseUngroupedFallback =
@@ -1846,56 +1989,72 @@
     return shihabUniqueQualities;
   }
 
-  function mehediIsVideoVisibleInViewport(shihabVid) {
-    if (!shihabVid || !shihabVid.isConnected) return false;
-    const mehediStyle = window.getComputedStyle(shihabVid);
-    if (mehediStyle.display === "none" || mehediStyle.visibility === "hidden" || parseFloat(mehediStyle.opacity || "1") < 0.05) {
-      return false;
-    }
+  // Single getBoundingClientRect() read FIRST before getComputedStyle() — avoids style recalculations on off-screen/tiny videos!
+  function mehediGetVisibleVideoRect(shihabVid) {
+    if (!shihabVid || !shihabVid.isConnected) return null;
     const shihabRect = shihabVid.getBoundingClientRect();
     if (shihabRect.width < 120 || shihabRect.height < 70) {
-      return false;
+      return null;
     }
     if (shihabRect.bottom < 30 || shihabRect.top > window.innerHeight - 30 ||
         shihabRect.right < 30 || shihabRect.left > window.innerWidth - 30) {
-      return false;
+      return null;
     }
-    return true;
+    const mehediStyle = window.getComputedStyle(shihabVid);
+    if (mehediStyle.display === "none" || mehediStyle.visibility === "hidden" || parseFloat(mehediStyle.opacity || "1") < 0.05) {
+      return null;
+    }
+    return shihabRect;
   }
 
-  function mehediFindPrimaryVisibleVideo() {
-    if (shihabDropdownOpen && mehediLockedDropdownVideoEl && mehediIsVideoVisibleInViewport(mehediLockedDropdownVideoEl)) {
-      return mehediLockedDropdownVideoEl;
+  function mehediIsVideoVisibleInViewport(shihabVid) {
+    return Boolean(mehediGetVisibleVideoRect(shihabVid));
+  }
+
+  function mehediFindPrimaryVisibleVideoWithRect() {
+    const shihabLockedVid = shihabReadWeakRef(mehediLockedDropdownVideoRef);
+    if (shihabDropdownOpen && shihabLockedVid) {
+      const shihabLockedRect = mehediGetVisibleVideoRect(shihabLockedVid);
+      if (shihabLockedRect) return { video: shihabLockedVid, rect: shihabLockedRect };
     }
 
+    const shihabHoveredVid = shihabReadWeakRef(mehediHoveredVideoRef);
+    const shihabLastSelVid = shihabReadWeakRef(mehediLastSelectedVideoRef);
+
     if (mehediPointerInsideBar) {
-      const shihabPinnedBarVid = mehediHoveredVideoEl || mehediLastSelectedVideoEl;
-      if (shihabPinnedBarVid && mehediIsVideoVisibleInViewport(shihabPinnedBarVid)) {
-        return shihabPinnedBarVid;
+      const shihabPinnedBarVid = shihabHoveredVid || shihabLastSelVid;
+      if (shihabPinnedBarVid) {
+        const shihabPinnedRect = mehediGetVisibleVideoRect(shihabPinnedBarVid);
+        if (shihabPinnedRect) return { video: shihabPinnedBarVid, rect: shihabPinnedRect };
       }
     }
 
-    if (mehediHoveredVideoEl && Date.now() < shihabHoveredUntilMs && mehediIsVideoVisibleInViewport(mehediHoveredVideoEl)) {
-      mehediLastSelectedVideoEl = mehediHoveredVideoEl;
-      return mehediHoveredVideoEl;
+    if (shihabHoveredVid && Date.now() < shihabHoveredUntilMs) {
+      const shihabHovRect = mehediGetVisibleVideoRect(shihabHoveredVid);
+      if (shihabHovRect) {
+        mehediLastSelectedVideoRef = shihabMakeWeakRef(shihabHoveredVid);
+        return { video: shihabHoveredVid, rect: shihabHovRect };
+      }
     }
 
     const shihabVideos = shihabCollectAllVideosDeep(document, []);
-    if (mehediLastSelectedVideoEl && mehediLastSelectedVideoEl.isConnected && !shihabVideos.includes(mehediLastSelectedVideoEl)) {
-      shihabVideos.push(mehediLastSelectedVideoEl);
+    if (shihabLastSelVid && shihabLastSelVid.isConnected && !shihabVideos.includes(shihabLastSelVid)) {
+      shihabVideos.push(shihabLastSelVid);
     }
     let mehediPlayingCandidate = null;
+    let mehediPlayingRect = null;
     let shihabPlayingArea = 0;
     let mehediLargestCandidate = null;
+    let mehediLargestRect = null;
     let shihabLargestArea = 0;
     let mehediSawHidden = false;
 
     for (const mehediVid of shihabVideos) {
-      if (!mehediIsVideoVisibleInViewport(mehediVid)) {
+      const shihabRect = mehediGetVisibleVideoRect(mehediVid);
+      if (!shihabRect) {
         if (mehediVid && mehediVid.isConnected) mehediSawHidden = true;
         continue;
       }
-      const shihabRect = mehediVid.getBoundingClientRect();
       const mehediVisibleTop = Math.max(0, shihabRect.top);
       const shihabVisibleBottom = Math.min(window.innerHeight, shihabRect.bottom);
       const mehediVisibleHeight = Math.max(0, shihabVisibleBottom - mehediVisibleTop);
@@ -1905,20 +2064,27 @@
         if (mehediArea > shihabPlayingArea) {
           shihabPlayingArea = mehediArea;
           mehediPlayingCandidate = mehediVid;
+          mehediPlayingRect = shihabRect;
         }
       }
       if (mehediArea > shihabLargestArea) {
         shihabLargestArea = mehediArea;
         mehediLargestCandidate = mehediVid;
+        mehediLargestRect = shihabRect;
       }
     }
     shihabHasHiddenVideoInDom = mehediSawHidden;
 
     const shihabChosen = mehediPlayingCandidate || mehediLargestCandidate;
+    const shihabChosenRect = mehediPlayingCandidate ? mehediPlayingRect : mehediLargestRect;
     if (shihabChosen) {
-      mehediLastSelectedVideoEl = shihabChosen;
+      mehediLastSelectedVideoRef = shihabMakeWeakRef(shihabChosen);
     }
-    return shihabChosen;
+    return { video: shihabChosen, rect: shihabChosenRect };
+  }
+
+  function mehediFindPrimaryVisibleVideo() {
+    return mehediFindPrimaryVisibleVideoWithRect().video;
   }
 
   let shihabBgSyncInFlight = null;
@@ -1942,7 +2108,7 @@
             mehediMyFrameId = mehediState.shihabSenderFrameId;
           }
           if (Array.isArray(mehediState.mehediStreams)) {
-            shihabTabStreamsCache = mehediState.mehediStreams;
+            shihabSetTabStreamsCache(mehediState.mehediStreams);
           }
           if (typeof mehediState.mehediShowVideoPanel === "boolean") {
             mehediShowFloatingBar = mehediState.mehediShowVideoPanel;
@@ -2017,7 +2183,7 @@
         mehediEnsureVideoUidAndInspect(mehediActiveVid, true);
       }
       try {
-        window.postMessage({ __shihabMehediContentPing: true, shihabIsInitialSync: false }, "*");
+        window.postMessage({ __shihabMehediContentPing: true, shihabIsInitialSync: false }, shihabSafeSameWindowOrigin());
       } catch (_) {}
 
       await chrome.runtime.sendMessage({
@@ -2030,9 +2196,9 @@
       await shihabRefreshBackgroundStreamsThrottled(true);
 
       if (shihabOpenDropdownAfter) {
-        shihabDropdownOpen = true;
+        shihabSetDropdownOpen(true);
       }
-      shihabRenderFloatingIdmVideoPanel();
+      shihabRenderFloatingIdmVideoPanel(false);
       if (shihabOpenDropdownAfter) {
         mehediShowPanelStatusToast("↻ Re-tracked active video!", false);
       }
@@ -2050,20 +2216,32 @@
       mehediDisposeCurrentInstance();
       return false;
     }
-    if (document.documentElement) {
-      const mehediCurrentOwner = document.documentElement.getAttribute(SHIHAB_DOM_OWNER_ATTR);
-      if (mehediCurrentOwner && mehediCurrentOwner !== shihabInstanceToken) {
-        mehediDisposeCurrentInstance();
-        return false;
-      }
-      if (!mehediCurrentOwner) {
-        document.documentElement.setAttribute(SHIHAB_DOM_OWNER_ATTR, shihabInstanceToken);
-      }
-    }
     return true;
   }
 
-  // Build Shadow DOM 100% via createElement / textContent (ZERO innerHTML!) so YouTube & Facebook TrustedTypes CSP never blocks it!
+  function shihabSetDropdownOpen(mehediNextOpen) {
+    const shihabNext = Boolean(mehediNextOpen);
+    shihabDropdownOpen = shihabNext;
+    if (shihabNext && !shihabDropdownListenersAttached && !mehediInstanceDisposed) {
+      shihabDropdownListenersAttached = true;
+      window.addEventListener("pointerdown", mehediCloseDropdownOnOutsideEvent, { capture: true, passive: true });
+      window.addEventListener("keydown", mehediCloseDropdownOnOutsideEvent, { capture: true, passive: true });
+      window.addEventListener("pointerup", shihabReleaseMenuPointerLock, { capture: true, passive: true });
+      window.addEventListener("pointercancel", shihabReleaseMenuPointerLock, { capture: true, passive: true });
+      window.addEventListener("mouseup", shihabReleaseMenuPointerLock, { capture: true, passive: true });
+      window.addEventListener("blur", shihabReleaseMenuPointerLock, { passive: true });
+    } else if (!shihabNext && shihabDropdownListenersAttached) {
+      shihabDropdownListenersAttached = false;
+      window.removeEventListener("pointerdown", mehediCloseDropdownOnOutsideEvent, true);
+      window.removeEventListener("keydown", mehediCloseDropdownOnOutsideEvent, true);
+      window.removeEventListener("pointerup", shihabReleaseMenuPointerLock, true);
+      window.removeEventListener("pointercancel", shihabReleaseMenuPointerLock, true);
+      window.removeEventListener("mouseup", shihabReleaseMenuPointerLock, true);
+      window.removeEventListener("blur", shihabReleaseMenuPointerLock);
+    }
+  }
+
+  // Build Closed Shadow DOM 100% via createElement / textContent (ZERO innerHTML!) so YouTube & Facebook TrustedTypes CSP never blocks it!
   function shihabEnsureShadowHostMounted() {
     if (!shihabVerifyActiveSingletonOwnership()) return null;
 
@@ -2077,9 +2255,9 @@
       mehediShadowHost.id = SHIHAB_HOST_ID;
       mehediShadowHost.setAttribute(SHIHAB_HOST_ATTR, shihabInstanceToken);
       mehediShadowHost.style.cssText =
-        "position:fixed !important;z-index:2147483647 !important;pointer-events:auto !important;margin:0 !important;padding:0 !important;border:0 !important;display:none;";
+        "position:fixed !important;top:0 !important;left:0 !important;width:0 !important;height:0 !important;overflow:visible !important;z-index:2147483647 !important;pointer-events:auto !important;margin:0 !important;padding:0 !important;border:0 !important;display:none;will-change:transform;";
 
-      const shihabShadow = mehediShadowHost.attachShadow({ mode: "open" });
+      const shihabShadow = mehediShadowHost.attachShadow({ mode: "closed" });
 
       const mehediStyleEl = document.createElement("style");
       mehediStyleEl.textContent = `
@@ -2089,16 +2267,25 @@
           to { transform: rotate(360deg); }
         }
         .shihab-wrap {
-          position: relative;
+          position: absolute;
+          top: 0;
+          right: 0;
+          left: auto;
+          width: max-content;
           display: inline-flex;
           flex-direction: column;
           align-items: flex-end;
           font-family: 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
         }
+        .shihab-wrap.shihab-anchor-left {
+          left: 0;
+          right: auto;
+          align-items: flex-start;
+        }
         .shihab-bar {
           display: inline-flex;
           align-items: center;
-          background: rgba(18, 20, 26, 0.86);
+          background: rgba(18, 20, 26, 0.94);
           border: 1px solid rgba(255, 255, 255, 0.14);
           border-radius: 999px;
           padding: 4px 8px 4px 11px;
@@ -2107,9 +2294,7 @@
           font-weight: 600;
           line-height: 1.2;
           box-shadow: 0 4px 16px rgba(0, 0, 0, 0.48);
-          backdrop-filter: blur(10px);
-          -webkit-backdrop-filter: blur(10px);
-          opacity: 0.84;
+          opacity: 0.90;
           transition: opacity 0.16s ease, background 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
           user-select: none;
         }
@@ -2401,6 +2586,7 @@
       shihabShadow.appendChild(shihabWrap);
 
       shihabRefs = {
+        shihabWrap,
         mehediBar,
         mehediCountPill,
         mehediRetrackBtn,
@@ -2411,6 +2597,8 @@
         shihabMenuRowsEl
       };
       shihabLastRenderedMenuSig = "";
+      shihabBarDimensionsMeasured = false;
+      shihabLastTransformCss = "";
 
       // Prevent host-page pointerdown/mousedown handlers (e.g. LinkedIn feed / Video.js controls) from stealing focus or interfering with clicks
       shihabWrap.addEventListener("pointerdown", (mehediEv) => {
@@ -2431,8 +2619,9 @@
       shihabMenuEl.addEventListener("pointerdown", shihabAcquireMenuPointerLock);
       shihabMenuEl.addEventListener("mousedown", shihabAcquireMenuPointerLock);
 
-      // Single delegated click handler on persistent rows container — rows are patched in-place so clicks ALWAYS fire on first click!
+      // Single delegated click handler on persistent rows container — guarded with ev.isTrusted === true!
       shihabMenuRowsEl.addEventListener("click", (mehediClickEv) => {
+        if (!mehediClickEv || mehediClickEv.isTrusted !== true) return;
         const shihabRowEl = mehediClickEv.target && typeof mehediClickEv.target.closest === "function"
           ? mehediClickEv.target.closest(".shihab-item")
           : null;
@@ -2449,52 +2638,59 @@
           ? shihabRenderedMenuRows[shihabIdx]
           : null;
         if (!mehediChosenEntry || !mehediChosenEntry.mehediStream) return;
-        const mehediTargetVidForDl = shihabRenderedMenuTargetVideo || mehediLockedDropdownVideoEl || mehediFindPrimaryVisibleVideo();
-        shihabDropdownOpen = false;
-        mehediLockedDropdownVideoEl = null;
+        const mehediTargetVidForDl =
+          shihabReadWeakRef(shihabRenderedMenuTargetVideoRef) ||
+          shihabReadWeakRef(mehediLockedDropdownVideoRef) ||
+          mehediFindPrimaryVisibleVideo();
+        shihabSetDropdownOpen(false);
+        mehediLockedDropdownVideoRef = null;
         mehediTriggerStreamDownload(mehediChosenEntry.mehediStream, mehediTargetVidForDl);
-        shihabRenderFloatingIdmVideoPanel();
+        shihabRenderFloatingIdmVideoPanel(false);
       });
 
       mehediShadowHost.addEventListener("mouseenter", () => {
         mehediPointerInsideBar = true;
-        if (mehediHoveredVideoEl || mehediLastSelectedVideoEl) {
+        if (shihabReadWeakRef(mehediHoveredVideoRef) || shihabReadWeakRef(mehediLastSelectedVideoRef)) {
           shihabHoveredUntilMs = Date.now() + 8000;
+          shihabArmHoverExpiryTimer(shihabHoveredUntilMs);
         }
       });
 
       mehediShadowHost.addEventListener("mouseleave", () => {
         mehediPointerInsideBar = false;
-        if (mehediHoveredVideoEl) {
+        if (shihabReadWeakRef(mehediHoveredVideoRef)) {
           shihabHoveredUntilMs = Date.now() + 2500;
+          shihabArmHoverExpiryTimer(shihabHoveredUntilMs);
         }
       });
 
       shihabPrimaryBtn.addEventListener("click", (mehediEv) => {
+        if (!mehediEv || mehediEv.isTrusted !== true) return;
         mehediEv.preventDefault();
         mehediEv.stopPropagation();
         if (shihabDropdownOpen) {
-          shihabDropdownOpen = false;
-          mehediLockedDropdownVideoEl = null;
-          shihabRenderFloatingIdmVideoPanel();
+          shihabSetDropdownOpen(false);
+          mehediLockedDropdownVideoRef = null;
+          shihabRenderFloatingIdmVideoPanel(false);
           return;
         }
         const shihabActiveVid = mehediFindPrimaryVisibleVideo();
-        mehediLockedDropdownVideoEl = shihabActiveVid;
+        mehediLockedDropdownVideoRef = shihabMakeWeakRef(shihabActiveVid);
         if (shihabActiveVid) {
           mehediEnsureVideoUidAndInspect(shihabActiveVid, true);
         }
         // Open immediately using cached/DOM streams so the button NEVER freezes even if mdm.exe is offline/busy.
-        shihabDropdownOpen = true;
-        shihabRenderFloatingIdmVideoPanel();
+        shihabSetDropdownOpen(true);
+        shihabRenderFloatingIdmVideoPanel(false);
         shihabRefreshBackgroundStreamsThrottled(true).then(() => {
           if (shihabDropdownOpen && !mehediInstanceDisposed) {
-            shihabScheduleFloatingPanelRender();
+            shihabScheduleFloatingPanelRender(false);
           }
         }).catch(() => {});
       });
 
       mehediRetrackBtn.addEventListener("click", async (shihabRetrackEv) => {
+        if (!shihabRetrackEv || shihabRetrackEv.isTrusted !== true) return;
         shihabRetrackEv.preventDefault();
         shihabRetrackEv.stopPropagation();
         shihabClearMenuPointerLockNow();
@@ -2502,12 +2698,13 @@
       });
 
       shihabCloseBtn.addEventListener("click", (mehediEv) => {
+        if (!mehediEv || mehediEv.isTrusted !== true) return;
         mehediEv.preventDefault();
         mehediEv.stopPropagation();
         shihabClearMenuPointerLockNow();
         shihabPanelDismissedUrl = location.href;
-        shihabDropdownOpen = false;
-        mehediLockedDropdownVideoEl = null;
+        shihabSetDropdownOpen(false);
+        mehediLockedDropdownVideoRef = null;
         mehediShadowHost.style.display = "none";
       });
     }
@@ -2645,41 +2842,51 @@
   let shihabRenderRafId = 0;
   let mehediRenderCooldownTimerId = null;
   let shihabLastRenderAtMs = 0;
+  let shihabPendingFullRender = false;
 
-  function shihabScheduleFloatingPanelRender() {
-    if (mehediInstanceDisposed || shihabRenderRafId || mehediRenderCooldownTimerId) return;
+  function shihabScheduleFloatingPanelRender(shihabPositionOnly) {
+    if (mehediInstanceDisposed) return;
+    if (!shihabPositionOnly) {
+      shihabPendingFullRender = true;
+    }
+    if (shihabRenderRafId || mehediRenderCooldownTimerId) return;
+    const mehediRunScheduled = () => {
+      shihabRenderRafId = 0;
+      shihabLastRenderAtMs = Date.now();
+      const shihabDoFull = shihabPendingFullRender;
+      shihabPendingFullRender = false;
+      shihabRenderFloatingIdmVideoPanel(!shihabDoFull);
+    };
     const mehediElapsed = Date.now() - shihabLastRenderAtMs;
     if (mehediElapsed < 65) {
       mehediRenderCooldownTimerId = setTimeout(() => {
         mehediRenderCooldownTimerId = null;
         if (!mehediInstanceDisposed && !shihabRenderRafId) {
-          shihabRenderRafId = requestAnimationFrame(() => {
-            shihabRenderRafId = 0;
-            shihabLastRenderAtMs = Date.now();
-            shihabRenderFloatingIdmVideoPanel();
-          });
+          shihabRenderRafId = requestAnimationFrame(mehediRunScheduled);
         }
       }, 65 - mehediElapsed);
       return;
     }
-    shihabRenderRafId = requestAnimationFrame(() => {
-      shihabRenderRafId = 0;
-      shihabLastRenderAtMs = Date.now();
-      shihabRenderFloatingIdmVideoPanel();
-    });
+    shihabRenderRafId = requestAnimationFrame(mehediRunScheduled);
   }
 
-  function shihabRenderFloatingIdmVideoPanel() {
+  function shihabSchedulePositionOnlyRender() {
+    shihabScheduleFloatingPanelRender(true);
+  }
+
+  function shihabRenderFloatingIdmVideoPanel(shihabPositionOnly) {
     shihabLastRenderAtMs = Date.now();
     if (!shihabVerifyActiveSingletonOwnership()) return;
 
     if (location.href !== mehediLastObservedPageHref) {
       mehediLastObservedPageHref = location.href;
-      shihabDropdownOpen = false;
-      mehediLockedDropdownVideoEl = null;
+      shihabSetDropdownOpen(false);
+      mehediLockedDropdownVideoRef = null;
       shihabClearMenuPointerLockNow();
       shihabPageHasDrmProtectedMedia = false;
       mehediDetectedDrmKeySystem = "";
+      shihabStreamCacheVersion++;
+      shihabPositionOnly = false;
       const shihabNavYtId = shihabExtractCurrentPageYouTubeVideoId();
       if (shihabNavYtId) {
         mehediRequestYouTubeResolutionForVideoId(shihabNavYtId, "", "", false);
@@ -2707,14 +2914,18 @@
       return;
     }
 
-    const shihabTargetVideo = mehediFindPrimaryVisibleVideo();
-    if (!shihabTargetVideo) {
+    const shihabFoundTarget = mehediFindPrimaryVisibleVideoWithRect();
+    const shihabTargetVideo = shihabFoundTarget.video;
+    const mehediRect = shihabFoundTarget.rect;
+    if (!shihabTargetVideo || !mehediRect) {
       if (mehediShadowHost) mehediShadowHost.style.display = "none";
+      if (window === window.top) {
+        shihabLastNotifiedTopActiveKey = "";
+      }
       return;
     }
 
-    const shihabTargetRectPre = shihabTargetVideo.getBoundingClientRect();
-    const mehediTargetAreaPre = Math.max(0, shihabTargetRectPre.width * shihabTargetRectPre.height);
+    const mehediTargetAreaPre = Math.max(0, mehediRect.width * mehediRect.height);
     if (window !== window.top) {
       const mehediSubPlaying = !shihabTargetVideo.paused && !shihabTargetVideo.ended;
       if (
@@ -2729,35 +2940,54 @@
       }
     }
 
-    // Coordinate with child iframes so at most ONE download icon is shown on the tab
-    if (window === window.top && Date.now() - mehediLastTopFrameNotifyMs > 800) {
-      mehediLastTopFrameNotifyMs = Date.now();
-      try {
-        for (let shihabFi = 0; shihabFi < window.frames.length; shihabFi++) {
-          try {
-            window.frames[shihabFi].postMessage({
-              __shihabMehediTopPanelActive: true,
-              shihabTopVideoArea: mehediTargetAreaPre
-            }, "*");
-          } catch (_) {}
-        }
-      } catch (_) {}
+    // On-change-only top-frame -> child-frame coordination (never broadcasts on a polling interval!)
+    if (window === window.top && window.frames && window.frames.length > 0) {
+      const shihabTopStateKey = `1:${Math.round(mehediTargetAreaPre / 4096)}:${window.frames.length}`;
+      if (shihabTopStateKey !== shihabLastNotifiedTopActiveKey) {
+        shihabLastNotifiedTopActiveKey = shihabTopStateKey;
+        try {
+          for (let shihabFi = 0; shihabFi < window.frames.length; shihabFi++) {
+            try {
+              window.frames[shihabFi].postMessage({
+                __shihabMehediTopPanelActive: true,
+                shihabTopVideoArea: mehediTargetAreaPre
+              }, "*");
+            } catch (_) {}
+          }
+        } catch (_) {}
+      }
     }
 
     const mehediHost = shihabEnsureShadowHostMounted();
     if (!mehediHost || !shihabRefs) return;
 
-    const shihabStreams = shihabCollectMediaFromDomAndSniffer(shihabTargetVideo);
-    mehediAppendGoogleDriveSharedVideoStreamIfApplicable(shihabStreams, shihabTargetVideo);
-    const mehediSnifferRows = shihabBuildStreamSnifferEntries(shihabStreams);
-    const shihabNextCountStr = String(mehediSnifferRows.length);
-    if (shihabRefs.mehediCountPill.textContent !== shihabNextCountStr) {
-      shihabRefs.mehediCountPill.textContent = shihabNextCountStr;
+    // Split Data/Stream Update vs Fast Position Update so scroll/resize NEVER re-collects streams or forces layout thrashing!
+    const shihabPrevDataVid = shihabReadWeakRef(shihabLastDataTargetVideoRef);
+    const shihabNeedsDataUpdate =
+      !shihabPositionOnly ||
+      shihabDropdownOpen ||
+      shihabTargetVideo !== shihabPrevDataVid ||
+      shihabStreamCacheVersion !== shihabLastDataStreamVersion;
+
+    if (shihabNeedsDataUpdate) {
+      const shihabStreams = shihabCollectMediaFromDomAndSniffer(shihabTargetVideo);
+      mehediAppendGoogleDriveSharedVideoStreamIfApplicable(shihabStreams, shihabTargetVideo);
+      shihabCachedTargetStreams = shihabStreams;
+      shihabCachedSnifferRows = shihabBuildStreamSnifferEntries(shihabStreams);
+      shihabLastDataTargetVideoRef = shihabMakeWeakRef(shihabTargetVideo);
+      shihabLastDataStreamVersion = shihabStreamCacheVersion;
+
+      const shihabNextCountStr = String(shihabCachedSnifferRows.length);
+      if (shihabRefs.mehediCountPill.textContent !== shihabNextCountStr) {
+        shihabRefs.mehediCountPill.textContent = shihabNextCountStr;
+      }
     }
+
+    const shihabStreams = shihabCachedTargetStreams;
+    const mehediSnifferRows = shihabCachedSnifferRows;
 
     shihabRefs.mehediBar.classList.toggle("mehedi-open", shihabDropdownOpen);
 
-    const mehediRect = shihabTargetVideo.getBoundingClientRect();
     const shihabViewportW = document.documentElement.clientWidth || window.innerWidth;
     const mehediViewportH = document.documentElement.clientHeight || window.innerHeight;
     const SHIHAB_OUTSIDE_GAP = 5;
@@ -2767,19 +2997,26 @@
       mehediHost.style.display = "block";
     }
 
-    const mehediBarBox = shihabRefs.mehediBar.getBoundingClientRect();
-    const mehediBarH = Math.max(26, Math.ceil(mehediBarBox.height) || 28);
-    if (!shihabRefs.mehediBar.classList.contains("shihab-compact") && mehediBarBox.width > 80) {
-      shihabLastMeasuredFullBarW = Math.ceil(mehediBarBox.width);
+    // Measure pill dimensions ONCE after initial mount instead of calling getBoundingClientRect() on every scroll frame!
+    if (!shihabBarDimensionsMeasured) {
+      const mehediBarBox = shihabRefs.mehediBar.getBoundingClientRect();
+      if (mehediBarBox.height > 10) {
+        shihabLastMeasuredBarH = Math.max(26, Math.ceil(mehediBarBox.height));
+      }
+      if (!shihabRefs.mehediBar.classList.contains("shihab-compact") && mehediBarBox.width > 80) {
+        shihabLastMeasuredFullBarW = Math.ceil(mehediBarBox.width);
+        shihabBarDimensionsMeasured = true;
+      }
     }
+    const mehediBarH = shihabLastMeasuredBarH;
     const shihabFullBarW = shihabLastMeasuredFullBarW;
 
     const mehediSpaceAbove = mehediRect.top;
     const shihabSpaceRight = shihabViewportW - mehediRect.right;
 
     let shihabTopPx = MEHEDI_VIEWPORT_PAD;
-    let mehediLeftCss = "auto";
-    let shihabRightCss = MEHEDI_VIEWPORT_PAD + "px";
+    let shihabTranslateX = shihabViewportW - MEHEDI_VIEWPORT_PAD;
+    let shihabAnchorLeft = false;
     let shihabUseCompact = Boolean(mehediPanelMiniMode);
 
     if (mehediSpaceAbove >= mehediBarH + SHIHAB_OUTSIDE_GAP + MEHEDI_VIEWPORT_PAD) {
@@ -2791,9 +3028,8 @@
         mehediDesiredRightX = Math.min(mehediDesiredRightX, shihabViewportW - 168);
       }
       const shihabMinRightX = Math.min(shihabViewportW - MEHEDI_VIEWPORT_PAD, (shihabUseCompact ? 56 : shihabFullBarW) + MEHEDI_VIEWPORT_PAD);
-      const mehediClampedRightX = Math.min(shihabViewportW - MEHEDI_VIEWPORT_PAD, Math.max(shihabMinRightX, mehediDesiredRightX));
-      shihabRightCss = Math.max(MEHEDI_VIEWPORT_PAD, shihabViewportW - mehediClampedRightX) + "px";
-      mehediLeftCss = "auto";
+      shihabTranslateX = Math.min(shihabViewportW - MEHEDI_VIEWPORT_PAD, Math.max(shihabMinRightX, mehediDesiredRightX));
+      shihabAnchorLeft = false;
     } else if (shihabSpaceRight >= (shihabUseCompact ? 58 : shihabFullBarW) + SHIHAB_OUTSIDE_GAP + MEHEDI_VIEWPORT_PAD) {
       // 2) Outside TO THE RIGHT of the video's top-right corner (e.g. Instagram Reels, Facebook Reels, YouTube Shorts, TikTok)
       shihabTopPx = Math.round(
@@ -2802,8 +3038,8 @@
           Math.max(MEHEDI_VIEWPORT_PAD, mehediRect.bottom - mehediBarH - MEHEDI_VIEWPORT_PAD)
         )
       );
-      mehediLeftCss = Math.round(mehediRect.right + SHIHAB_OUTSIDE_GAP) + "px";
-      shihabRightCss = "auto";
+      shihabTranslateX = Math.round(mehediRect.right + SHIHAB_OUTSIDE_GAP);
+      shihabAnchorLeft = true;
     } else if (shihabSpaceRight >= 58) {
       // 3) Narrow right margin: auto-compact pill sits 100% outside to the right of the video and expands leftward on hover
       shihabUseCompact = true;
@@ -2814,37 +3050,32 @@
         )
       );
       const mehediCompactW = 54;
-      const shihabDesiredRightX = Math.min(
+      shihabTranslateX = Math.min(
         shihabViewportW - MEHEDI_VIEWPORT_PAD,
         Math.round(mehediRect.right + SHIHAB_OUTSIDE_GAP + mehediCompactW)
       );
-      shihabRightCss = Math.max(MEHEDI_VIEWPORT_PAD, shihabViewportW - shihabDesiredRightX) + "px";
-      mehediLeftCss = "auto";
+      shihabAnchorLeft = false;
     } else {
       // 4) True 100vw x 100vh fullscreen or zero-margin edge-to-edge player: compact pill tucked at extreme top-right corner
       shihabUseCompact = true;
       shihabTopPx = mehediSpaceAbove >= 14
         ? 2
         : Math.max(MEHEDI_VIEWPORT_PAD, Math.round(mehediRect.top + MEHEDI_VIEWPORT_PAD));
-      shihabRightCss = MEHEDI_VIEWPORT_PAD + "px";
-      mehediLeftCss = "auto";
+      shihabTranslateX = shihabViewportW - MEHEDI_VIEWPORT_PAD;
+      shihabAnchorLeft = false;
     }
 
+    shihabRefs.shihabWrap.classList.toggle("shihab-anchor-left", shihabAnchorLeft);
     shihabRefs.mehediBar.classList.toggle("shihab-compact", shihabUseCompact);
-    if (mehediHost.style.top !== shihabTopPx + "px") {
-      mehediHost.style.top = shihabTopPx + "px";
-    }
-    if (mehediHost.style.left !== mehediLeftCss) {
-      mehediHost.style.left = mehediLeftCss;
-    }
-    if (mehediHost.style.right !== shihabRightCss) {
-      mehediHost.style.right = shihabRightCss;
+    const shihabNextTransform = `translate3d(${shihabTranslateX}px, ${shihabTopPx}px, 0)`;
+    if (shihabLastTransformCss !== shihabNextTransform) {
+      shihabLastTransformCss = shihabNextTransform;
+      mehediHost.style.transform = shihabNextTransform;
     }
 
     const shihabMenuEl = shihabRefs.shihabMenuEl;
     const mehediToastEl = shihabRefs.mehediToastEl;
-    const mehediPlacedLeft = mehediLeftCss !== "auto" ? parseInt(mehediLeftCss, 10) : -1;
-    const shihabAlignPopupLeft = mehediPlacedLeft >= 0 && (mehediPlacedLeft + 370 <= shihabViewportW - 8);
+    const shihabAlignPopupLeft = shihabAnchorLeft && (shihabTranslateX + 370 <= shihabViewportW - 8);
     const mehediWantLeft = shihabAlignPopupLeft ? "0px" : "auto";
     const shihabWantRight = shihabAlignPopupLeft ? "auto" : "0px";
     if (shihabMenuEl.style.left !== mehediWantLeft) shihabMenuEl.style.left = mehediWantLeft;
@@ -2898,7 +3129,7 @@
       mehediPointerDownInMenuAtMs = 0;
 
       shihabRenderedMenuRows = mehediSnifferRows;
-      shihabRenderedMenuTargetVideo = shihabTargetVideo;
+      shihabRenderedMenuTargetVideoRef = shihabMakeWeakRef(shihabTargetVideo);
 
       // Fast path: ZERO DOM mutations when menu contents are unchanged (eliminates hover blinking & scroll resets!)
       if (mehediNextMenuSig === shihabLastRenderedMenuSig) {
@@ -3283,11 +3514,11 @@
     updBtn.className = "btn";
     updBtn.textContent = "Update";
     updBtn.addEventListener("click", (ev) => {
+      if (!ev || ev.isTrusted !== true) return;
       ev.stopPropagation();
       try {
         chrome.runtime.sendMessage({
-          shihabCmd: "shihab_open_updater",
-          latestHtmlUrl: notice.latestHtmlUrl || ""
+          shihabCmd: "shihab_open_updater"
         }).catch(() => {});
         chrome.runtime.sendMessage({
           shihabCmd: "shihab_dismiss_update_notice",
@@ -3303,6 +3534,7 @@
     closeBtn.textContent = "×";
     closeBtn.title = "Dismiss update notice";
     closeBtn.addEventListener("click", (ev) => {
+      if (!ev || ev.isTrusted !== true) return;
       ev.stopPropagation();
       try {
         chrome.runtime.sendMessage({
@@ -3336,7 +3568,7 @@
       return false;
     }
     if (shihabMsg && shihabMsg.shihabCmd === "mehedi_streams_updated") {
-      shihabTabStreamsCache = Array.isArray(shihabMsg.mehediStreams) ? shihabMsg.mehediStreams : [];
+      shihabSetTabStreamsCache(Array.isArray(shihabMsg.mehediStreams) ? shihabMsg.mehediStreams : []);
       if (typeof shihabMsg.shihabShowPanel === "boolean") {
         mehediShowFloatingBar = shihabMsg.shihabShowPanel;
       }
@@ -3349,21 +3581,28 @@
       if (shihabMsg.shihabForceKey) {
         mehediConfiguredForceKey = String(shihabMsg.shihabForceKey);
       }
-      shihabScheduleFloatingPanelRender();
+      if (shihabTabStreamsCache.length > 0 || shihabHasAnyVideoInFrame()) {
+        shihabActivateVideoFeaturesOnce();
+        if (!shihabVideoModeListenersAttached) {
+          shihabSyncDiscoveredVideoObservers();
+        }
+      }
+      shihabScheduleFloatingPanelRender(false);
       shihabReply({ ok: true });
       return false;
     }
 
     if (shihabMsg && shihabMsg.shihabCmd === "mehedi_trigger_page_retrack") {
+      shihabActivateVideoFeaturesOnce();
       try {
-        window.postMessage({ __shihabMehediContentPing: true, shihabIsInitialSync: false }, "*");
+        window.postMessage({ __shihabMehediContentPing: true, shihabIsInitialSync: false }, shihabSafeSameWindowOrigin());
       } catch (_) {}
       const shihabRetrackYtId = shihabExtractCurrentPageYouTubeVideoId();
       if (shihabRetrackYtId) {
         mehediRequestYouTubeResolutionForVideoId(shihabRetrackYtId, "", "", true);
       }
       shihabPanelDismissedUrl = "";
-      shihabRenderFloatingIdmVideoPanel();
+      shihabRenderFloatingIdmVideoPanel(false);
       shihabReply({ ok: true });
       return false;
     }
@@ -3379,14 +3618,16 @@
       if (window !== window.top) {
         return false;
       }
+      const shihabLastSelNow = shihabReadWeakRef(mehediLastSelectedVideoRef);
       const mehediSelVid =
         mehediFindPrimaryVisibleVideo() ||
-        (mehediLastSelectedVideoEl && mehediLastSelectedVideoEl.isConnected ? mehediLastSelectedVideoEl : null);
+        (shihabLastSelNow && shihabLastSelNow.isConnected ? shihabLastSelNow : null);
       if (mehediSelVid) {
+        shihabActivateVideoFeaturesOnce();
         mehediEnsureVideoUidAndInspect(mehediSelVid, true);
       }
       if (Array.isArray(shihabMsg.shihabPreloadedStreams)) {
-        shihabTabStreamsCache = shihabMsg.shihabPreloadedStreams;
+        shihabSetTabStreamsCache(shihabMsg.shihabPreloadedStreams);
       }
       const shihabPrepPromise = Array.isArray(shihabMsg.shihabPreloadedStreams)
         ? Promise.resolve(shihabTabStreamsCache)
@@ -3476,9 +3717,176 @@
     }
   }
 
-    let mehediLastPointerDeepCheckMs = 0;
+  let shihabLiveVideosCollection = null;
+  let shihabLiveShredditCollection1 = null;
+  let shihabLiveShredditCollection2 = null;
+  const shihabIsRedditHost = (() => {
+    try { return (location.hostname || "").toLowerCase().includes("reddit.com"); } catch (_) { return false; }
+  })();
+
+  function shihabHasAnyVideoInFrame() {
+    try {
+      if (!shihabLiveVideosCollection && document && typeof document.getElementsByTagName === "function") {
+        shihabLiveVideosCollection = document.getElementsByTagName("video");
+      }
+      if (shihabLiveVideosCollection && shihabLiveVideosCollection.length > 0) return true;
+      if (shihabIsRedditHost && document && typeof document.getElementsByTagName === "function") {
+        if (!shihabLiveShredditCollection1) shihabLiveShredditCollection1 = document.getElementsByTagName("shreddit-player");
+        if (!shihabLiveShredditCollection2) shihabLiveShredditCollection2 = document.getElementsByTagName("shreddit-player-2");
+        if (shihabLiveShredditCollection1.length > 0 || shihabLiveShredditCollection2.length > 0) return true;
+      }
+      const shihabLastSel = shihabReadWeakRef(mehediLastSelectedVideoRef);
+      if (shihabLastSel && shihabLastSel.isConnected) return true;
+    } catch (_) {}
+    return false;
+  }
+
+  function shihabAttachVideoModeListeners() {
+    if (shihabVideoModeListenersAttached || mehediInstanceDisposed) return;
+    shihabVideoModeListenersAttached = true;
+    window.addEventListener("pointerover", mehediTrackPointerOverVideo, { capture: true, passive: true });
+    window.addEventListener("pointermove", mehediTrackPointerOverVideo, { capture: true, passive: true });
+    window.addEventListener("scroll", shihabSchedulePositionOnlyRender, { capture: true, passive: true });
+    window.addEventListener("resize", shihabSchedulePositionOnlyRender, { passive: true });
+    document.addEventListener("fullscreenchange", shihabSchedulePositionOnlyRender, { passive: true });
+  }
+
+  function shihabDetachVideoModeListeners() {
+    if (!shihabVideoModeListenersAttached) return;
+    shihabVideoModeListenersAttached = false;
+    window.removeEventListener("pointerover", mehediTrackPointerOverVideo, { capture: true });
+    window.removeEventListener("pointermove", mehediTrackPointerOverVideo, { capture: true });
+    window.removeEventListener("scroll", shihabSchedulePositionOnlyRender, { capture: true });
+    window.removeEventListener("resize", shihabSchedulePositionOnlyRender);
+    document.removeEventListener("fullscreenchange", shihabSchedulePositionOnlyRender);
+  }
+
+  function shihabEnsurePerVideoObserversCreated() {
+    if (!shihabVideoIntersectionObserver && typeof IntersectionObserver === "function") {
+      try {
+        shihabVideoIntersectionObserver = new IntersectionObserver(() => {
+          if (!mehediInstanceDisposed) shihabScheduleFloatingPanelRender(false);
+        }, { threshold: [0, 0.1, 0.5, 1] });
+      } catch (_) {}
+    }
+    if (!shihabVideoResizeObserver && typeof ResizeObserver === "function") {
+      try {
+        shihabVideoResizeObserver = new ResizeObserver(() => {
+          if (!mehediInstanceDisposed) shihabScheduleFloatingPanelRender(true);
+        });
+      } catch (_) {}
+    }
+    if (!shihabVideoAttrObserver && typeof MutationObserver === "function") {
+      try {
+        shihabVideoAttrObserver = new MutationObserver(() => {
+          if (!mehediInstanceDisposed) {
+            shihabStreamCacheVersion++;
+            shihabScheduleFloatingPanelRender(false);
+          }
+        });
+      } catch (_) {}
+    }
+  }
+
+  function shihabObserveVideoElementDirect(shihabVid) {
+    if (!shihabVid || shihabVid.tagName !== "VIDEO" || shihabObservedVideosSet.has(shihabVid)) return;
+    shihabObservedVideosSet.add(shihabVid);
+    shihabEnsurePerVideoObserversCreated();
+    try { if (shihabVideoIntersectionObserver) shihabVideoIntersectionObserver.observe(shihabVid); } catch (_) {}
+    try { if (shihabVideoResizeObserver) shihabVideoResizeObserver.observe(shihabVid); } catch (_) {}
+    try {
+      if (shihabVideoAttrObserver) {
+        shihabVideoAttrObserver.observe(shihabVid, { attributes: true, attributeFilter: ["src"] });
+        const shihabSources = shihabVid.querySelectorAll("source");
+        for (let i = 0; i < shihabSources.length; i++) {
+          shihabVideoAttrObserver.observe(shihabSources[i], { attributes: true, attributeFilter: ["src"] });
+        }
+      }
+    } catch (_) {}
+  }
+
+  function shihabSyncDiscoveredVideoObservers() {
+    const shihabAllVids = shihabCollectAllVideosDeep(document, []);
+    if (shihabAllVids.length > 0) {
+      shihabActivateVideoFeaturesOnce();
+      shihabAttachVideoModeListeners();
+      for (let i = 0; i < shihabAllVids.length; i++) {
+        shihabObserveVideoElementDirect(shihabAllVids[i]);
+      }
+      return true;
+    }
+    if (mehediShadowHost && mehediShadowHost.style.display !== "none" && !shihabDropdownOpen) {
+      mehediShadowHost.style.display = "none";
+    }
+    shihabDetachVideoModeListeners();
+    return false;
+  }
+
+  function shihabActivateVideoFeaturesOnce() {
+    if (shihabVideoFeaturesActivated || mehediInstanceDisposed) return;
+    if (!shihabVerifyActiveSingletonOwnership()) return;
+    shihabVideoFeaturesActivated = true;
+
+    try {
+      chrome.storage.local.get(["shihabHideVideoInFullscreen"], (res) => {
+        if (res && typeof res.shihabHideVideoInFullscreen === "boolean") {
+          shihabHideVideoInFullscreen = res.shihabHideVideoInFullscreen;
+        }
+      });
+      if (!mehediStorageChangeHandler && chrome.storage && chrome.storage.onChanged) {
+        mehediStorageChangeHandler = (changes, area) => {
+          if (area === "local" && changes && changes.shihabHideVideoInFullscreen) {
+            shihabHideVideoInFullscreen = Boolean(changes.shihabHideVideoInFullscreen.newValue);
+            shihabScheduleFloatingPanelRender(false);
+          }
+        };
+        chrome.storage.onChanged.addListener(mehediStorageChangeHandler);
+      }
+    } catch (_) {}
+
+    try {
+      window.postMessage({ __shihabMehediContentPing: true, shihabIsInitialSync: true }, shihabSafeSameWindowOrigin());
+    } catch (_) {}
+
+    const shihabInitialYtId = shihabExtractCurrentPageYouTubeVideoId();
+    if (shihabInitialYtId) {
+      mehediRequestYouTubeResolutionForVideoId(shihabInitialYtId, "", "", false);
+    }
+
+    shihabRefreshBackgroundStreamsThrottled(true).then(() => {
+      if (!mehediInstanceDisposed) {
+        shihabScheduleFloatingPanelRender(false);
+      }
+    });
+  }
+
+  function shihabOnSpaNavigationEvent() {
+    if (mehediInstanceDisposed) return;
+    if (location.href !== mehediLastObservedPageHref) {
+      mehediLastObservedPageHref = location.href;
+      shihabSetDropdownOpen(false);
+      mehediLockedDropdownVideoRef = null;
+      shihabClearMenuPointerLockNow();
+      shihabPageHasDrmProtectedMedia = false;
+      mehediDetectedDrmKeySystem = "";
+      shihabStreamCacheVersion++;
+      const shihabNavYtId = shihabExtractCurrentPageYouTubeVideoId();
+      if (shihabNavYtId) {
+        shihabActivateVideoFeaturesOnce();
+        mehediRequestYouTubeResolutionForVideoId(shihabNavYtId, "", "", false);
+      }
+    }
+    if (shihabHasAnyVideoInFrame() || shihabVideoFeaturesActivated) {
+      shihabSyncDiscoveredVideoObservers();
+      shihabScheduleFloatingPanelRender(false);
+    }
+  }
+
+  let mehediLastPointerDeepCheckMs = 0;
   function mehediTrackPointerOverVideo(shihabPointerEv) {
     if (mehediInstanceDisposed) return;
+    if (!shihabHasAnyVideoInFrame()) return;
+
     const mehediPath = typeof shihabPointerEv.composedPath === "function" ? shihabPointerEv.composedPath() : [shihabPointerEv.target];
     if (
       mehediShadowHost &&
@@ -3488,27 +3896,37 @@
     ) {
       mehediPointerInsideBar = true;
       shihabHoveredUntilMs = Date.now() + 8000;
+      shihabArmHoverExpiryTimer(shihabHoveredUntilMs);
       mehediNotifyTopIfSubframeHovered();
       return;
     }
+
+    const mehediNowMs = Date.now();
+    const shihabCurHovered = shihabReadWeakRef(mehediHoveredVideoRef);
     for (const shihabNode of mehediPath) {
       if (shihabNode && shihabNode.tagName === "VIDEO") {
-        const mehediChanged = mehediHoveredVideoEl !== shihabNode;
-        mehediHoveredVideoEl = shihabNode;
-        mehediLastSelectedVideoEl = shihabNode;
-        shihabHoveredUntilMs = Date.now() + 6000;
+        const mehediChanged = shihabCurHovered !== shihabNode;
+        if (!mehediChanged && (mehediNowMs - mehediLastPointerDeepCheckMs) < 120) {
+          return;
+        }
+        mehediLastPointerDeepCheckMs = mehediNowMs;
+        mehediHoveredVideoRef = shihabMakeWeakRef(shihabNode);
+        mehediLastSelectedVideoRef = shihabMakeWeakRef(shihabNode);
+        shihabHoveredUntilMs = mehediNowMs + 6000;
+        shihabArmHoverExpiryTimer(shihabHoveredUntilMs);
         mehediNotifyTopIfSubframeHovered();
         mehediEnsureVideoUidAndInspect(shihabNode, false);
-        if (mehediChanged && !mehediLockedDropdownVideoEl) {
-          shihabDropdownOpen = false;
+        if (mehediChanged && !shihabReadWeakRef(mehediLockedDropdownVideoRef)) {
+          shihabSetDropdownOpen(false);
         }
         shihabRefreshBackgroundStreamsThrottled(false);
-        shihabScheduleFloatingPanelRender();
+        shihabScheduleFloatingPanelRender(!mehediChanged);
         return;
       }
     }
-    const mehediNowMs = Date.now();
-    if (shihabPointerEv.type === "pointermove" && (mehediNowMs - mehediLastPointerDeepCheckMs) < 90) {
+
+    // Shared 120ms throttle for BOTH pointerover and pointermove bounding-box hit-testing
+    if ((mehediNowMs - mehediLastPointerDeepCheckMs) < 120) {
       return;
     }
     mehediLastPointerDeepCheckMs = mehediNowMs;
@@ -3517,21 +3935,22 @@
     if (typeof mehediX === "number" && typeof shihabY === "number") {
       const mehediVideos = shihabCollectAllVideosDeep(document, []);
       for (const shihabVid of mehediVideos) {
-        if (!mehediIsVideoVisibleInViewport(shihabVid)) continue;
-        const mehediRect = shihabVid.getBoundingClientRect();
+        const mehediRect = mehediGetVisibleVideoRect(shihabVid);
+        if (!mehediRect) continue;
         if (mehediX >= mehediRect.left && mehediX <= mehediRect.right &&
             shihabY >= mehediRect.top && shihabY <= mehediRect.bottom) {
-          const mehediSwitched = mehediHoveredVideoEl !== shihabVid;
-          mehediHoveredVideoEl = shihabVid;
-          mehediLastSelectedVideoEl = shihabVid;
+          const mehediSwitched = shihabCurHovered !== shihabVid;
+          mehediHoveredVideoRef = shihabMakeWeakRef(shihabVid);
+          mehediLastSelectedVideoRef = shihabMakeWeakRef(shihabVid);
           shihabHoveredUntilMs = mehediNowMs + 6000;
+          shihabArmHoverExpiryTimer(shihabHoveredUntilMs);
           mehediNotifyTopIfSubframeHovered();
           mehediEnsureVideoUidAndInspect(shihabVid, false);
-          if (mehediSwitched && !mehediLockedDropdownVideoEl) {
-            shihabDropdownOpen = false;
+          if (mehediSwitched && !shihabReadWeakRef(mehediLockedDropdownVideoRef)) {
+            shihabSetDropdownOpen(false);
           }
           shihabRefreshBackgroundStreamsThrottled(false);
-          shihabScheduleFloatingPanelRender();
+          shihabScheduleFloatingPanelRender(!mehediSwitched);
           return;
         }
       }
@@ -3542,12 +3961,15 @@
     if (mehediInstanceDisposed) return;
     const shihabTarget = (shihabEv && typeof shihabEv.composedPath === "function" ? shihabEv.composedPath()[0] : shihabEv.target) || (shihabEv && shihabEv.target);
     if (shihabTarget && shihabTarget.tagName === "VIDEO") {
+      shihabActivateVideoFeaturesOnce();
+      shihabAttachVideoModeListeners();
+      shihabObserveVideoElementDirect(shihabTarget);
       mehediEnsureVideoUidAndInspect(shihabTarget, false);
       if (shihabEv.type === "play" || shihabEv.type === "playing") {
-        mehediLastSelectedVideoEl = shihabTarget;
+        mehediLastSelectedVideoRef = shihabMakeWeakRef(shihabTarget);
       }
       shihabRefreshBackgroundStreamsThrottled(false);
-      shihabScheduleFloatingPanelRender();
+      shihabScheduleFloatingPanelRender(false);
     }
   }
 
@@ -3555,9 +3977,9 @@
     if (!shihabDropdownOpen || mehediInstanceDisposed) return;
     if (shihabEv.type === "keydown") {
       if (shihabEv.key === "Escape") {
-        shihabDropdownOpen = false;
-        mehediLockedDropdownVideoEl = null;
-        shihabRenderFloatingIdmVideoPanel();
+        shihabSetDropdownOpen(false);
+        mehediLockedDropdownVideoRef = null;
+        shihabRenderFloatingIdmVideoPanel(false);
       }
       return;
     }
@@ -3570,16 +3992,9 @@
     ) {
       return;
     }
-    shihabDropdownOpen = false;
-    mehediLockedDropdownVideoEl = null;
-    shihabRenderFloatingIdmVideoPanel();
-  }
-
-  function mehediOnSupersedeEvent(shihabEv) {
-    const mehediIncomingOwner = shihabEv && shihabEv.detail ? shihabEv.detail.shihabOwnerToken : "";
-    if (mehediIncomingOwner && mehediIncomingOwner !== shihabInstanceToken) {
-      mehediDisposeCurrentInstance();
-    }
+    shihabSetDropdownOpen(false);
+    mehediLockedDropdownVideoRef = null;
+    shihabRenderFloatingIdmVideoPanel(false);
   }
 
   function shihabClearMenuPointerLockNow() {
@@ -3603,7 +4018,7 @@
       if (shihabDeferredMenuRender) {
         shihabDeferredMenuRender = false;
         if (!mehediInstanceDisposed && shihabDropdownOpen) {
-          shihabScheduleFloatingPanelRender();
+          shihabScheduleFloatingPanelRender(false);
         }
       }
     }, 80);
@@ -3619,11 +4034,18 @@
     }
     mehediInstanceDisposed = true;
     mehediPointerInsideBar = false;
+    shihabSetDropdownOpen(false);
     shihabClearMenuPointerLockNow();
     shihabHasHiddenVideoInDom = false;
     shihabLastRenderedMenuSig = "";
     shihabRenderedMenuRows = [];
-    shihabRenderedMenuTargetVideo = null;
+    shihabRenderedMenuTargetVideoRef = null;
+    shihabLastDataTargetVideoRef = null;
+    mehediHoveredVideoRef = null;
+    mehediLastSelectedVideoRef = null;
+    mehediLockedDropdownVideoRef = null;
+    shihabCachedTargetStreams = [];
+    shihabCachedSnifferRows = [];
     if (shihabRenderRafId) {
       try { cancelAnimationFrame(shihabRenderRafId); } catch (_) {}
       shihabRenderRafId = 0;
@@ -3632,9 +4054,17 @@
       clearTimeout(mehediRenderCooldownTimerId);
       mehediRenderCooldownTimerId = null;
     }
-    if (mehediPeriodicTimerId) {
-      clearInterval(mehediPeriodicTimerId);
-      mehediPeriodicTimerId = null;
+    if (shihabHoverExpireTimerId) {
+      clearTimeout(shihabHoverExpireTimerId);
+      shihabHoverExpireTimerId = null;
+    }
+    if (shihabSubframeExpireTimerId) {
+      clearTimeout(shihabSubframeExpireTimerId);
+      shihabSubframeExpireTimerId = null;
+    }
+    if (shihabTopActiveExpireTimerId) {
+      clearTimeout(shihabTopActiveExpireTimerId);
+      shihabTopActiveExpireTimerId = null;
     }
     if (shihabToastClearTimer) {
       clearTimeout(shihabToastClearTimer);
@@ -3644,22 +4074,26 @@
       shihabDomObserver.disconnect();
       shihabDomObserver = null;
     }
-    document.removeEventListener(MEHEDI_SUPERSEDE_EVENT, mehediOnSupersedeEvent);
+    if (shihabVideoIntersectionObserver) {
+      shihabVideoIntersectionObserver.disconnect();
+      shihabVideoIntersectionObserver = null;
+    }
+    if (shihabVideoResizeObserver) {
+      shihabVideoResizeObserver.disconnect();
+      shihabVideoResizeObserver = null;
+    }
+    if (shihabVideoAttrObserver) {
+      shihabVideoAttrObserver.disconnect();
+      shihabVideoAttrObserver = null;
+    }
     window.removeEventListener("message", mehediOnPageHookWindowMessage, false);
+    window.removeEventListener("popstate", shihabOnSpaNavigationEvent);
+    window.removeEventListener("hashchange", shihabOnSpaNavigationEvent);
+    window.removeEventListener("yt-navigate-finish", shihabOnSpaNavigationEvent);
     for (const shihabGestureEvt of ["pointerdown", "mousedown", "click", "auxclick", "contextmenu", "keydown"]) {
       window.removeEventListener(shihabGestureEvt, mehediReportTrustedUserGesture, true);
     }
-    window.removeEventListener("pointerdown", mehediCloseDropdownOnOutsideEvent, true);
-    window.removeEventListener("keydown", mehediCloseDropdownOnOutsideEvent, true);
-    window.removeEventListener("pointerup", shihabReleaseMenuPointerLock, true);
-    window.removeEventListener("pointercancel", shihabReleaseMenuPointerLock, true);
-    window.removeEventListener("mouseup", shihabReleaseMenuPointerLock, true);
-    window.removeEventListener("blur", shihabReleaseMenuPointerLock);
-    window.removeEventListener("pointerover", mehediTrackPointerOverVideo, { capture: true });
-    window.removeEventListener("pointermove", mehediTrackPointerOverVideo, { capture: true });
-    window.removeEventListener("scroll", shihabScheduleFloatingPanelRender, { capture: true });
-    window.removeEventListener("resize", shihabScheduleFloatingPanelRender);
-    document.removeEventListener("fullscreenchange", shihabScheduleFloatingPanelRender);
+    shihabDetachVideoModeListeners();
     for (const mehediMediaEvt of ["play", "playing", "loadedmetadata", "loadeddata", "canplay"]) {
       document.removeEventListener(mehediMediaEvt, mehediMediaLifecycleListener, true);
     }
@@ -3673,6 +4107,17 @@
         chrome.storage.onChanged.removeListener(mehediStorageChangeHandler);
       }
     } catch (_) {}
+    shihabVidUidIdentityMap.clear();
+    shihabExactBlobToStreamUrlsMap.clear();
+    shihabBlobToStreamUrlsMap.clear();
+    mehediShortcodeMetaMap.clear();
+    shihabGroupKeyTitleMap.clear();
+    shihabRequestedYtVideoIdsMs.clear();
+    shihabStreamsByUrlMap.clear();
+    shihabStreamsByParentMasterMap.clear();
+    shihabStreamsByGroupKeyMap.clear();
+    shihabStreamsByAltIdMap.clear();
+    shihabMaxDetectedAtByGroupMap.clear();
     if (mehediShadowHost) {
       try { mehediShadowHost.remove(); } catch (_) {}
       mehediShadowHost = null;
@@ -3682,8 +4127,6 @@
   }
 
   let mehediStorageChangeHandler = null;
-
-  document.addEventListener(MEHEDI_SUPERSEDE_EVENT, mehediOnSupersedeEvent);
 
   // Register IPC, trusted user-gesture & MAIN-world postMessage listeners IMMEDIATELY at document_start so zero early clicks or manifests are missed!
   window.addEventListener("message", mehediOnPageHookWindowMessage, false);
@@ -3749,38 +4192,71 @@
   function mehediInitDomObservers() {
     if (!shihabVerifyActiveSingletonOwnership()) return;
 
-    try {
-      chrome.storage.local.get(["shihabHideVideoInFullscreen"], (res) => {
-        if (res && typeof res.shihabHideVideoInFullscreen === "boolean") {
-          shihabHideVideoInFullscreen = res.shihabHideVideoInFullscreen;
-        }
-      });
-      mehediStorageChangeHandler = (changes, area) => {
-        if (area === "local" && changes && changes.shihabHideVideoInFullscreen) {
-          shihabHideVideoInFullscreen = Boolean(changes.shihabHideVideoInFullscreen.newValue);
-          shihabScheduleFloatingPanelRender();
-        }
-      };
-      chrome.storage.onChanged.addListener(mehediStorageChangeHandler);
-    } catch (_) {}
+    shihabLiveVideosCollection = document.getElementsByTagName("video");
+    shihabLastKnownLightVideoCount = shihabLiveVideosCollection.length;
 
-    try {
-      window.postMessage({ __shihabMehediContentPing: true, shihabIsInitialSync: true }, "*");
-    } catch (_) {}
-
-    const shihabInitialYtId = shihabExtractCurrentPageYouTubeVideoId();
-    if (shihabInitialYtId) {
-      mehediRequestYouTubeResolutionForVideoId(shihabInitialYtId, "", "", false);
+    // Activate video features lazily ONLY if frame already has a video or is a YouTube video page;
+    // zero-video pages & ad iframes skip startup storage.local.get, shihab_query_tab_streams & scroll/pointer listeners!
+    const shihabHasInitialVideo = shihabSyncDiscoveredVideoObservers();
+    if (!shihabHasInitialVideo && shihabExtractCurrentPageYouTubeVideoId()) {
+      shihabActivateVideoFeaturesOnce();
+    } else if (shihabHasInitialVideo) {
+      shihabScheduleFloatingPanelRender(false);
     }
 
-    shihabRefreshBackgroundStreamsThrottled(true).then(() => {
-      shihabScheduleFloatingPanelRender();
-    });
-
+    // Lightweight childList-only MutationObserver (ZERO global style/class attribute observation, ZERO querySelector on non-video SPA text churn!)
     shihabDomObserver = new MutationObserver((mehediRecords) => {
       if (mehediInstanceDisposed || !Array.isArray(mehediRecords) || mehediRecords.length === 0) return;
-      let shihabHasRelevant = false;
-      for (const shihabRec of mehediRecords) {
+
+      // O(1) live HTMLCollection check catches ANY light-DOM <video> addition/removal even inside nested wrappers
+      const shihabCurLightCount = shihabLiveVideosCollection ? shihabLiveVideosCollection.length : 0;
+      if (shihabCurLightCount !== shihabLastKnownLightVideoCount) {
+        shihabLastKnownLightVideoCount = shihabCurLightCount;
+        shihabSyncDiscoveredVideoObservers();
+        shihabScheduleFloatingPanelRender(false);
+        return;
+      }
+
+      // Fast path for 0-video pages (ChatGPT/Gmail/Slack/docs): only check if an added node itself is a known shadow video host or has shadowRoot!
+      if (shihabCurLightCount === 0 && !shihabVideoModeListenersAttached) {
+        for (let i = 0; i < mehediRecords.length; i++) {
+          const shihabAdded = mehediRecords[i] && mehediRecords[i].addedNodes;
+          if (!shihabAdded || shihabAdded.length === 0) continue;
+          for (let j = 0; j < shihabAdded.length; j++) {
+            const shihabN = shihabAdded[j];
+            if (!shihabN || shihabN.nodeType !== 1) continue;
+            if (shihabN === mehediShadowHost || shihabN === mehediUpdateToastHost) continue;
+            const mehediTag = shihabN.tagName ? shihabN.tagName.toUpperCase() : "";
+            if (
+              mehediTag === "VIDEO" ||
+              SHIHAB_SHADOW_HOST_TAG_SET.has(mehediTag) ||
+              shihabN.shadowRoot
+            ) {
+              if (shihabSyncDiscoveredVideoObservers()) {
+                shihabScheduleFloatingPanelRender(false);
+              }
+              return;
+            }
+          }
+        }
+        if (shihabIsRedditHost && shihabHasAnyVideoInFrame()) {
+          if (shihabSyncDiscoveredVideoObservers()) {
+            shihabScheduleFloatingPanelRender(false);
+          }
+        }
+        return;
+      }
+
+      // Active-video page path: check if selected video was removed or media/shadow-host nodes were mutated
+      const shihabLastSel = shihabReadWeakRef(mehediLastSelectedVideoRef);
+      if (shihabLastSel && !shihabLastSel.isConnected) {
+        shihabSyncDiscoveredVideoObservers();
+        shihabScheduleFloatingPanelRender(false);
+        return;
+      }
+
+      for (let i = 0; i < mehediRecords.length; i++) {
+        const shihabRec = mehediRecords[i];
         const mehediT = shihabRec && shihabRec.target;
         if (!mehediT) continue;
         if (
@@ -3789,73 +4265,30 @@
         ) {
           continue;
         }
-        if (shihabRec.type === "attributes") {
-          // Ignore 60fps Video.js progress-bar / feed animation style & class churn — react only to video/source/iframe or modal/container ancestors wrapping the active/hidden video!
-          const mehediTag = mehediT.tagName ? mehediT.tagName.toUpperCase() : "";
-          if (mehediTag === "VIDEO" || mehediTag === "SOURCE" || mehediTag === "IFRAME") {
-            shihabHasRelevant = true;
-            break;
-          }
-          if (mehediT !== document.body && mehediT !== document.documentElement) {
-            if (mehediLastSelectedVideoEl && typeof mehediT.contains === "function" && mehediT.contains(mehediLastSelectedVideoEl)) {
-              shihabHasRelevant = true;
-              break;
-            }
-            if (shihabHasHiddenVideoInDom && typeof mehediT.querySelector === "function" && mehediT.querySelector("video")) {
-              shihabHasRelevant = true;
-              break;
+        const mehediListCheck = (shihabNodeList) => {
+          if (!shihabNodeList || shihabNodeList.length === 0) return false;
+          for (let k = 0; k < shihabNodeList.length; k++) {
+            const shihabN = shihabNodeList[k];
+            if (!shihabN || shihabN.nodeType !== 1) continue;
+            const mehediNt = shihabN.tagName ? shihabN.tagName.toUpperCase() : "";
+            if (mehediNt === "VIDEO" || mehediNt === "SOURCE" || SHIHAB_SHADOW_HOST_TAG_SET.has(mehediNt) || shihabN.shadowRoot) {
+              return true;
             }
           }
-          continue;
+          return false;
+        };
+        if (mehediListCheck(shihabRec.addedNodes) || mehediListCheck(shihabRec.removedNodes)) {
+          shihabSyncDiscoveredVideoObservers();
+          shihabScheduleFloatingPanelRender(false);
+          return;
         }
-        if (shihabRec.type === "childList") {
-          if (!mehediLastSelectedVideoEl || !mehediLastSelectedVideoEl.isConnected) {
-            shihabHasRelevant = true;
-            break;
-          }
-          const mehediContainsMediaNode = (shihabList) => {
-            if (!shihabList) return false;
-            for (const shihabN of shihabList) {
-              if (!shihabN || shihabN.nodeType !== 1) continue;
-              const mehediNt = shihabN.tagName ? shihabN.tagName.toUpperCase() : "";
-              if (mehediNt === "VIDEO" || mehediNt === "SOURCE" || mehediNt === "IFRAME") return true;
-              if (shihabN.shadowRoot) return true;
-              if (typeof shihabN.matches === "function" && shihabN.matches(SHIHAB_SHADOW_VIDEO_HOSTS_SELECTOR)) return true;
-              if (typeof shihabN.querySelector === "function" && shihabN.querySelector("video, iframe, " + SHIHAB_SHADOW_VIDEO_HOSTS_SELECTOR)) return true;
-            }
-            return false;
-          };
-          if (mehediContainsMediaNode(shihabRec.addedNodes) || mehediContainsMediaNode(shihabRec.removedNodes)) {
-            shihabHasRelevant = true;
-            break;
-          }
-        }
-      }
-      if (shihabHasRelevant) {
-        shihabScheduleFloatingPanelRender();
       }
     });
 
-    if (window === window.top) {
-      shihabUpdateToastTimerId = setTimeout(() => {
-        if (mehediInstanceDisposed) return;
-        try {
-          chrome.runtime.sendMessage({ shihabCmd: "shihab_get_update_notice" })
-            .then((res) => {
-              if (res && res.ok && res.notice) {
-                shihabShowPageUpdateToast(res.notice);
-              }
-            })
-            .catch(() => {});
-        } catch (_) {}
-      }, 2200);
-    }
     if (document.documentElement) {
       shihabDomObserver.observe(document.documentElement, {
         childList: true,
-        subtree: true,
-        attributes: true,
-        attributeFilter: ["src", "style", "class"]
+        subtree: true
       });
     }
 
@@ -3863,24 +4296,9 @@
       document.addEventListener(mehediMediaEvt, mehediMediaLifecycleListener, true);
     }
 
-    window.addEventListener("pointerdown", mehediCloseDropdownOnOutsideEvent, { capture: true, passive: true });
-    window.addEventListener("keydown", mehediCloseDropdownOnOutsideEvent, { capture: true, passive: true });
-    window.addEventListener("pointerup", shihabReleaseMenuPointerLock, { capture: true, passive: true });
-    window.addEventListener("pointercancel", shihabReleaseMenuPointerLock, { capture: true, passive: true });
-    window.addEventListener("mouseup", shihabReleaseMenuPointerLock, { capture: true, passive: true });
-    window.addEventListener("blur", shihabReleaseMenuPointerLock, { passive: true });
-    window.addEventListener("pointerover", mehediTrackPointerOverVideo, { capture: true, passive: true });
-    window.addEventListener("pointermove", mehediTrackPointerOverVideo, { capture: true, passive: true });
-    window.addEventListener("scroll", shihabScheduleFloatingPanelRender, { capture: true, passive: true });
-    window.addEventListener("resize", shihabScheduleFloatingPanelRender, { passive: true });
-    document.addEventListener("fullscreenchange", shihabScheduleFloatingPanelRender, { passive: true });
-
-    mehediPeriodicTimerId = setInterval(() => {
-      if (!shihabVerifyActiveSingletonOwnership()) return;
-      if (!document.hidden) {
-        shihabScheduleFloatingPanelRender();
-      }
-    }, 900);
+    window.addEventListener("popstate", shihabOnSpaNavigationEvent);
+    window.addEventListener("hashchange", shihabOnSpaNavigationEvent);
+    window.addEventListener("yt-navigate-finish", shihabOnSpaNavigationEvent);
   }
 
   window.__shihabMehediIdmCleanupPrev = mehediDisposeCurrentInstance;

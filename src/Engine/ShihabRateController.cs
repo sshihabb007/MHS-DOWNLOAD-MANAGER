@@ -57,10 +57,29 @@ namespace ShihabMehediIDM
             ref long shihabItemWindowBytes,
             CancellationToken mehediToken)
         {
+            ApplyMehediSpeedLimiter(
+                shihabItem,
+                mehediTransferredBytes,
+                shihabWatch,
+                ref mehediItemWindowStartMs,
+                ref shihabItemWindowBytes,
+                mehediToken,
+                null);
+        }
+
+        private void ApplyMehediSpeedLimiter(
+            ShihabDownloadItem shihabItem,
+            int mehediTransferredBytes,
+            Stopwatch shihabWatch,
+            ref long mehediItemWindowStartMs,
+            ref long shihabItemWindowBytes,
+            CancellationToken mehediToken,
+            object cachedSegmentLock)
+        {
             if (shihabItem.ShihabUseItemSpeedLimit && shihabItem.MehediItemSpeedLimitKb > 0)
             {
                 int activeConns = 0;
-                object segLock = GetItemSegmentLock(shihabItem);
+                object segLock = cachedSegmentLock ?? GetItemSegmentLock(shihabItem);
                 lock (segLock)
                 {
                     if (shihabItem.MehediSegments != null)
@@ -91,6 +110,11 @@ namespace ShihabMehediIDM
                 }
             }
 
+            ApplyGlobalSpeedLimiterOnly(mehediTransferredBytes, mehediToken);
+        }
+
+        private void ApplyGlobalSpeedLimiterOnly(int mehediTransferredBytes, CancellationToken mehediToken)
+        {
             if (_mehediConfig.MehediGlobalSpeedLimiterEnabled && _mehediConfig.ShihabGlobalSpeedLimitKb > 0)
             {
                 int mehediGlobalSleep = 0;

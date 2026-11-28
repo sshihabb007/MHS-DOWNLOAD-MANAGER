@@ -79,7 +79,7 @@ namespace ShihabMehediIDM
 
     internal static class MuxerBinaryIo
     {
-        public const int MuxerFileStreamBufferBytes = 262144;
+        public const int MuxerFileStreamBufferBytes = 65536;
         public const int MaxMetadataBufferBytes = 128 * 1024 * 1024;
         public const int MaxPendingMoofTotalBytes = 96 * 1024 * 1024;
         public const int MaxWebmInfoBytes = 1048576;

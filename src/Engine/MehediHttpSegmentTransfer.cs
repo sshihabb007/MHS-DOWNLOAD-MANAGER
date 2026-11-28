@@ -12,7 +12,7 @@ namespace ShihabMehediIDM
 {
     public partial class MehediDynamicSegmentEngine
     {
-        private const int SegmentStreamBufferBytes = 262144;
+        private const int SegmentStreamBufferBytes = 65536;
 
         private void EnsureSparseSharedPartFile(string sharedSparsePartPath, long totalBytes)
         {
@@ -20,7 +20,7 @@ namespace ShihabMehediIDM
             if (!string.IsNullOrEmpty(parentDir)) Directory.CreateDirectory(parentDir);
 
             bool newlyCreated = !File.Exists(sharedSparsePartPath);
-            using (FileStream fs = new FileStream(sharedSparsePartPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite, SegmentStreamBufferBytes))
+            using (FileStream fs = new FileStream(sharedSparsePartPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite, 4096))
             {
                 if (newlyCreated && _mehediConfig.ShihabEnableSparseFiles)
                 {
@@ -287,18 +287,18 @@ namespace ShihabMehediIDM
                     try
                     {
                         bool needCleanOverlapRestart = false;
-                        HttpWebRequest shihabReq;
-                        using (HttpWebResponse mehediResp = GetResponseWithSafeRedirects(
+                        using (CancelableHttpResponse mehediRespHandle = GetCancelableResponseWithSafeRedirects(
                             targetUrl,
                             "GET",
                             shihabItem,
                             shihabReqStart,
                             mehediReqEnd,
                             shihabSubStart > 0 ? ifRangeVal : null,
-                            mehediToken,
-                            out shihabReq))
-                        using (Stream shihabNetStream = mehediResp.GetResponseStream())
+                            mehediToken))
                         {
+                            HttpWebResponse mehediResp = mehediRespHandle.Response;
+                            using (Stream shihabNetStream = mehediResp.GetResponseStream())
+                            {
                             if (shihabSubStart > 0 && mehediResp.StatusCode != HttpStatusCode.PartialContent)
                             {
                                 int segCount;
@@ -384,7 +384,10 @@ namespace ShihabMehediIDM
 
                                 if (shihabPartFs == null)
                                 {
-                                    EnsureSparseSharedPartFile(sharedSparsePartPath, shihabItem.ShihabTotalBytes);
+                                    if (!File.Exists(sharedSparsePartPath))
+                                    {
+                                        EnsureSparseSharedPartFile(sharedSparsePartPath, shihabItem.ShihabTotalBytes);
+                                    }
                                     shihabPartFs = new FileStream(sharedSparsePartPath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.ReadWrite, SegmentStreamBufferBytes);
                                 }
                                 shihabPartFs.Seek(shihabSubStart, SeekOrigin.Begin);
@@ -469,7 +472,8 @@ namespace ShihabMehediIDM
                                             shihabItemThrottleWatch,
                                             ref mehediItemWindowStartMs,
                                             ref shihabItemWindowBytes,
-                                            mehediToken);
+                                            mehediToken,
+                                            shihabSegmentLock);
                                     }
 
                                     if (shihabReachedDynamicBoundary)
@@ -477,6 +481,7 @@ namespace ShihabMehediIDM
                                         break;
                                     }
                                 }
+                            }
                             }
                         }
 
@@ -643,9 +648,8 @@ namespace ShihabMehediIDM
                         string shihabChunkUrl = AppendShihabQueryRangeParam(mehediCleanUrl, mehediOffset, shihabSliceEnd);
 
                         long mehediGotInSlice = 0;
-                        HttpWebRequest shihabReq;
-                        using (HttpWebResponse mehediResp = GetResponseWithSafeRedirects(shihabChunkUrl, "GET", shihabItem, -1, -1, null, mehediToken, out shihabReq))
-                        using (Stream shihabNet = mehediResp.GetResponseStream())
+                        using (CancelableHttpResponse mehediRespHandle = GetCancelableResponseWithSafeRedirects(shihabChunkUrl, "GET", shihabItem, -1, -1, null, mehediToken))
+                        using (Stream shihabNet = mehediRespHandle.Response.GetResponseStream())
                         {
                             while (!mehediToken.IsCancellationRequested)
                             {
@@ -656,7 +660,7 @@ namespace ShihabMehediIDM
                                 mehediOffset += mehediRead;
                                 mehediGotInSlice += mehediRead;
 
-                                ApplyMehediSpeedLimiter(shihabItem, mehediRead, mehediThrottleWatch, ref shihabWinStart, ref mehediWinBytes, mehediToken);
+                                ApplyMehediSpeedLimiter(shihabItem, mehediRead, mehediThrottleWatch, ref shihabWinStart, ref mehediWinBytes, mehediToken, segLock);
 
                                 if (shihabIsPrimaryStream)
                                 {
@@ -943,20 +947,19 @@ namespace ShihabMehediIDM
                 }
 
                 bool shihabUseExplicitAuxRange = IsRealShihabGoogleVideoDomain(mehediAuxUrl) && shihabAuxKnownBytes > 0;
-                HttpWebRequest shihabReq;
-                using (HttpWebResponse mehediResp = GetResponseWithSafeRedirects(
+                object auxSegLock = GetItemSegmentLock(shihabItem);
+                using (CancelableHttpResponse mehediRespHandle = GetCancelableResponseWithSafeRedirects(
                     mehediAuxUrl,
                     "GET",
                     shihabItem,
                     shihabUseExplicitAuxRange ? 0L : -1L,
                     shihabUseExplicitAuxRange ? (shihabAuxKnownBytes - 1L) : -1L,
                     null,
-                    shihabToken,
-                    out shihabReq))
-                using (Stream shihabNet = mehediResp.GetResponseStream())
+                    shihabToken))
+                using (Stream shihabNet = mehediRespHandle.Response.GetResponseStream())
                 using (FileStream mehediFs = new FileStream(mehediAuxOutputPath, FileMode.Create, FileAccess.Write, FileShare.Read, SegmentStreamBufferBytes))
                 {
-                    long shihabTotal = mehediResp.ContentLength > 0 ? mehediResp.ContentLength : shihabAuxKnownBytes;
+                    long shihabTotal = mehediRespHandle.Response.ContentLength > 0 ? mehediRespHandle.Response.ContentLength : shihabAuxKnownBytes;
                     byte[] mehediBuf = new byte[65536];
                     long shihabGot = 0;
                     int mehediRead;
@@ -968,7 +971,7 @@ namespace ShihabMehediIDM
 
                     while (!shihabToken.IsCancellationRequested && (mehediRead = shihabNet.Read(mehediBuf, 0, mehediBuf.Length)) > 0)
                     {
-                        ApplyMehediSpeedLimiter(shihabItem, mehediRead, mehediRateWatch, ref shihabWinStart, ref mehediWinBytes, shihabToken);
+                        ApplyMehediSpeedLimiter(shihabItem, mehediRead, mehediRateWatch, ref shihabWinStart, ref mehediWinBytes, shihabToken, auxSegLock);
                         mehediFs.Write(mehediBuf, 0, mehediRead);
                         _mehediConfig.RecordQuotaBytes(mehediRead);
                         shihabGot += mehediRead;
@@ -1078,8 +1081,12 @@ namespace ShihabMehediIDM
                 NotifyShihabItemChanged(shihabItem);
             }
 
-            using (FileStream mehediInitFs = new FileStream(shihabDestPath, FileMode.Create, FileAccess.Write, FileShare.ReadWrite, SegmentStreamBufferBytes))
+            using (FileStream mehediInitFs = new FileStream(shihabDestPath, FileMode.Create, FileAccess.Write, FileShare.ReadWrite, 4096))
             {
+                if (_mehediConfig == null || _mehediConfig.ShihabEnableSparseFiles)
+                {
+                    ShihabOsAndDiskSafety.TryMarkFileSparse(mehediInitFs);
+                }
                 mehediInitFs.SetLength(mehediTotalBytes);
             }
 
@@ -1129,10 +1136,10 @@ namespace ShihabMehediIDM
                                         try
                                         {
                                             mehediWorkerFs.Seek(shihabSliceStart, SeekOrigin.Begin);
-                                            HttpWebRequest shihabReq;
-                                            using (HttpWebResponse mehediResp = GetResponseWithSafeRedirects(mehediTargetUrl, "GET", shihabItem, shihabSliceStart, mehediSliceEnd, null, shihabWorkerToken, out shihabReq))
-                                            using (Stream shihabNet = mehediResp.GetResponseStream())
+                                            using (CancelableHttpResponse mehediRespHandle = GetCancelableResponseWithSafeRedirects(mehediTargetUrl, "GET", shihabItem, shihabSliceStart, mehediSliceEnd, null, shihabWorkerToken))
+                                            using (Stream shihabNet = mehediRespHandle.Response.GetResponseStream())
                                             {
+                                                HttpWebResponse mehediResp = mehediRespHandle.Response;
                                                 if (shihabSliceStart > 0 && mehediResp.StatusCode != HttpStatusCode.PartialContent)
                                                 {
                                                     throw new IOException("Server did not honor HTTP byte-range request (HTTP " + (int)mehediResp.StatusCode + ").");
@@ -1152,7 +1159,7 @@ namespace ShihabMehediIDM
                                                         break;
                                                     }
 
-                                                    ApplyMehediSpeedLimiter(shihabItem, shihabWriteLen, mehediThrottleWatch, ref shihabWinStartMs, ref mehediWinBytes, shihabWorkerToken);
+                                                    ApplyMehediSpeedLimiter(shihabItem, shihabWriteLen, mehediThrottleWatch, ref shihabWinStartMs, ref mehediWinBytes, shihabWorkerToken, segLock);
                                                     mehediWorkerFs.Write(shihabWorkerBuf, 0, shihabWriteLen);
                                                     _mehediConfig.RecordQuotaBytes(shihabWriteLen);
                                                     shihabGotInAttempt += shihabWriteLen;
@@ -1388,20 +1395,18 @@ namespace ShihabMehediIDM
             long mehediThrottleWindowBytes = 0;
 
             bool mehediUseExplicitDirectRange = IsRealShihabGoogleVideoDomain(mehediDirectUrl) && mehediExpectedBytes > 0;
-            HttpWebRequest shihabReq;
-            using (HttpWebResponse mehediResp = GetResponseWithSafeRedirects(
+            using (CancelableHttpResponse mehediRespHandle = GetCancelableResponseWithSafeRedirects(
                 mehediDirectUrl,
                 "GET",
                 shihabItem,
                 mehediUseExplicitDirectRange ? 0L : -1L,
                 mehediUseExplicitDirectRange ? (mehediExpectedBytes - 1L) : -1L,
                 null,
-                mehediToken,
-                out shihabReq))
-            using (Stream shihabNet = mehediResp.GetResponseStream())
+                mehediToken))
+            using (Stream shihabNet = mehediRespHandle.Response.GetResponseStream())
             using (FileStream mehediFs = new FileStream(shihabDestPath, FileMode.Create, FileAccess.Write, FileShare.Read, SegmentStreamBufferBytes))
             {
-                long shihabTotal = mehediResp.ContentLength > 0 ? mehediResp.ContentLength : mehediExpectedBytes;
+                long shihabTotal = mehediRespHandle.Response.ContentLength > 0 ? mehediRespHandle.Response.ContentLength : mehediExpectedBytes;
                 if (shihabIsPrimaryStream && shihabTotal > 0)
                 {
                     shihabItem.ShihabTotalBytes = shihabTotal;
@@ -1412,7 +1417,7 @@ namespace ShihabMehediIDM
                 int mehediRead;
                 while (!mehediToken.IsCancellationRequested && (mehediRead = shihabNet.Read(mehediBuf, 0, mehediBuf.Length)) > 0)
                 {
-                    ApplyMehediSpeedLimiter(shihabItem, mehediRead, mehediRateWatch, ref shihabThrottleWindowMs, ref mehediThrottleWindowBytes, mehediToken);
+                    ApplyMehediSpeedLimiter(shihabItem, mehediRead, mehediRateWatch, ref shihabThrottleWindowMs, ref mehediThrottleWindowBytes, mehediToken, segLock);
                     mehediFs.Write(mehediBuf, 0, mehediRead);
                     _mehediConfig.RecordQuotaBytes(mehediRead);
                     shihabGot += mehediRead;

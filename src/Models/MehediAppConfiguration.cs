@@ -4,7 +4,10 @@ using System.Diagnostics;
 using System.IO;
 using System.Runtime.Serialization;
 using System.Security.Cryptography;
+using System.Text;
+using System.Threading;
 using Microsoft.Win32;
+using ShihabMehediShared;
 
 namespace ShihabMehediIDM
 {
@@ -148,9 +151,17 @@ namespace ShihabMehediIDM
         [DataMember] public List<ShihabDebridAccount> ShihabDebridAccounts { get; set; }
         [DataMember] public List<ShihabRssFeedConfig> ShihabRssFeeds { get; set; }
 
+        private const long UnixEpochUtcTicks = 621355968000000000L;
+        private object _quotaLock = new object();
+        private long _pendingQuotaBytes;
+        private long _lastQuotaFlushUtcTicks;
+
         [OnDeserializing]
         private void OnMehediConfigDeserializing(StreamingContext shihabCtx)
         {
+            _quotaLock = new object();
+            _pendingQuotaBytes = 0L;
+            _lastQuotaFlushUtcTicks = 0L;
             ShihabDarkMode = true;
             MehediShowCategoriesPanel = true;
             MehediBrowserIntegrationEnabled = true;
@@ -356,7 +367,7 @@ namespace ShihabMehediIDM
             mehediCfg.ShihabSetServerFileTimestamp = true;
             mehediCfg.ShihabSetServerCreationDate = false;
             mehediCfg.MehediLocalBridgePort = 45779;
-            mehediCfg.ShihabLocalBridgeToken = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
+            mehediCfg.ShihabLocalBridgeToken = GenerateCryptographicHexToken(32);
             mehediCfg.ShihabAutoCheckUpdates = true;
             mehediCfg.ShihabUpdateIncludePrereleases = false;
             mehediCfg.ShihabUpdateRepoSlug = "sshihabb007/MHS-DOWNLOAD-MANAGER";
@@ -502,6 +513,23 @@ namespace ShihabMehediIDM
             return raw;
         }
 
+        public static string GenerateCryptographicHexToken(int byteCount)
+        {
+            int len = byteCount > 0 ? byteCount : 32;
+            byte[] buf = new byte[len];
+            using (RNGCryptoServiceProvider rng = new RNGCryptoServiceProvider())
+            {
+                rng.GetBytes(buf);
+            }
+            StringBuilder sb = new StringBuilder(len * 2);
+            for (int i = 0; i < buf.Length; i++)
+            {
+                sb.Append(buf[i].ToString("x2"));
+            }
+            Array.Clear(buf, 0, buf.Length);
+            return sb.ToString();
+        }
+
         public static string GenerateRandomEightDigitCode()
         {
             byte[] b = new byte[4];
@@ -511,6 +539,11 @@ namespace ShihabMehediIDM
             }
             uint val = BitConverter.ToUInt32(b, 0) % 90000000u + 10000000u;
             return val.ToString();
+        }
+
+        internal MehediAppConfiguration CloneShallowForSerialization()
+        {
+            return (MehediAppConfiguration)MemberwiseClone();
         }
 
         public int GetMaxAllowedConnectionsCap()
@@ -542,66 +575,116 @@ namespace ShihabMehediIDM
             return Math.Max(1, effective);
         }
 
-        public void RecordQuotaBytes(long deltaBytes)
+        private object GetQuotaSyncRoot()
         {
-            if (deltaBytes <= 0) return;
+            object sync = Volatile.Read(ref _quotaLock);
+            if (sync == null)
+            {
+                object created = new object();
+                sync = Interlocked.CompareExchange(ref _quotaLock, created, null) ?? created;
+            }
+            return sync;
+        }
+
+        private void FlushPendingQuotaBytesLocked(long nowTicks)
+        {
+            long pending = Interlocked.Exchange(ref _pendingQuotaBytes, 0L);
+            if (pending <= 0L) return;
             if (ShihabQuotaHistory == null)
             {
                 ShihabQuotaHistory = new List<ShihabQuotaBucketEntry>();
             }
-            long currentHour = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalHours;
-            lock (ShihabQuotaHistory)
+            long currentHour = (nowTicks - UnixEpochUtcTicks) / TimeSpan.TicksPerHour;
+            ShihabQuotaBucketEntry found = null;
+            for (int i = ShihabQuotaHistory.Count - 1; i >= 0; i--)
             {
-                ShihabQuotaBucketEntry found = null;
-                for (int i = 0; i < ShihabQuotaHistory.Count; i++)
+                ShihabQuotaBucketEntry entry = ShihabQuotaHistory[i];
+                if (entry != null && entry.ShihabHourEpoch == currentHour)
                 {
-                    if (ShihabQuotaHistory[i].ShihabHourEpoch == currentHour)
-                    {
-                        found = ShihabQuotaHistory[i];
-                        break;
-                    }
+                    found = entry;
+                    break;
                 }
-                if (found == null)
-                {
-                    found = new ShihabQuotaBucketEntry { ShihabHourEpoch = currentHour, MehediBytesDownloaded = 0 };
-                    ShihabQuotaHistory.Add(found);
-                }
-                found.MehediBytesDownloaded += deltaBytes;
+            }
+            if (found == null)
+            {
+                found = new ShihabQuotaBucketEntry { ShihabHourEpoch = currentHour, MehediBytesDownloaded = 0L };
+                ShihabQuotaHistory.Add(found);
+            }
+            found.MehediBytesDownloaded += pending;
 
-                int keepHours = Math.Max(1, ShihabQuotaWindowHours) + 24;
-                ShihabQuotaHistory.RemoveAll(delegate(ShihabQuotaBucketEntry b)
+            int keepHours = Math.Max(1, ShihabQuotaWindowHours) + 24;
+            for (int i = ShihabQuotaHistory.Count - 1; i >= 0; i--)
+            {
+                ShihabQuotaBucketEntry b = ShihabQuotaHistory[i];
+                if (b == null || (currentHour - b.ShihabHourEpoch) > keepHours)
                 {
-                    return b == null || (currentHour - b.ShihabHourEpoch) > keepHours;
-                });
+                    ShihabQuotaHistory.RemoveAt(i);
+                }
+            }
+        }
+
+        public void RecordQuotaBytes(long deltaBytes)
+        {
+            if (!ShihabQuotaEnabled || deltaBytes <= 0L) return;
+            Interlocked.Add(ref _pendingQuotaBytes, deltaBytes);
+            long nowTicks = DateTime.UtcNow.Ticks;
+            long lastTicks = Interlocked.Read(ref _lastQuotaFlushUtcTicks);
+            long diff = nowTicks - lastTicks;
+            if (diff >= 0L && diff < TimeSpan.TicksPerSecond)
+            {
+                return;
+            }
+            if (Interlocked.CompareExchange(ref _lastQuotaFlushUtcTicks, nowTicks, lastTicks) == lastTicks)
+            {
+                object sync = GetQuotaSyncRoot();
+                lock (sync)
+                {
+                    FlushPendingQuotaBytesLocked(nowTicks);
+                }
             }
         }
 
         public long GetCurrentQuotaWindowBytes()
         {
-            if (ShihabQuotaHistory == null) return 0L;
-            long currentHour = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalHours;
+            long currentHour = (DateTime.UtcNow.Ticks - UnixEpochUtcTicks) / TimeSpan.TicksPerHour;
             int windowHours = Math.Max(1, ShihabQuotaWindowHours);
             long sum = 0L;
-            lock (ShihabQuotaHistory)
+            object sync = GetQuotaSyncRoot();
+            lock (sync)
             {
-                for (int i = 0; i < ShihabQuotaHistory.Count; i++)
+                if (ShihabQuotaHistory != null)
                 {
-                    ShihabQuotaBucketEntry entry = ShihabQuotaHistory[i];
-                    if (entry != null && (currentHour - entry.ShihabHourEpoch) < windowHours)
+                    for (int i = 0; i < ShihabQuotaHistory.Count; i++)
                     {
-                        sum += entry.MehediBytesDownloaded;
+                        ShihabQuotaBucketEntry entry = ShihabQuotaHistory[i];
+                        if (entry != null && (currentHour - entry.ShihabHourEpoch) < windowHours)
+                        {
+                            sum += entry.MehediBytesDownloaded;
+                        }
                     }
+                }
+                long pending = Interlocked.Read(ref _pendingQuotaBytes);
+                if (pending > 0L)
+                {
+                    sum += pending;
                 }
             }
             return sum;
         }
 
+        public long GetQuotaUsedBytes()
+        {
+            return GetCurrentQuotaWindowBytes();
+        }
+
         internal List<ShihabQuotaBucketEntry> CloneQuotaHistorySnapshot()
         {
             List<ShihabQuotaBucketEntry> copy = new List<ShihabQuotaBucketEntry>();
-            if (ShihabQuotaHistory == null) return copy;
-            lock (ShihabQuotaHistory)
+            object sync = GetQuotaSyncRoot();
+            lock (sync)
             {
+                FlushPendingQuotaBytesLocked(DateTime.UtcNow.Ticks);
+                if (ShihabQuotaHistory == null) return copy;
                 for (int i = 0; i < ShihabQuotaHistory.Count; i++)
                 {
                     ShihabQuotaBucketEntry src = ShihabQuotaHistory[i];
@@ -667,7 +750,8 @@ namespace ShihabMehediIDM
                     try { shihabKey.DeleteValue(legacyValueName, false); } catch { }
                     if (mehediEnable)
                     {
-                        string mehediExe = Process.GetCurrentProcess().MainModule.FileName;
+                        string mehediExe = ShihabProcessAndPathSafety.CurrentExePath;
+                        if (string.IsNullOrWhiteSpace(mehediExe)) return;
                         string shihabDesired = "\"" + mehediExe + "\" --shihab-minimized";
                         string mehediExisting = shihabKey.GetValue(mehediValueName) as string;
                         if (!string.Equals(mehediExisting, shihabDesired, StringComparison.Ordinal))

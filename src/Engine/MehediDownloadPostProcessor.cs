@@ -15,7 +15,7 @@ namespace ShihabMehediIDM
         private static readonly TimeSpan PostProcessRegexTimeout = TimeSpan.FromMilliseconds(250);
         private static readonly Regex QualInFileNameRegex = new Regex(
             @"\[(\d{3,4}p(?:\d{2})?)\]",
-            RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant,
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
             PostProcessRegexTimeout);
 
         private void ExecuteMehediYtDlpJob(
@@ -419,10 +419,14 @@ namespace ShihabMehediIDM
                 try
                 {
                     string shihabScannerExe = _mehediConfig.MehediVirusScannerExe.Trim().Trim('"');
-                    if (Path.IsPathRooted(shihabScannerExe))
+                    if (Path.IsPathRooted(shihabScannerExe) &&
+                        !ShihabProcessAndPathSafety.IsUncOrDevicePath(shihabScannerExe))
                     {
                         shihabScannerExe = Path.GetFullPath(shihabScannerExe);
-                        if (File.Exists(shihabScannerExe) && File.Exists(shihabFinalTargetPath))
+                        if (shihabScannerExe.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) &&
+                            !ShihabProcessAndPathSafety.HasAnyReparsePointInPath(shihabScannerExe) &&
+                            File.Exists(shihabScannerExe) &&
+                            File.Exists(shihabFinalTargetPath))
                         {
                             string quotedTarget = ShihabProcessAndPathSafety.QuoteWindowsArgument(shihabFinalTargetPath);
                             string mehediArgTemplate = string.IsNullOrWhiteSpace(_mehediConfig.ShihabVirusScannerArgs)
@@ -460,9 +464,9 @@ namespace ShihabMehediIDM
         private static void ComputeShihabFileSha256AndSize(ShihabDownloadItem mehediItem, string shihabFilePath)
         {
             long mehediLen = 0;
-            byte[] shihabBuf = new byte[262144];
+            byte[] shihabBuf = new byte[65536];
             using (SHA256 mehediSha = SHA256.Create())
-            using (FileStream shihabFs = new FileStream(shihabFilePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+            using (FileStream shihabFs = new FileStream(shihabFilePath, FileMode.Open, FileAccess.Read, FileShare.Read, 65536))
             {
                 int mehediRead;
                 while ((mehediRead = shihabFs.Read(shihabBuf, 0, shihabBuf.Length)) > 0)

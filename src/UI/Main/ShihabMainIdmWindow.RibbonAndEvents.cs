@@ -140,6 +140,7 @@ namespace ShihabMehediIDM
 
             ShihabThemePalette.ApplyShihabDarkThemeToControlTree(this, shihabDark);
             _mehediSearchBox.BackColor = _shihabSearchBarPanel.MehediFillColor;
+            MarkShihabUiDirty();
             RepositionShihabHeaderControls();
             _mehediTopActionHeaderBar.Invalidate();
             UpdateShihabStatusBadges();
@@ -153,13 +154,9 @@ namespace ShihabMehediIDM
 
             _shihabSearchBarPanel.Location = new Point(Math.Max(280, shihabBarW - _shihabSearchBarPanel.Width - 12), (_mehediTopActionHeaderBar.Height - _shihabSearchBarPanel.Height) / 2);
 
-            int mehediTitleEnd = 195;
-            using (Graphics shihabMeasureG = _mehediTopActionHeaderBar.CreateGraphics())
-            {
-                Size mehediT = TextRenderer.MeasureText(shihabMeasureG, _shihabHeaderViewTitle, _headerTitleFont ?? Font, new Size(340, 28), TextFormatFlags.NoPadding);
-                Size shihabB = TextRenderer.MeasureText(shihabMeasureG, _mehediHeaderItemsBadgeText, _headerBadgeFont ?? Font, new Size(160, 22), TextFormatFlags.NoPadding);
-                mehediTitleEnd = 14 + mehediT.Width + 4 + 8 + shihabB.Width + 14 + 14;
-            }
+            Size mehediT = TextRenderer.MeasureText(_shihabHeaderViewTitle, _headerTitleFont ?? Font, new Size(340, 28), TextFormatFlags.NoPadding);
+            Size shihabB = TextRenderer.MeasureText(_mehediHeaderItemsBadgeText, _headerBadgeFont ?? Font, new Size(160, 22), TextFormatFlags.NoPadding);
+            int mehediTitleEnd = 14 + mehediT.Width + 4 + 8 + shihabB.Width + 14 + 14;
 
             bool hasUpdateBanner = _shihabLatestDetectedUpdate != null && _shihabLatestDetectedUpdate.UpdateAvailable;
             ShihabHeaderPillButton[] shihabBtns = new ShihabHeaderPillButton[]
@@ -349,10 +346,102 @@ namespace ShihabMehediIDM
             };
             _shihabPeriodicUpdateTimer.Start();
 
-            // Background RSS / Atom Feed Auto-Downloader Poller (every 60s)
-            _shihabRssPollTimer = new System.Windows.Forms.Timer { Interval = 60000 };
-            _shihabRssPollTimer.Tick += delegate { PollRssSubscriptionsInBackgroundAsync(); };
-            _shihabRssPollTimer.Start();
+            // Background RSS / Atom Feed Auto-Downloader Poller (only active when >= 1 enabled feed exists)
+            SyncShihabRssPollTimerState();
+        }
+
+        private bool HasActiveRssFeeds()
+        {
+            if (_mehediConfig == null || _mehediConfig.ShihabRssFeeds == null) return false;
+            for (int i = 0; i < _mehediConfig.ShihabRssFeeds.Count; i++)
+            {
+                ShihabRssFeedConfig sub = _mehediConfig.ShihabRssFeeds[i];
+                if (sub != null && !string.IsNullOrWhiteSpace(sub.ShihabFeedUrl) && sub.ShihabAutoDownload)
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private void SyncShihabRssPollTimerState()
+        {
+            if (IsDisposed) return;
+            if (HasActiveRssFeeds())
+            {
+                if (_shihabRssPollTimer == null)
+                {
+                    _shihabRssPollTimer = new System.Windows.Forms.Timer { Interval = 60000 };
+                    _shihabRssPollTimer.Tick += delegate { PollRssSubscriptionsInBackgroundAsync(); };
+                }
+                if (!_shihabRssPollTimer.Enabled)
+                {
+                    _shihabRssPollTimer.Start();
+                }
+            }
+            else if (_shihabRssPollTimer != null && _shihabRssPollTimer.Enabled)
+            {
+                _shihabRssPollTimer.Stop();
+            }
+        }
+
+        private bool HasAnyScheduledOrRunningQueues()
+        {
+            if (_mehediConfig == null || _mehediConfig.MehediQueues == null) return false;
+            for (int i = 0; i < _mehediConfig.MehediQueues.Count; i++)
+            {
+                MehediQueueConfig q = _mehediConfig.MehediQueues[i];
+                if (q == null) continue;
+                if (q.MehediIsRunningNow ||
+                    q.MehediEnableScheduledStart ||
+                    q.MehediEnableScheduledStop ||
+                    (q.MehediEnablePeriodicSync && q.ShihabPeriodicSyncMinutes > 0))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private void UpdateShihabUiTickInterval(bool isHiddenOrMin, bool hasActiveDownloads)
+        {
+            if (_mehediUiTickTimer == null) return;
+            int targetInterval = hasActiveDownloads ? 650 : (isHiddenOrMin ? 2500 : 2000);
+            if (_mehediUiTickTimer.Interval != targetInterval)
+            {
+                _mehediUiTickTimer.Interval = targetInterval;
+            }
+        }
+
+        protected override void OnVisibleChanged(EventArgs e)
+        {
+            base.OnVisibleChanged(e);
+            HandleShihabVisibilityOrWindowStateChange();
+        }
+
+        protected override void OnResize(EventArgs e)
+        {
+            base.OnResize(e);
+            HandleShihabVisibilityOrWindowStateChange();
+        }
+
+        private void HandleShihabVisibilityOrWindowStateChange()
+        {
+            if (IsDisposed || _mehediUiTickTimer == null) return;
+            bool hiddenOrMin = !Visible || WindowState == FormWindowState.Minimized;
+            bool hasActive = _shihabEngine != null && _shihabEngine.HasAnyActiveDownloads();
+            if (hiddenOrMin)
+            {
+                _wasHiddenOrMinimized = true;
+                UpdateShihabUiTickInterval(true, hasActive);
+            }
+            else if (_wasHiddenOrMinimized)
+            {
+                _wasHiddenOrMinimized = false;
+                MarkShihabUiDirty();
+                UpdateShihabUiTickInterval(false, hasActive);
+                RefreshMehediDownloadsGrid();
+            }
         }
 
         private void RestoreAndActivateMainWindow()
@@ -482,7 +571,11 @@ namespace ShihabMehediIDM
         private void PollRssSubscriptionsInBackgroundAsync()
         {
             if (IsDisposed) return;
-            if (_mehediConfig.ShihabRssFeeds == null || _mehediConfig.ShihabRssFeeds.Count == 0) return;
+            if (!HasActiveRssFeeds())
+            {
+                SyncShihabRssPollTimerState();
+                return;
+            }
             if (Interlocked.CompareExchange(ref _rssPollInFlight, 1, 0) != 0) return;
 
             Task.Run(delegate
@@ -553,6 +646,7 @@ namespace ShihabMehediIDM
         private void HandleQueueFinishedWithActions(MehediQueueConfig queue)
         {
             if (queue == null) return;
+            MarkShihabUiDirty();
             SafeShihabUiInvoke(delegate
             {
                 if (IsDisposed) return;
@@ -735,8 +829,37 @@ namespace ShihabMehediIDM
 
         private void OnMehediPeriodicTimerTick()
         {
-            _shihabEngine.TickMehediQueuesAndScheduler();
-            RefreshMehediDownloadsGrid();
+            DateTime nowUtc = DateTime.UtcNow;
+            if (HasAnyScheduledOrRunningQueues() && (nowUtc - _lastQueueScheduleTickUtc).TotalMilliseconds >= 950.0)
+            {
+                _lastQueueScheduleTickUtc = nowUtc;
+                _shihabEngine.TickMehediQueuesAndScheduler();
+            }
+
+            bool hiddenOrMin = !Visible || WindowState == FormWindowState.Minimized;
+            bool hasActive = _shihabEngine.HasAnyActiveDownloads();
+            UpdateShihabUiTickInterval(hiddenOrMin, hasActive);
+
+            if (hiddenOrMin)
+            {
+                _wasHiddenOrMinimized = true;
+                if (hasActive || _lastTrayShowedActive)
+                {
+                    UpdateTrayAndDropTargetWhenHidden(hasActive);
+                }
+            }
+            else
+            {
+                int currentVersion = Interlocked.CompareExchange(ref _uiDirtyVersion, 0, 0);
+                if (currentVersion != _lastRenderedUiVersion || hasActive)
+                {
+                    RefreshMehediDownloadsGrid();
+                }
+                else if ((nowUtc - _mehediLastDrivePollUtc).TotalSeconds >= 60.0)
+                {
+                    UpdateShihabStatusBadges();
+                }
+            }
 
             // Fallback polling ONLY if OS clipboard listener registration failed
             if (!_clipboardListenerRegistered && _mehediConfig.ShihabMonitorClipboard)
@@ -1063,9 +1186,18 @@ namespace ShihabMehediIDM
 
         private void HandleShihabItemCompleted(ShihabDownloadItem mehediItem)
         {
+            MarkShihabUiDirty();
             SafeShihabUiInvoke(delegate
             {
-                RefreshMehediDownloadsGrid();
+                _mehediLastDrivePollUtc = DateTime.MinValue;
+                if (Visible && WindowState != FormWindowState.Minimized)
+                {
+                    RefreshMehediDownloadsGrid();
+                }
+                else
+                {
+                    UpdateTrayAndDropTargetWhenHidden(_shihabEngine.HasAnyActiveDownloads());
+                }
                 PlayShihabConfiguredSound(_mehediConfig.MehediPlaySoundComplete, _mehediConfig.ShihabSoundCompleteWav, false);
                 if (mehediItem.ShihabOpenWhenComplete)
                 {
@@ -1203,21 +1335,26 @@ namespace ShihabMehediIDM
 
         private void HandleMehediItemFailed(ShihabDownloadItem shihabFailedItem)
         {
+            MarkShihabUiDirty();
             SafeShihabUiInvoke(delegate
             {
                 PlayShihabConfiguredSound(_mehediConfig.MehediPlaySoundError, _mehediConfig.ShihabSoundErrorWav, true);
             });
         }
 
-        private void SafeShihabUiInvoke(Action mehediAction)
+        private bool SafeShihabUiInvoke(Action mehediAction)
         {
-            if (IsDisposed || Disposing || !IsHandleCreated) return;
+            if (IsDisposed || Disposing || !IsHandleCreated) return false;
             try
             {
                 if (InvokeRequired) BeginInvoke(mehediAction);
                 else mehediAction();
+                return true;
             }
-            catch { }
+            catch
+            {
+                return false;
+            }
         }
 
         private void HandleMehediFormClosing(object shihabSender, FormClosingEventArgs mehediArgs)
@@ -1282,8 +1419,8 @@ namespace ShihabMehediIDM
             try { _shihabEngine.PersistShihabState(); } catch { }
             try { _shihabStore.SaveMehediConfig(_mehediConfig); } catch { }
             try { _mehediBridge.Dispose(); } catch { }
-            try { if (_shihabRemoteServer != null) _shihabRemoteServer.Dispose(); } catch { }
-            try { if (_shihabClickNLoadServer != null) _shihabClickNLoadServer.Dispose(); } catch { }
+            try { if (_shihabRemoteServer != null) { _shihabRemoteServer.Dispose(); _shihabRemoteServer = null; } } catch { }
+            try { if (_shihabClickNLoadServer != null) { _shihabClickNLoadServer.Dispose(); _shihabClickNLoadServer = null; } } catch { }
             try { ShihabLocalNetworkRelay.Stop(); } catch { }
             try
             {

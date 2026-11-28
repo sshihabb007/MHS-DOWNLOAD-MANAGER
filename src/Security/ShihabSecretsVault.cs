@@ -12,9 +12,54 @@ namespace ShihabMehediIDM
     public static class ShihabSecretsVault
     {
         private const string DpapiNativePrefix = "dpapi2:";
+        private const string AesV3Prefix = "aes3:";
         private const string AesGcmLikePrefix = "aes2:";
         private const string LegacyDpapiPrefix = "dpapi:";
         private static readonly byte[] VaultEntropy = Encoding.UTF8.GetBytes("MHS.DownloadManager.ShihabSecretsVault.v2");
+        private static readonly object FallbackKeyLock = new object();
+        private static readonly SecurityIdentifier CurrentUserSid = ResolveCurrentUserSid();
+        private static readonly SecurityIdentifier LocalSystemSid = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
+
+        private static SecurityIdentifier ResolveCurrentUserSid()
+        {
+            try
+            {
+                using (WindowsIdentity id = WindowsIdentity.GetCurrent())
+                {
+                    if (id != null && id.User != null)
+                    {
+                        return id.User;
+                    }
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        internal static string GenerateSecureRandomHexToken(int byteCount)
+        {
+            int count = byteCount > 0 ? byteCount : 32;
+            byte[] raw = new byte[count];
+            try
+            {
+                using (RNGCryptoServiceProvider rng = new RNGCryptoServiceProvider())
+                {
+                    rng.GetBytes(raw);
+                }
+                const string digits = "0123456789abcdef";
+                char[] hex = new char[count * 2];
+                for (int i = 0; i < count; i++)
+                {
+                    hex[i * 2] = digits[(raw[i] >> 4) & 0x0F];
+                    hex[i * 2 + 1] = digits[raw[i] & 0x0F];
+                }
+                return new string(hex);
+            }
+            finally
+            {
+                ZeroSensitiveBuffer(raw);
+            }
+        }
 
         internal static void ZeroSensitiveBuffer(byte[] buffer)
         {
@@ -31,11 +76,12 @@ namespace ShihabMehediIDM
                 return "";
             }
             if (plainText.StartsWith(DpapiNativePrefix, StringComparison.Ordinal) ||
-                plainText.StartsWith(AesGcmLikePrefix, StringComparison.Ordinal))
+                plainText.StartsWith(AesV3Prefix, StringComparison.Ordinal))
             {
                 return plainText;
             }
-            if (plainText.StartsWith(LegacyDpapiPrefix, StringComparison.Ordinal))
+            if (plainText.StartsWith(AesGcmLikePrefix, StringComparison.Ordinal) ||
+                plainText.StartsWith(LegacyDpapiPrefix, StringComparison.Ordinal))
             {
                 string migrated = UnprotectSecret(plainText);
                 if (!string.IsNullOrEmpty(migrated))
@@ -60,7 +106,7 @@ namespace ShihabMehediIDM
                 try
                 {
                     fallbackRaw = Encoding.UTF8.GetBytes(plainText);
-                    return ProtectWithRandomIvAndHmac(fallbackRaw);
+                    return ProtectWithV3RandomIvAndHmac(fallbackRaw);
                 }
                 catch
                 {
@@ -102,9 +148,13 @@ namespace ShihabMehediIDM
                     ZeroSensitiveBuffer(plain);
                 }
             }
+            if (storedValue.StartsWith(AesV3Prefix, StringComparison.Ordinal))
+            {
+                return UnprotectV3RandomIvAndHmac(storedValue.Substring(AesV3Prefix.Length));
+            }
             if (storedValue.StartsWith(AesGcmLikePrefix, StringComparison.Ordinal))
             {
-                return UnprotectRandomIvAndHmac(storedValue.Substring(AesGcmLikePrefix.Length));
+                return UnprotectLegacyV2RandomIvAndHmac(storedValue.Substring(AesGcmLikePrefix.Length));
             }
             if (!storedValue.StartsWith(LegacyDpapiPrefix, StringComparison.Ordinal))
             {
@@ -128,7 +178,88 @@ namespace ShihabMehediIDM
             }
         }
 
-        private static byte[] DeriveFallbackMasterKey()
+        private static string GetFallbackMasterKeyFilePath()
+        {
+            string baseDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "ShihabMehediIDM");
+            return Path.Combine(baseDir, "vault.key");
+        }
+
+        private static byte[] LoadOrCreateFallbackMasterKey(bool createIfMissing)
+        {
+            lock (FallbackKeyLock)
+            {
+                string keyPath = GetFallbackMasterKeyFilePath();
+                try
+                {
+                    if (!ShihabProcessAndPathSafety.HasAnyReparsePointInPath(keyPath) && File.Exists(keyPath))
+                    {
+                        byte[] existing = File.ReadAllBytes(keyPath);
+                        if (existing != null && existing.Length == 32)
+                        {
+                            return existing;
+                        }
+                        ZeroSensitiveBuffer(existing);
+                    }
+                }
+                catch { }
+
+                if (!createIfMissing)
+                {
+                    return null;
+                }
+
+                byte[] fresh = new byte[32];
+                using (RNGCryptoServiceProvider rng = new RNGCryptoServiceProvider())
+                {
+                    rng.GetBytes(fresh);
+                }
+                string tmpPath = keyPath + "." + Path.GetRandomFileName() + ".tmp";
+                bool persisted = false;
+                try
+                {
+                    string parent = Path.GetDirectoryName(keyPath);
+                    if (!string.IsNullOrEmpty(parent))
+                    {
+                        Directory.CreateDirectory(parent);
+                    }
+                    if (!ShihabProcessAndPathSafety.HasAnyReparsePointInPath(keyPath))
+                    {
+                        using (FileStream fs = new FileStream(tmpPath, FileMode.Create, FileAccess.Write, FileShare.None))
+                        {
+                            fs.Write(fresh, 0, fresh.Length);
+                            fs.Flush(true);
+                        }
+                        ApplyRestrictedUserFileAcl(tmpPath);
+                        ShihabProcessAndPathSafety.ReplaceFileAtomicallyWithRenameFallback(tmpPath, keyPath);
+                        persisted = File.Exists(keyPath);
+                    }
+                }
+                catch
+                {
+                    try { if (File.Exists(tmpPath)) File.Delete(tmpPath); } catch { }
+                }
+                if (!persisted)
+                {
+                    ZeroSensitiveBuffer(fresh);
+                    return null;
+                }
+                return fresh;
+            }
+        }
+
+        private static void DeriveV3DomainKeys(byte[] masterKey, out byte[] encKey, out byte[] macKey)
+        {
+            using (HMACSHA256 hmac = new HMACSHA256(masterKey))
+            {
+                encKey = hmac.ComputeHash(Encoding.UTF8.GetBytes("enc"));
+                macKey = hmac.ComputeHash(Encoding.UTF8.GetBytes("mac"));
+            }
+        }
+
+        // Legacy deterministic fallback key retained strictly for backward-compatible decryption of pre-existing aes2: blobs.
+        private static byte[] DeriveLegacyV2FallbackMasterKey()
         {
             string seed = Environment.UserName + "|" + Environment.MachineName + "|" +
                           Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData) + "|MHS_VAULT_V3";
@@ -138,12 +269,19 @@ namespace ShihabMehediIDM
             }
         }
 
-        private static string ProtectWithRandomIvAndHmac(byte[] plainBytes)
+        private static string ProtectWithV3RandomIvAndHmac(byte[] plainBytes)
         {
-            byte[] master = DeriveFallbackMasterKey();
+            byte[] master = LoadOrCreateFallbackMasterKey(true);
+            byte[] encKey = null;
+            byte[] macKey = null;
             byte[] iv = new byte[16];
             try
             {
+                if (master == null || master.Length != 32)
+                {
+                    return "";
+                }
+                DeriveV3DomainKeys(master, out encKey, out macKey);
                 using (RNGCryptoServiceProvider rng = new RNGCryptoServiceProvider())
                 {
                     rng.GetBytes(iv);
@@ -152,7 +290,7 @@ namespace ShihabMehediIDM
                 byte[] cipherBytes;
                 using (Aes aes = Aes.Create())
                 {
-                    aes.Key = master;
+                    aes.Key = encKey;
                     aes.IV = iv;
                     aes.Mode = CipherMode.CBC;
                     aes.Padding = PaddingMode.PKCS7;
@@ -167,7 +305,7 @@ namespace ShihabMehediIDM
                 Buffer.BlockCopy(cipherBytes, 0, payload, 16, cipherBytes.Length);
 
                 byte[] mac;
-                using (HMACSHA256 hmac = new HMACSHA256(master))
+                using (HMACSHA256 hmac = new HMACSHA256(macKey))
                 {
                     mac = hmac.ComputeHash(payload);
                 }
@@ -175,15 +313,88 @@ namespace ShihabMehediIDM
                 byte[] envelope = new byte[32 + payload.Length];
                 Buffer.BlockCopy(mac, 0, envelope, 0, 32);
                 Buffer.BlockCopy(payload, 0, envelope, 32, payload.Length);
-                return AesGcmLikePrefix + Convert.ToBase64String(envelope);
+                return AesV3Prefix + Convert.ToBase64String(envelope);
             }
             finally
             {
                 ZeroSensitiveBuffer(master);
+                ZeroSensitiveBuffer(encKey);
+                ZeroSensitiveBuffer(macKey);
+                ZeroSensitiveBuffer(iv);
             }
         }
 
-        private static string UnprotectRandomIvAndHmac(string b64)
+        private static string UnprotectV3RandomIvAndHmac(string b64)
+        {
+            byte[] master = null;
+            byte[] encKey = null;
+            byte[] macKey = null;
+            byte[] plain = null;
+            try
+            {
+                byte[] envelope = Convert.FromBase64String(b64);
+                if (envelope.Length < 48)
+                {
+                    return "";
+                }
+                master = LoadOrCreateFallbackMasterKey(false);
+                if (master == null || master.Length != 32)
+                {
+                    return "";
+                }
+                DeriveV3DomainKeys(master, out encKey, out macKey);
+
+                byte[] expectedMac = new byte[32];
+                Buffer.BlockCopy(envelope, 0, expectedMac, 0, 32);
+                byte[] payload = new byte[envelope.Length - 32];
+                Buffer.BlockCopy(envelope, 32, payload, 0, payload.Length);
+
+                byte[] actualMac;
+                using (HMACSHA256 hmac = new HMACSHA256(macKey))
+                {
+                    actualMac = hmac.ComputeHash(payload);
+                }
+                int diff = 0;
+                for (int i = 0; i < 32; i++)
+                {
+                    diff |= (expectedMac[i] ^ actualMac[i]);
+                }
+                if (diff != 0)
+                {
+                    return "";
+                }
+
+                byte[] iv = new byte[16];
+                Buffer.BlockCopy(payload, 0, iv, 0, 16);
+                byte[] cipher = new byte[payload.Length - 16];
+                Buffer.BlockCopy(payload, 16, cipher, 0, cipher.Length);
+                using (Aes aes = Aes.Create())
+                {
+                    aes.Key = encKey;
+                    aes.IV = iv;
+                    aes.Mode = CipherMode.CBC;
+                    aes.Padding = PaddingMode.PKCS7;
+                    using (ICryptoTransform dec = aes.CreateDecryptor())
+                    {
+                        plain = dec.TransformFinalBlock(cipher, 0, cipher.Length);
+                        return Encoding.UTF8.GetString(plain);
+                    }
+                }
+            }
+            catch
+            {
+                return "";
+            }
+            finally
+            {
+                ZeroSensitiveBuffer(master);
+                ZeroSensitiveBuffer(encKey);
+                ZeroSensitiveBuffer(macKey);
+                ZeroSensitiveBuffer(plain);
+            }
+        }
+
+        private static string UnprotectLegacyV2RandomIvAndHmac(string b64)
         {
             byte[] master = null;
             byte[] plain = null;
@@ -194,7 +405,7 @@ namespace ShihabMehediIDM
                 {
                     return "";
                 }
-                master = DeriveFallbackMasterKey();
+                master = DeriveLegacyV2FallbackMasterKey();
                 byte[] expectedMac = new byte[32];
                 Buffer.BlockCopy(envelope, 0, expectedMac, 0, 32);
                 byte[] payload = new byte[envelope.Length - 32];
@@ -350,6 +561,10 @@ namespace ShihabMehediIDM
             {
                 item.ShihabArchivePassword = ProtectSecret(item.ShihabArchivePassword);
             }
+            if (!string.IsNullOrEmpty(item.ShihabPostBody))
+            {
+                item.ShihabPostBody = ProtectSecret(item.ShihabPostBody);
+            }
         }
 
         internal static void UnsealDownloadItemSecrets(ShihabDownloadItem item)
@@ -367,6 +582,10 @@ namespace ShihabMehediIDM
             {
                 item.ShihabArchivePassword = UnprotectSecret(item.ShihabArchivePassword);
             }
+            if (!string.IsNullOrEmpty(item.ShihabPostBody))
+            {
+                item.ShihabPostBody = UnprotectSecret(item.ShihabPostBody);
+            }
         }
 
         internal static void ApplyRestrictedUserFileAcl(string filePath)
@@ -377,23 +596,56 @@ namespace ShihabMehediIDM
             }
             try
             {
-                WindowsIdentity current = WindowsIdentity.GetCurrent();
-                if (current == null || current.User == null)
+                SecurityIdentifier userSid = CurrentUserSid;
+                if (userSid == null)
                 {
                     return;
                 }
                 FileSecurity sec = new FileSecurity();
                 sec.SetAccessRuleProtection(true, false);
                 sec.AddAccessRule(new FileSystemAccessRule(
-                    current.User,
+                    userSid,
                     FileSystemRights.FullControl,
                     AccessControlType.Allow));
-                SecurityIdentifier systemSid = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
                 sec.AddAccessRule(new FileSystemAccessRule(
-                    systemSid,
+                    LocalSystemSid,
                     FileSystemRights.FullControl,
                     AccessControlType.Allow));
                 File.SetAccessControl(filePath, sec);
+            }
+            catch
+            {
+            }
+        }
+
+        internal static void ApplyRestrictedUserDirectoryAcl(string dirPath)
+        {
+            if (string.IsNullOrWhiteSpace(dirPath) || !Directory.Exists(dirPath))
+            {
+                return;
+            }
+            try
+            {
+                SecurityIdentifier userSid = CurrentUserSid;
+                if (userSid == null)
+                {
+                    return;
+                }
+                DirectorySecurity sec = new DirectorySecurity();
+                sec.SetAccessRuleProtection(true, false);
+                sec.AddAccessRule(new FileSystemAccessRule(
+                    userSid,
+                    FileSystemRights.FullControl,
+                    InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+                    PropagationFlags.None,
+                    AccessControlType.Allow));
+                sec.AddAccessRule(new FileSystemAccessRule(
+                    LocalSystemSid,
+                    FileSystemRights.FullControl,
+                    InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+                    PropagationFlags.None,
+                    AccessControlType.Allow));
+                Directory.SetAccessControl(dirPath, sec);
             }
             catch
             {
@@ -436,6 +688,8 @@ namespace ShihabMehediIDM
                 purged += cfg.ShihabSavedArchivePasswords.Count;
                 cfg.ShihabSavedArchivePasswords.Clear();
             }
+            cfg.ShihabLocalBridgeToken = GenerateSecureRandomHexToken(32);
+            purged++;
             store.SaveMehediConfig(cfg);
             try
             {
@@ -445,12 +699,14 @@ namespace ShihabMehediIDM
                 {
                     if (!string.IsNullOrEmpty(items[i].MehediAuthPassword) ||
                         !string.IsNullOrEmpty(items[i].ShihabCookies) ||
-                        !string.IsNullOrEmpty(items[i].ShihabArchivePassword))
+                        !string.IsNullOrEmpty(items[i].ShihabArchivePassword) ||
+                        !string.IsNullOrEmpty(items[i].ShihabPostBody))
                     {
                         items[i].ShihabAuthUser = "";
                         items[i].MehediAuthPassword = "";
                         items[i].ShihabCookies = "";
                         items[i].ShihabArchivePassword = "";
+                        items[i].ShihabPostBody = "";
                         purged++;
                         changed = true;
                     }

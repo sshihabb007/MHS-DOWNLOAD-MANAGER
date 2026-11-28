@@ -24,17 +24,26 @@ namespace ShihabMehediIDM
         private const string ChromeDesktopUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
         private static readonly TimeSpan RegexTimeout = TimeSpan.FromMilliseconds(250);
-        private static readonly Regex VisitorDataJsonRegex = new Regex(@"""VISITOR_DATA""\s*:\s*""([^""]+)""", RegexOptions.Compiled | RegexOptions.CultureInvariant, RegexTimeout);
-        private static readonly Regex VisitorDataTokenRegex = new Regex(@"(Cgt[A-Za-z0-9_\-%=]{16,})", RegexOptions.Compiled | RegexOptions.CultureInvariant, RegexTimeout);
-        private static readonly Regex WatchPathRegex = new Regex(@"^/(?:shorts|embed|live|v|reels)/([A-Za-z0-9_-]{11})(?:[/?#]|$)", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant, RegexTimeout);
-        private static readonly Regex DescVideoIdRegex = new Regex(@"(?:v=|yt:|youtu\.be/)([A-Za-z0-9_-]{11})", RegexOptions.Compiled | RegexOptions.CultureInvariant, RegexTimeout);
-        private static readonly Regex BracketSuffixRegex = new Regex(@"\s*\[[^\]]+\]\s*(?:_\d+)?$", RegexOptions.Compiled | RegexOptions.CultureInvariant, RegexTimeout);
-        private static readonly Regex TrailingIndexRegex = new Regex(@"_\d+$", RegexOptions.Compiled | RegexOptions.CultureInvariant, RegexTimeout);
-        private static readonly Regex SearchVideoRendererRegex = new Regex(@"""videoRenderer""\s*:\s*\{\s*""videoId""\s*:\s*""([A-Za-z0-9_-]{11})""", RegexOptions.Compiled | RegexOptions.CultureInvariant, RegexTimeout);
-        private static readonly Regex SearchFallbackVideoIdRegex = new Regex(@"""videoId""\s*:\s*""([A-Za-z0-9_-]{11})""", RegexOptions.Compiled | RegexOptions.CultureInvariant, RegexTimeout);
-        private static readonly Regex MimeCodecsRegex = new Regex(@"codecs=""([^""]+)""", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant, RegexTimeout);
-        private static readonly Regex QualityLabelPRegex = new Regex(@"^(\d{3,4}p)", RegexOptions.Compiled | RegexOptions.CultureInvariant, RegexTimeout);
-        private static readonly Regex ResolutionNumRegex = new Regex(@"(\d{3,4})", RegexOptions.Compiled | RegexOptions.CultureInvariant, RegexTimeout);
+        private static readonly Regex VisitorDataJsonRegex = new Regex(@"""VISITOR_DATA""\s*:\s*""([^""]+)""", RegexOptions.CultureInvariant, RegexTimeout);
+        private static readonly Regex VisitorDataTokenRegex = new Regex(@"(Cgt[A-Za-z0-9_\-%=]{16,})", RegexOptions.CultureInvariant, RegexTimeout);
+        private static readonly Regex WatchPathRegex = new Regex(@"^/(?:shorts|embed|live|v|reels)/([A-Za-z0-9_-]{11})(?:[/?#]|$)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, RegexTimeout);
+        private static readonly Regex DescVideoIdRegex = new Regex(@"(?:v=|yt:|youtu\.be/)([A-Za-z0-9_-]{11})", RegexOptions.CultureInvariant, RegexTimeout);
+        private static readonly Regex BracketSuffixRegex = new Regex(@"\s*\[[^\]]+\]\s*(?:_\d+)?$", RegexOptions.CultureInvariant, RegexTimeout);
+        private static readonly Regex TrailingIndexRegex = new Regex(@"_\d+$", RegexOptions.CultureInvariant, RegexTimeout);
+        private static readonly Regex SearchVideoRendererRegex = new Regex(@"""videoRenderer""\s*:\s*\{\s*""videoId""\s*:\s*""([A-Za-z0-9_-]{11})""", RegexOptions.CultureInvariant, RegexTimeout);
+        private static readonly Regex SearchFallbackVideoIdRegex = new Regex(@"""videoId""\s*:\s*""([A-Za-z0-9_-]{11})""", RegexOptions.CultureInvariant, RegexTimeout);
+        private static readonly Regex MimeCodecsRegex = new Regex(@"codecs=""([^""]+)""", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, RegexTimeout);
+        private static readonly Regex QualityLabelPRegex = new Regex(@"^(\d{3,4}p)", RegexOptions.CultureInvariant, RegexTimeout);
+        private static readonly Regex ResolutionNumRegex = new Regex(@"(\d{3,4})", RegexOptions.CultureInvariant, RegexTimeout);
+
+        private static readonly Lazy<DataContractJsonSerializer> YtPlayerRequestSerializer =
+            new Lazy<DataContractJsonSerializer>(
+                delegate { return new DataContractJsonSerializer(typeof(ShihabYtPlayerRequestDto)); },
+                System.Threading.LazyThreadSafetyMode.PublicationOnly);
+        private static readonly Lazy<DataContractJsonSerializer> YtPlayerResponseSerializer =
+            new Lazy<DataContractJsonSerializer>(
+                delegate { return new DataContractJsonSerializer(typeof(MehediYtPlayerResponseDto)); },
+                System.Threading.LazyThreadSafetyMode.PublicationOnly);
 
         private static readonly object _shihabCacheLock = new object();
         private static readonly Dictionary<string, ShihabCachedYtEntry> _mehediStreamCache = new Dictionary<string, ShihabCachedYtEntry>(StringComparer.Ordinal);
@@ -615,8 +624,7 @@ namespace ShihabMehediIDM
                 byte[] mehediBodyBytes;
                 using (MemoryStream shihabMs = new MemoryStream())
                 {
-                    DataContractJsonSerializer mehediReqSer = new DataContractJsonSerializer(typeof(ShihabYtPlayerRequestDto));
-                    mehediReqSer.WriteObject(shihabMs, shihabPayload);
+                    YtPlayerRequestSerializer.Value.WriteObject(shihabMs, shihabPayload);
                     mehediBodyBytes = shihabMs.ToArray();
                 }
 
@@ -648,8 +656,7 @@ namespace ShihabMehediIDM
                 using (HttpWebResponse shihabResp = (HttpWebResponse)shihabHttp.GetResponse())
                 using (Stream mehediRespStream = shihabResp.GetResponseStream())
                 {
-                    DataContractJsonSerializer shihabRespSer = new DataContractJsonSerializer(typeof(MehediYtPlayerResponseDto));
-                    mehediParsedResp = shihabRespSer.ReadObject(mehediRespStream) as MehediYtPlayerResponseDto;
+                    mehediParsedResp = YtPlayerResponseSerializer.Value.ReadObject(mehediRespStream) as MehediYtPlayerResponseDto;
                 }
 
                 if (mehediParsedResp == null)

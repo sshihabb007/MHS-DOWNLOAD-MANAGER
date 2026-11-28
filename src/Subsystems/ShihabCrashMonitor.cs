@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.IO.MemoryMappedFiles;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -13,25 +15,74 @@ namespace ShihabMehediIDM
 {
     public static class ShihabCrashMonitor
     {
+        private const int HeartbeatMmfSizeBytes = 4096;
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool SetProcessWorkingSetSize(IntPtr hProcess, IntPtr dwMinimumWorkingSetSize, IntPtr dwMaximumWorkingSetSize);
+
         private static readonly TimeSpan CrashRegexTimeout = TimeSpan.FromMilliseconds(250);
         private static readonly Regex BearerRedactRegex = new Regex(
             @"(Authorization\s*:\s*Bearer\s+)[^\r\n\s]+",
-            RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant,
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
             CrashRegexTimeout);
         private static readonly Regex BridgeTokenRedactRegex = new Regex(
             @"(X-MHS-Bridge-Token\s*:\s*)[^\r\n\s]+",
-            RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant,
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
             CrashRegexTimeout);
         private static readonly Regex UrlCredsRedactRegex = new Regex(
             @"(https?|ftps?)://([^:/@\s]+):([^@/\s]+)@",
-            RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant,
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
+            CrashRegexTimeout);
+        private static readonly Regex QueryTokenRedactRegex = new Regex(
+            @"([?&](?:token|api_key|apikey|auth|sig|password)=)[^&\s]+",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
             CrashRegexTimeout);
 
+        private static readonly object _heartbeatMmfLock = new object();
+        private static MemoryMappedFile _heartbeatMmf;
+        private static MemoryMappedViewAccessor _heartbeatAccessor;
         private static System.Windows.Forms.Timer _heartbeatTimer;
         private static string _heartbeatFilePath;
         private static string _crashDirectory;
         private static string _activeSessionMarkerPath;
         private static int _hooksRegistered;
+
+        private static string BuildHeartbeatMmfName(int pid)
+        {
+            return "Local\\ShihabMehediIDM_HB_" + pid.ToString(CultureInfo.InvariantCulture);
+        }
+
+        private static void InitializeHeartbeatMmf(int myPid)
+        {
+            lock (_heartbeatMmfLock)
+            {
+                DisposeHeartbeatMmfLocked();
+                try
+                {
+                    string mapName = BuildHeartbeatMmfName(myPid);
+                    _heartbeatMmf = MemoryMappedFile.CreateOrOpen(mapName, HeartbeatMmfSizeBytes, MemoryMappedFileAccess.ReadWrite);
+                    _heartbeatAccessor = _heartbeatMmf.CreateViewAccessor(0, 8, MemoryMappedFileAccess.ReadWrite);
+                }
+                catch
+                {
+                    DisposeHeartbeatMmfLocked();
+                }
+            }
+        }
+
+        private static void DisposeHeartbeatMmfLocked()
+        {
+            if (_heartbeatAccessor != null)
+            {
+                try { _heartbeatAccessor.Dispose(); } catch { }
+                _heartbeatAccessor = null;
+            }
+            if (_heartbeatMmf != null)
+            {
+                try { _heartbeatMmf.Dispose(); } catch { }
+                _heartbeatMmf = null;
+            }
+        }
 
         public static void InitializeInMainProcess(string baseDataDir, bool enabled)
         {
@@ -58,12 +109,14 @@ namespace ShihabMehediIDM
 
             if (!enabled) return;
 
+            int myPid = ShihabProcessAndPathSafety.CurrentProcessId;
             try
             {
-                File.WriteAllText(_activeSessionMarkerPath, Process.GetCurrentProcess().Id.ToString(CultureInfo.InvariantCulture));
+                File.WriteAllText(_activeSessionMarkerPath, myPid.ToString(CultureInfo.InvariantCulture));
             }
             catch { }
 
+            InitializeHeartbeatMmf(myPid);
             TouchHeartbeatFile();
             System.Windows.Forms.Timer prevTimer = _heartbeatTimer;
             if (prevTimer != null)
@@ -85,7 +138,7 @@ namespace ShihabMehediIDM
             {
                 if (!string.IsNullOrEmpty(_activeSessionMarkerPath) && File.Exists(_activeSessionMarkerPath))
                 {
-                    string myPidStr = Process.GetCurrentProcess().Id.ToString(CultureInfo.InvariantCulture);
+                    string myPidStr = ShihabProcessAndPathSafety.CurrentProcessId.ToString(CultureInfo.InvariantCulture);
                     string markerVal = "";
                     try { markerVal = (File.ReadAllText(_activeSessionMarkerPath, Encoding.UTF8) ?? "").Trim(); } catch { }
                     if (string.IsNullOrEmpty(markerVal) || string.Equals(markerVal, myPidStr, StringComparison.Ordinal))
@@ -106,6 +159,11 @@ namespace ShihabMehediIDM
                 }
             }
             catch { }
+
+            lock (_heartbeatMmfLock)
+            {
+                DisposeHeartbeatMmfLocked();
+            }
         }
 
         public static bool CheckAndClearUncleanShutdownMarker(string baseDataDir, out string latestCrashLogPath)
@@ -151,9 +209,10 @@ namespace ShihabMehediIDM
         {
             try
             {
-                string exePath = Application.ExecutablePath;
+                string exePath = ShihabProcessAndPathSafety.CurrentExePath;
+                if (string.IsNullOrEmpty(exePath)) exePath = Application.ExecutablePath;
                 if (string.IsNullOrEmpty(exePath) || !File.Exists(exePath)) return;
-                int myPid = Process.GetCurrentProcess().Id;
+                int myPid = ShihabProcessAndPathSafety.CurrentProcessId;
                 ProcessStartInfo psi = new ProcessStartInfo();
                 psi.FileName = exePath;
                 psi.Arguments = ShihabProcessAndPathSafety.BuildWindowsArgumentString(
@@ -173,28 +232,73 @@ namespace ShihabMehediIDM
         public static int RunOutOfProcessWatchdog(int parentPid, string baseDataDir)
         {
             if (parentPid <= 0 || string.IsNullOrWhiteSpace(baseDataDir)) return 0;
+            MemoryMappedFile hbMmf = null;
+            MemoryMappedViewAccessor hbAccessor = null;
             try
             {
+                // Trim idle watchdog working set RAM (~2-4 MB) once at startup.
+                try
+                {
+                    using (Process cur = Process.GetCurrentProcess())
+                    {
+                        SetProcessWorkingSetSize(cur.Handle, (IntPtr)(-1), (IntPtr)(-1));
+                    }
+                }
+                catch { }
+
                 string crashDir = Path.Combine(baseDataDir, "crashes");
                 Directory.CreateDirectory(crashDir);
                 string sessionRunning = Path.Combine(crashDir, "session.running");
                 string dirtyMarker = Path.Combine(crashDir, "dirty_shutdown.marker");
                 string heartbeatFile = Path.Combine(crashDir, "heartbeat.tick");
+                string mmfName = BuildHeartbeatMmfName(parentPid);
                 DateTime startedMonitoringUtc = DateTime.UtcNow;
                 bool freezeReportedForCurrentStall = false;
                 long lastSeenHeartbeatTicks = 0;
 
+                try
+                {
+                    hbMmf = MemoryMappedFile.OpenExisting(mmfName, MemoryMappedFileRights.Read);
+                    hbAccessor = hbMmf.CreateViewAccessor(0, 8, MemoryMappedFileAccess.Read);
+                }
+                catch
+                {
+                    if (hbAccessor != null) { try { hbAccessor.Dispose(); } catch { } hbAccessor = null; }
+                    if (hbMmf != null) { try { hbMmf.Dispose(); } catch { } hbMmf = null; }
+                }
+
                 using (Process parent = Process.GetProcessById(parentPid))
                 {
-                    while (!parent.WaitForExit(3000))
+                    while (!parent.WaitForExit(5000))
                     {
                         try
                         {
                             if ((DateTime.UtcNow - startedMonitoringUtc).TotalSeconds < 15.0) continue;
-                            if (!File.Exists(heartbeatFile)) continue;
-                            string tickStr = File.ReadAllText(heartbeatFile, Encoding.UTF8).Trim();
-                            long ticks;
-                            if (long.TryParse(tickStr, NumberStyles.Integer, CultureInfo.InvariantCulture, out ticks) && ticks > 0)
+                            long ticks = 0;
+                            if (hbAccessor == null)
+                            {
+                                try
+                                {
+                                    hbMmf = MemoryMappedFile.OpenExisting(mmfName, MemoryMappedFileRights.Read);
+                                    hbAccessor = hbMmf.CreateViewAccessor(0, 8, MemoryMappedFileAccess.Read);
+                                }
+                                catch
+                                {
+                                    if (hbAccessor != null) { try { hbAccessor.Dispose(); } catch { } hbAccessor = null; }
+                                    if (hbMmf != null) { try { hbMmf.Dispose(); } catch { } hbMmf = null; }
+                                }
+                            }
+                            if (hbAccessor != null)
+                            {
+                                ticks = hbAccessor.ReadInt64(0);
+                            }
+                            else if (File.Exists(heartbeatFile))
+                            {
+                                string tickStr = File.ReadAllText(heartbeatFile, Encoding.UTF8).Trim();
+                                long.TryParse(tickStr, NumberStyles.Integer, CultureInfo.InvariantCulture, out ticks);
+                            }
+
+                            if (ticks > 0)
                             {
                                 if (ticks != lastSeenHeartbeatTicks)
                                 {
@@ -260,16 +364,34 @@ namespace ShihabMehediIDM
                 }
             }
             catch { }
+            finally
+            {
+                if (hbAccessor != null) { try { hbAccessor.Dispose(); } catch { } }
+                if (hbMmf != null) { try { hbMmf.Dispose(); } catch { } }
+            }
             return 0;
         }
 
         private static void TouchHeartbeatFile()
         {
+            long nowTicks = DateTime.UtcNow.Ticks;
+            lock (_heartbeatMmfLock)
+            {
+                if (_heartbeatAccessor != null)
+                {
+                    try
+                    {
+                        _heartbeatAccessor.Write(0, nowTicks);
+                        return;
+                    }
+                    catch { }
+                }
+            }
             try
             {
                 if (!string.IsNullOrEmpty(_heartbeatFilePath))
                 {
-                    File.WriteAllText(_heartbeatFilePath, DateTime.UtcNow.Ticks.ToString(CultureInfo.InvariantCulture));
+                    File.WriteAllText(_heartbeatFilePath, nowTicks.ToString(CultureInfo.InvariantCulture));
                 }
             }
             catch { }
@@ -294,6 +416,7 @@ namespace ShihabMehediIDM
                 result = BearerRedactRegex.Replace(result, "$1<REDACTED>");
                 result = BridgeTokenRedactRegex.Replace(result, "$1<REDACTED>");
                 result = UrlCredsRedactRegex.Replace(result, "$1://$2:<REDACTED>@");
+                result = QueryTokenRedactRegex.Replace(result, "$1<REDACTED>");
             }
             catch { }
             return result;

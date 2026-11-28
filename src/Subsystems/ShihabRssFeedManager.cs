@@ -30,15 +30,15 @@ namespace ShihabMehediIDM
 
         private static readonly Regex SeasonEpisodeRegex = new Regex(
             @"\bS([0-9]{1,2})E([0-9]{1,3})\b",
-            RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant,
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
             RssRegexTimeout);
         private static readonly Regex AltSeasonEpisodeRegex = new Regex(
             @"\b([0-9]{1,2})x([0-9]{2,3})\b",
-            RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant,
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
             RssRegexTimeout);
         private static readonly Regex SeriesPrefixSanitizeRegex = new Regex(
             @"[^a-zA-Z0-9]+",
-            RegexOptions.Compiled | RegexOptions.CultureInvariant,
+            RegexOptions.CultureInvariant,
             RssRegexTimeout);
 
         public static List<ShihabRssItemEntry> FetchFeedItems(string feedUrl, string userAgent)

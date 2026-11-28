@@ -5,6 +5,7 @@ using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Security;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -16,12 +17,12 @@ namespace ShihabMehediIDM
     {
         private const int MaxHlsPlaylistBytes = 16 * 1024 * 1024;
         private static readonly TimeSpan HlsRegexTimeout = TimeSpan.FromMilliseconds(250);
-        private static readonly Regex HlsUriAttrRegex = new Regex(@"URI=""([^""]+)""", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant, HlsRegexTimeout);
-        private static readonly Regex HlsByteRangeAttrRegex = new Regex(@"BYTERANGE=""(\d+)(?:@(\d+))?""", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant, HlsRegexTimeout);
-        private static readonly Regex HlsExtByteRangeRegex = new Regex(@"(\d+)(?:@(\d+))?", RegexOptions.Compiled | RegexOptions.CultureInvariant, HlsRegexTimeout);
-        private static readonly Regex HlsGroupIdAttrRegex = new Regex(@"GROUP-ID=""([^""]+)""", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant, HlsRegexTimeout);
-        private static readonly Regex HlsBandwidthAttrRegex = new Regex(@"BANDWIDTH=(\d+)", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant, HlsRegexTimeout);
-        private static readonly Regex HlsAudioAttrRegex = new Regex(@"AUDIO=""([^""]+)""", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant, HlsRegexTimeout);
+        private static readonly Regex HlsUriAttrRegex = new Regex(@"URI=""([^""]+)""", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, HlsRegexTimeout);
+        private static readonly Regex HlsByteRangeAttrRegex = new Regex(@"BYTERANGE=""(\d+)(?:@(\d+))?""", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, HlsRegexTimeout);
+        private static readonly Regex HlsExtByteRangeRegex = new Regex(@"(\d+)(?:@(\d+))?", RegexOptions.CultureInvariant, HlsRegexTimeout);
+        private static readonly Regex HlsGroupIdAttrRegex = new Regex(@"GROUP-ID=""([^""]+)""", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, HlsRegexTimeout);
+        private static readonly Regex HlsBandwidthAttrRegex = new Regex(@"BANDWIDTH=(\d+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, HlsRegexTimeout);
+        private static readonly Regex HlsAudioAttrRegex = new Regex(@"AUDIO=""([^""]+)""", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, HlsRegexTimeout);
 
         private static bool IsSafeHlsSubresourceUri(Uri playlistBaseUri, Uri candidateUri)
         {
@@ -132,7 +133,18 @@ namespace ShihabMehediIDM
                 !string.Equals(shihabDiscoveredAudioPlaylistUrl, mehediActiveVideoPlaylistUrl, StringComparison.OrdinalIgnoreCase);
 
             string shihabVideoPartPath = Path.Combine(shihabTempDir, "hls_video_raw.part");
-            DownloadMehediHlsMediaPlaylistToFile(mehediActiveVideoPlaylistUrl, shihabVideoPartPath, "HLS", shihabItem, true, mehediToken);
+            string inlineVideoSha256;
+            long inlineVideoBytes;
+            DownloadMehediHlsMediaPlaylistToFile(
+                mehediActiveVideoPlaylistUrl,
+                shihabVideoPartPath,
+                "HLS",
+                shihabItem,
+                true,
+                mehediToken,
+                true,
+                out inlineVideoSha256,
+                out inlineVideoBytes);
             if (mehediToken.IsCancellationRequested) return;
 
             ShihabMediaProbeInfo mehediVidProbe = MehediMediaMuxer.InspectShihabMediaFile(shihabVideoPartPath);
@@ -155,6 +167,7 @@ namespace ShihabMehediIDM
             string targetDir = Path.GetDirectoryName(mehediTargetFull);
             if (!string.IsNullOrEmpty(targetDir)) Directory.CreateDirectory(targetDir);
 
+            bool usedSeparateAudioMux = false;
             if (mehediHasSeparateAudioHls)
             {
                 string shihabAudioPartPath = Path.Combine(shihabTempDir, "hls_audio_raw.part");
@@ -168,6 +181,7 @@ namespace ShihabMehediIDM
                     NotifyShihabItemChanged(shihabItem);
                     mehediTargetFull = MehediMediaMuxer.MuxShihabVideoAndAudio(shihabVideoPartPath, shihabAudioPartPath, mehediTargetFull);
                     shihabItem.ShihabFileName = Path.GetFileName(mehediTargetFull);
+                    usedSeparateAudioMux = true;
                 }
                 else
                 {
@@ -185,7 +199,16 @@ namespace ShihabMehediIDM
                 }
             }
 
-            ComputeShihabFileSha256AndSize(shihabItem, mehediTargetFull);
+            if (!usedSeparateAudioMux && !string.IsNullOrEmpty(inlineVideoSha256))
+            {
+                shihabItem.MehediSha256Hex = inlineVideoSha256;
+                shihabItem.MehediDownloadedBytes = inlineVideoBytes;
+                shihabItem.ShihabTotalBytes = inlineVideoBytes;
+            }
+            else
+            {
+                ComputeShihabFileSha256AndSize(shihabItem, mehediTargetFull);
+            }
             if (_mehediConfig.ShihabWriteZoneIdentifier)
             {
                 ShihabOsAndDiskSafety.WriteMarkOfTheWeb(mehediTargetFull, shihabItem.MehediUrl, shihabItem.MehediReferer);
@@ -193,7 +216,7 @@ namespace ShihabMehediIDM
 
             try
             {
-                if (Directory.Exists(shihabTempDir)) Directory.Delete(shihabTempDir, true);
+                if (Directory.Exists(shihabTempDir)) ShihabProcessAndPathSafety.SafeDeleteDirectoryNoFollow(shihabTempDir);
             }
             catch { }
 
@@ -208,6 +231,33 @@ namespace ShihabMehediIDM
             bool shihabUpdateMainBytes,
             CancellationToken mehediToken)
         {
+            string ignoredSha;
+            long ignoredBytes;
+            DownloadMehediHlsMediaPlaylistToFile(
+                shihabMediaPlaylistUrl,
+                mehediOutputFilePath,
+                shihabLabelPrefix,
+                mehediItem,
+                shihabUpdateMainBytes,
+                mehediToken,
+                false,
+                out ignoredSha,
+                out ignoredBytes);
+        }
+
+        private void DownloadMehediHlsMediaPlaylistToFile(
+            string shihabMediaPlaylistUrl,
+            string mehediOutputFilePath,
+            string shihabLabelPrefix,
+            ShihabDownloadItem mehediItem,
+            bool shihabUpdateMainBytes,
+            CancellationToken mehediToken,
+            bool computeSha256Inline,
+            out string computedSha256Hex,
+            out long computedFileBytes)
+        {
+            computedSha256Hex = "";
+            computedFileBytes = 0L;
             string shihabManifestText = DownloadMehediText(shihabMediaPlaylistUrl, mehediItem, mehediToken);
             if (mehediToken.IsCancellationRequested) return;
             if (HasEncryptedHlsKeyTag(shihabManifestText))
@@ -320,13 +370,17 @@ namespace ShihabMehediIDM
             Stopwatch hlsThrottleWatch = Stopwatch.StartNew();
             long hlsWinStartMs = 0L;
             long hlsWinBytes = 0L;
+            double hlsItemBucketBytes = 0.0;
+            long hlsItemLastTickMs = 0L;
             object hlsThrottleLock = new object();
 
             if (hlsConcurrency <= 1 || mehediSegmentUrls.Count <= 1)
             {
                 try
                 {
-                    using (FileStream shihabOut = new FileStream(tempHlsOutPath, FileMode.Create, FileAccess.Write, FileShare.None, SegmentStreamBufferBytes))
+                    object seqSegLock = GetItemSegmentLock(mehediItem);
+                    using (SHA256 seqSha = computeSha256Inline ? SHA256.Create() : null)
+                    using (FileStream shihabOut = new FileStream(tempHlsOutPath, FileMode.Create, FileAccess.Write, FileShare.None, 65536))
                     {
                         byte[] mehediBuf = new byte[65536];
                         for (int mehediIdx = 0; mehediIdx < mehediSegmentUrls.Count; mehediIdx++)
@@ -336,25 +390,27 @@ namespace ShihabMehediIDM
                             {
                                 throw new IOException("Bandwidth quota limit reached.");
                             }
-                            HttpWebRequest shihabSegReq;
-                            using (HttpWebResponse mehediSegResp = GetResponseWithSafeRedirects(
+                            using (CancelableHttpResponse mehediSegRespHandle = GetCancelableResponseWithSafeRedirects(
                                 mehediSegmentUrls[mehediIdx],
                                 "GET",
                                 mehediItem,
                                 shihabSegStarts[mehediIdx],
                                 mehediSegEnds[mehediIdx],
                                 null,
-                                mehediToken,
-                                out shihabSegReq))
-                            using (Stream shihabSegStream = mehediSegResp.GetResponseStream())
+                                mehediToken))
+                            using (Stream shihabSegStream = mehediSegRespHandle.Response.GetResponseStream())
                             {
                                 int shihabRead;
                                 while (!mehediToken.IsCancellationRequested && (shihabRead = shihabSegStream.Read(mehediBuf, 0, mehediBuf.Length)) > 0)
                                 {
                                     shihabOut.Write(mehediBuf, 0, shihabRead);
+                                    if (seqSha != null)
+                                    {
+                                        seqSha.TransformBlock(mehediBuf, 0, shihabRead, null, 0);
+                                    }
                                     _mehediConfig.RecordQuotaBytes(shihabRead);
                                     shihabAccumulatedBytes += shihabRead;
-                                    ApplyMehediSpeedLimiter(mehediItem, shihabRead, hlsThrottleWatch, ref hlsWinStartMs, ref hlsWinBytes, mehediToken);
+                                    ApplyMehediSpeedLimiter(mehediItem, shihabRead, hlsThrottleWatch, ref hlsWinStartMs, ref hlsWinBytes, mehediToken, seqSegLock);
                                 }
                             }
                             if (mehediToken.IsCancellationRequested) return;
@@ -367,6 +423,18 @@ namespace ShihabMehediIDM
                             NotifyShihabItemChanged(mehediItem);
                         }
                         shihabOut.Flush(true);
+                        if (seqSha != null)
+                        {
+                            seqSha.TransformFinalBlock(new byte[0], 0, 0);
+                            StringBuilder hexSb = new StringBuilder(64);
+                            byte[] hashBytes = seqSha.Hash;
+                            for (int h = 0; h < hashBytes.Length; h++)
+                            {
+                                hexSb.Append(hashBytes[h].ToString("x2"));
+                            }
+                            computedSha256Hex = hexSb.ToString();
+                        }
+                        computedFileBytes = shihabAccumulatedBytes;
                     }
 
                     if (!mehediToken.IsCancellationRequested && !TryAtomicMoveReplace(tempHlsOutPath, mehediOutputFilePath))
@@ -423,17 +491,15 @@ namespace ShihabMehediIDM
                                     segEx = null;
                                     try
                                     {
-                                        HttpWebRequest segReq;
-                                        using (HttpWebResponse segResp = GetResponseWithSafeRedirects(
+                                        using (CancelableHttpResponse segRespHandle = GetCancelableResponseWithSafeRedirects(
                                             mehediSegmentUrls[segIdx],
                                             "GET",
                                             mehediItem,
                                             shihabSegStarts[segIdx],
                                             mehediSegEnds[segIdx],
                                             null,
-                                            workerToken,
-                                            out segReq))
-                                        using (Stream segStream = segResp.GetResponseStream())
+                                            workerToken))
+                                        using (Stream segStream = segRespHandle.Response.GetResponseStream())
                                         using (FileStream segFs = new FileStream(segPath, FileMode.Create, FileAccess.Write, FileShare.None, 65536))
                                         {
                                             int r;
@@ -443,10 +509,30 @@ namespace ShihabMehediIDM
                                                 _mehediConfig.RecordQuotaBytes(r);
                                                 long curAcc = Interlocked.Add(ref shihabAccumulatedBytes, r);
                                                 if (shihabUpdateMainBytes) mehediItem.MehediDownloadedBytes = curAcc;
-                                                lock (hlsThrottleLock)
+
+                                                int itemSleepMs = 0;
+                                                if (mehediItem.ShihabUseItemSpeedLimit && mehediItem.MehediItemSpeedLimitKb > 0)
                                                 {
-                                                    ApplyMehediSpeedLimiter(mehediItem, r, hlsThrottleWatch, ref hlsWinStartMs, ref hlsWinBytes, workerToken);
+                                                    lock (hlsThrottleLock)
+                                                    {
+                                                        long nowMs = hlsThrottleWatch.ElapsedMilliseconds;
+                                                        long elapsedMs = Math.Max(0L, nowMs - hlsItemLastTickMs);
+                                                        hlsItemLastTickMs = nowMs;
+                                                        double rateBps = Math.Max(4096.0, mehediItem.MehediItemSpeedLimitKb * 1024.0);
+                                                        double maxBurst = Math.Max(65536.0, rateBps * 0.25);
+                                                        hlsItemBucketBytes = Math.Min(maxBurst, hlsItemBucketBytes + (rateBps * elapsedMs / 1000.0));
+                                                        hlsItemBucketBytes -= r;
+                                                        if (hlsItemBucketBytes < 0.0)
+                                                        {
+                                                            itemSleepMs = (int)Math.Min(250.0, (-hlsItemBucketBytes * 1000.0) / rateBps);
+                                                        }
+                                                    }
                                                 }
+                                                if (itemSleepMs > 5 && !workerToken.IsCancellationRequested)
+                                                {
+                                                    WaitSleepOrCancel(itemSleepMs, workerToken);
+                                                }
+                                                ApplyGlobalSpeedLimiterOnly(r, workerToken);
                                             }
                                             segFs.Flush();
                                         }
@@ -495,26 +581,47 @@ namespace ShihabMehediIDM
                     mehediItem.SetMehediStatusEnum(ShihabDownloadStatus.ShihabRebuilding, string.Format("Assembling {0} segments...", mehediSegmentUrls.Count));
                     NotifyShihabItemChanged(mehediItem);
 
-                    using (FileStream shihabOut = new FileStream(tempHlsOutPath, FileMode.Create, FileAccess.Write, FileShare.None, SegmentStreamBufferBytes))
+                    long assembledBytes = 0L;
+                    using (SHA256 mergeSha = computeSha256Inline ? SHA256.Create() : null)
+                    using (FileStream shihabOut = new FileStream(tempHlsOutPath, FileMode.Create, FileAccess.Write, FileShare.None, 65536))
                     {
-                        byte[] copyBuf = new byte[131072];
+                        byte[] copyBuf = new byte[65536];
                         for (int i = 0; i < segFiles.Length; i++)
                         {
                             if (mehediToken.IsCancellationRequested) return;
-                            if (string.IsNullOrEmpty(segFiles[i]) || !File.Exists(segFiles[i]))
+                            string segFilePath = segFiles[i];
+                            if (string.IsNullOrEmpty(segFilePath) || !File.Exists(segFilePath))
                             {
                                 throw new IOException("Missing HLS segment #" + i + " during assembly.");
                             }
-                            using (FileStream inSeg = new FileStream(segFiles[i], FileMode.Open, FileAccess.Read, FileShare.Read, 131072))
+                            using (FileStream inSeg = new FileStream(segFilePath, FileMode.Open, FileAccess.Read, FileShare.Read, 65536))
                             {
                                 int r;
                                 while ((r = inSeg.Read(copyBuf, 0, copyBuf.Length)) > 0)
                                 {
                                     shihabOut.Write(copyBuf, 0, r);
+                                    if (mergeSha != null)
+                                    {
+                                        mergeSha.TransformBlock(copyBuf, 0, r, null, 0);
+                                    }
+                                    assembledBytes += r;
                                 }
                             }
+                            try { File.Delete(segFilePath); } catch { }
                         }
                         shihabOut.Flush(true);
+                        if (mergeSha != null)
+                        {
+                            mergeSha.TransformFinalBlock(new byte[0], 0, 0);
+                            StringBuilder hexSb = new StringBuilder(64);
+                            byte[] hashBytes = mergeSha.Hash;
+                            for (int h = 0; h < hashBytes.Length; h++)
+                            {
+                                hexSb.Append(hashBytes[h].ToString("x2"));
+                            }
+                            computedSha256Hex = hexSb.ToString();
+                        }
+                        computedFileBytes = assembledBytes;
                     }
 
                     if (!mehediToken.IsCancellationRequested && !TryAtomicMoveReplace(tempHlsOutPath, mehediOutputFilePath))
@@ -529,16 +636,15 @@ namespace ShihabMehediIDM
                 }
                 finally
                 {
-                    try { if (Directory.Exists(segWorkDir)) Directory.Delete(segWorkDir, true); } catch { }
+                    try { if (Directory.Exists(segWorkDir)) ShihabProcessAndPathSafety.SafeDeleteDirectoryNoFollow(segWorkDir); } catch { }
                 }
             }
         }
 
         private string DownloadMehediText(string shihabUrl, ShihabDownloadItem mehediItem, CancellationToken mehediToken)
         {
-            HttpWebRequest shihabReq;
-            using (HttpWebResponse mehediResp = GetResponseWithSafeRedirects(shihabUrl, "GET", mehediItem, -1, -1, null, mehediToken, out shihabReq))
-            using (Stream respStream = mehediResp.GetResponseStream())
+            using (CancelableHttpResponse mehediRespHandle = GetCancelableResponseWithSafeRedirects(shihabUrl, "GET", mehediItem, -1, -1, null, mehediToken))
+            using (Stream respStream = mehediRespHandle.Response.GetResponseStream())
             {
                 if (respStream == null) return "";
                 byte[] buf = new byte[16384];

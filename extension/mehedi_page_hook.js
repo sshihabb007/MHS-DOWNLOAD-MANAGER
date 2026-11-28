@@ -1,20 +1,49 @@
 "use strict";
 
 (() => {
+  function shihabGetSafePostOrigin() {
+    try {
+      return /^https?:\/\//i.test(location.origin) ? location.origin : "*";
+    } catch (_) {
+      return "*";
+    }
+  }
+
   if (window.__shihabMehediPageHookInstalled) {
     try {
-      window.postMessage({ __shihabMehediContentPing: true }, "*");
+      window.postMessage({ __shihabMehediContentPing: true }, shihabGetSafePostOrigin());
     } catch (_) {}
     return;
   }
   window.__shihabMehediPageHookInstalled = true;
 
+  const SHIHAB_UTF8_DECODER = new TextDecoder("utf-8", { fatal: false });
+  const SHIHAB_PAGE_HOST_LOWER = (() => {
+    try { return String(location.hostname || "").toLowerCase(); } catch (_) { return ""; }
+  })();
+  const SHIHAB_IS_META_HOST = /(?:^|\.)(?:facebook\.com|fb\.watch|instagram\.com|messenger\.com|threads\.net)$/i.test(SHIHAB_PAGE_HOST_LOWER);
+  const SHIHAB_IS_KNOWN_VIDEO_PLATFORM_HOST = /(?:^|\.)(?:youtube\.com|youtu\.be|youtube-nocookie\.com|facebook\.com|fb\.watch|instagram\.com|messenger\.com|threads\.net|x\.com|twitter\.com|linkedin\.com|tiktok\.com|vimeo\.com|reddit\.com|dailymotion\.com|twitch\.tv|bilibili\.com|rumble\.com|kick\.com|loom\.com|wistia\.com|wistia\.net|jwplatform\.com|jwplayer\.com|brightcove\.com|brightcove\.net)$/i.test(SHIHAB_PAGE_HOST_LOWER);
+  const SHIHAB_GENERIC_JSON_VIDEO_URL_RX = /graphql|player|video|stream|manifest|playlist|config|vimeo|media|vod|clip/i;
+  const MEHEDI_FB_PROGRESSIVE_FIELDS = [
+    { shihabField: "browser_native_hd_url", mehediRes: "720p" },
+    { shihabField: "playable_url_quality_hd", mehediRes: "720p" },
+    { shihabField: "hd_src_no_ratelimit", mehediRes: "720p" },
+    { shihabField: "hd_src", mehediRes: "720p" },
+    { shihabField: "browser_native_sd_url", mehediRes: "480p" },
+    { shihabField: "playable_url", mehediRes: "480p" },
+    { shihabField: "sd_src_no_ratelimit", mehediRes: "480p" },
+    { shihabField: "sd_src", mehediRes: "480p" }
+  ];
+
   let mehediNextVideoUidSeq = 1;
+  let shihabHasMediaSource = false;
+  let shihabLastNewSliceIndexedAtMs = 0;
   const mehediTopOrigFetch = typeof window.fetch === "function" ? window.fetch.bind(window) : null;
   const shihabMediaSourceToBlobUrl = new WeakMap();
   const shihabMediaSourceToVideoUid = new WeakMap();
-  const mehediBlobUrlToMediaSource = new Map();
   const mehediSourceBufferMeta = new WeakMap();
+  const shihabPointerOverCooldownMap = new WeakMap();
+  const shihabIndexedMediaUrls = new Map();
   const shihabRecentFetchedSlices = [];
   const shihabChunkHashToStreamUrl = new Map();
   const mehediEmittedManifestKeys = new Set();
@@ -41,6 +70,7 @@
       mehediEmittedManifestKeys.clear();
       mehediRecentManifestPayloads.length = 0;
       shihabRecentBlobBindings.clear();
+      shihabIndexedMediaUrls.clear();
     }
   }
 
@@ -252,18 +282,44 @@
     return shihabSigs;
   }
 
+  function shihabCanIndexMediaUrlForMse(shihabRawUrl, shihabContentType) {
+    if (!shihabHasMediaSource) return false;
+    const shihabClean = mehediNormalizeHookMediaUrl(shihabRawUrl);
+    if (!shihabClean || !shihabLooksLikeMediaSliceUrl(shihabClean, shihabContentType)) return false;
+    const shihabParentPlaylist = mehediResolvePlaylistParentForSegment(shihabClean);
+    const mehediEffectiveUrl = shihabParentPlaylist || shihabClean;
+    return (shihabIndexedMediaUrls.get(mehediEffectiveUrl) || 0) < 2;
+  }
+
   function mehediIndexChunkBytesForUrl(shihabRawUrl, mehediBytes, shihabContentType) {
     const shihabClean = mehediNormalizeHookMediaUrl(shihabRawUrl);
     if (!shihabClean || !shihabLooksLikeMediaSliceUrl(shihabClean, shihabContentType)) return;
     const shihabParentPlaylist = mehediResolvePlaylistParentForSegment(shihabClean);
     const mehediEffectiveUrl = shihabParentPlaylist || shihabClean;
+    const mehediPrevCount = shihabIndexedMediaUrls.get(mehediEffectiveUrl) || 0;
+    if (mehediPrevCount >= 2) return;
     const mehediSigs = shihabComputeMediaChunkSignatures(mehediBytes);
+    if (mehediSigs.length === 0) return;
+    let shihabAddedNew = false;
     for (const shihabSig of mehediSigs) {
+      if (!shihabChunkHashToStreamUrl.has(shihabSig)) {
+        shihabAddedNew = true;
+      }
       shihabChunkHashToStreamUrl.set(shihabSig, mehediEffectiveUrl);
       if (shihabChunkHashToStreamUrl.size > 600) {
         const mehediOldestKey = shihabChunkHashToStreamUrl.keys().next().value;
         shihabChunkHashToStreamUrl.delete(mehediOldestKey);
       }
+    }
+    // Refresh LRU order & cap shihabIndexedMediaUrls at 200
+    shihabIndexedMediaUrls.delete(mehediEffectiveUrl);
+    shihabIndexedMediaUrls.set(mehediEffectiveUrl, mehediPrevCount + 1);
+    if (shihabIndexedMediaUrls.size > 200) {
+      const shihabOldestIdxUrl = shihabIndexedMediaUrls.keys().next().value;
+      shihabIndexedMediaUrls.delete(shihabOldestIdxUrl);
+    }
+    if (shihabAddedNew) {
+      shihabLastNewSliceIndexedAtMs = Date.now();
     }
   }
 
@@ -343,7 +399,7 @@
           mehediKind,
           shihabPayload
         },
-        "*"
+        shihabGetSafePostOrigin()
       );
     } catch (_) {}
   }
@@ -672,7 +728,7 @@
 
         const shihabSig = `${shihabFinalGroup}:${mehediDiscoveredList.length}:${mehediTitleHint ? 1 : 0}`;
         if (!mehediEmittedManifestKeys.has(shihabSig)) {
-          mehediEmittedManifestKeys.add(shihabSig);
+          shihabMarkEmittedManifestKey(shihabSig);
           shihabPostToContentBridge("mehedi_manifest_streams", {
             shihabStreams: mehediDiscoveredList,
             mehediGroupKey: shihabFinalGroup,
@@ -951,7 +1007,7 @@
     if (mehediVideoId && /^[A-Za-z0-9_-]{11}$/.test(mehediVideoId) && !mehediCustomUserAgent) {
       const shihabDiscSig = `ytdisc:${mehediVideoId}:${shihabTitleHint ? 1 : 0}`;
       if (!mehediEmittedManifestKeys.has(shihabDiscSig)) {
-        mehediEmittedManifestKeys.add(shihabDiscSig);
+        shihabMarkEmittedManifestKey(shihabDiscSig);
         let mehediVisData = "";
         try {
           mehediVisData = String(
@@ -1332,51 +1388,59 @@
 
       const mehediNodeDurationSec = Number(
         shihabNode.video_duration ||
-        shihabNode.playable_duration_in_ms ? (Number(shihabNode.playable_duration_in_ms) / 1000) : 0
+        (shihabNode.playable_duration_in_ms ? (Number(shihabNode.playable_duration_in_ms) / 1000) : 0)
       ) || (Number(shihabNode.length_in_second || shihabNode.duration || 0));
 
-      const shihabNodeAltIds = Array.from(new Set(
-        [
-          shihabDirectVideoId,
-          shihabDirectVideoId ? `vid:${shihabDirectVideoId}` : "",
-          shihabVideoAssetId,
-          shihabVideoAssetId ? `vid:${shihabVideoAssetId}` : "",
-          mehediLocalCode,
-          mehediShortcode
-        ]
-          .filter((mehediV) => mehediV && String(mehediV).length >= 4)
-          .map(String)
-      ));
+      let shihabNodeAltIdsCache = null;
+      const shihabGetNodeAltIds = () => {
+        if (shihabNodeAltIdsCache !== null) return shihabNodeAltIdsCache;
+        const shihabTmpSet = new Set();
+        if (shihabDirectVideoId && shihabDirectVideoId.length >= 4) {
+          shihabTmpSet.add(shihabDirectVideoId);
+          shihabTmpSet.add(`vid:${shihabDirectVideoId}`);
+        }
+        if (shihabVideoAssetId && shihabVideoAssetId.length >= 4) {
+          shihabTmpSet.add(shihabVideoAssetId);
+          shihabTmpSet.add(`vid:${shihabVideoAssetId}`);
+        }
+        if (mehediLocalCode && mehediLocalCode.length >= 4) shihabTmpSet.add(mehediLocalCode);
+        if (mehediShortcode && mehediShortcode.length >= 4) shihabTmpSet.add(mehediShortcode);
+        shihabNodeAltIdsCache = Array.from(shihabTmpSet);
+        return shihabNodeAltIdsCache;
+      };
 
-      // 1) Instagram / Facebook DASH XML manifest string + Facebook Comet dash_manifests array
-      const shihabDashXmlList = [];
+      // 1) Instagram / Facebook DASH XML manifest string + Facebook Comet dash_manifests array (allocated lazily)
+      let shihabDashXmlList = null;
       if (typeof shihabNode.video_dash_manifest === "string" && shihabNode.video_dash_manifest.includes("<MPD")) {
-        shihabDashXmlList.push(shihabNode.video_dash_manifest);
+        (shihabDashXmlList || (shihabDashXmlList = [])).push(shihabNode.video_dash_manifest);
       }
       if (typeof shihabNode.dash_manifest === "string" && shihabNode.dash_manifest.includes("<MPD")) {
-        shihabDashXmlList.push(shihabNode.dash_manifest);
+        (shihabDashXmlList || (shihabDashXmlList = [])).push(shihabNode.dash_manifest);
       }
       if (shihabNode.dash_info && typeof shihabNode.dash_info.video_dash_manifest === "string" && shihabNode.dash_info.video_dash_manifest.includes("<MPD")) {
-        shihabDashXmlList.push(shihabNode.dash_info.video_dash_manifest);
+        (shihabDashXmlList || (shihabDashXmlList = [])).push(shihabNode.dash_info.video_dash_manifest);
       }
       if (Array.isArray(shihabNode.dash_manifests)) {
         for (const mehediDmEntry of shihabNode.dash_manifests) {
           if (mehediDmEntry && typeof mehediDmEntry.manifest_xml === "string" && mehediDmEntry.manifest_xml.includes("<MPD")) {
-            shihabDashXmlList.push(mehediDmEntry.manifest_xml);
+            (shihabDashXmlList || (shihabDashXmlList = [])).push(mehediDmEntry.manifest_xml);
           }
         }
       }
       let mehediMpdResolvedGroup = "";
-      for (const mehediXmlItem of shihabDashXmlList) {
-        const shihabGrp = shihabParseDashMpdXml(mehediXmlItem, shihabVideoAssetId, mehediCombinedTitle, mehediShortcode, location.href, shihabNodeAltIds);
-        if (shihabGrp && !mehediMpdResolvedGroup) mehediMpdResolvedGroup = shihabGrp;
+      if (shihabDashXmlList) {
+        const shihabDashAlts = shihabGetNodeAltIds();
+        for (const mehediXmlItem of shihabDashXmlList) {
+          const shihabGrp = shihabParseDashMpdXml(mehediXmlItem, shihabVideoAssetId, mehediCombinedTitle, mehediShortcode, location.href, shihabDashAlts);
+          if (shihabGrp && !mehediMpdResolvedGroup) mehediMpdResolvedGroup = shihabGrp;
+        }
       }
 
       // 2) Instagram progressive video_versions array
       if (Array.isArray(shihabNode.video_versions) && shihabNode.video_versions.length > 0) {
         const mehediProgList = [];
         let shihabIgEfgGroup = "";
-        const mehediSharedIgAlts = new Set(shihabNodeAltIds);
+        const mehediSharedIgAlts = new Set(shihabGetNodeAltIds());
         for (const mehediVer of shihabNode.video_versions) {
           if (!mehediVer || typeof mehediVer.url !== "string") continue;
           const shihabClean = mehediNormalizeHookMediaUrl(mehediVer.url);
@@ -1430,28 +1494,25 @@
         }
       }
 
-      // 3) Facebook progressive browser_native_hd_url / playable_url + Facebook Comet progressive_urls array
-      const mehediFbProgressiveFields = [
-        { shihabField: "browser_native_hd_url", mehediRes: "720p" },
-        { shihabField: "playable_url_quality_hd", mehediRes: "720p" },
-        { shihabField: "hd_src_no_ratelimit", mehediRes: "720p" },
-        { shihabField: "hd_src", mehediRes: "720p" },
-        { shihabField: "browser_native_sd_url", mehediRes: "480p" },
-        { shihabField: "playable_url", mehediRes: "480p" },
-        { shihabField: "sd_src_no_ratelimit", mehediRes: "480p" },
-        { shihabField: "sd_src", mehediRes: "480p" }
-      ];
-      const shihabFbFound = [];
+      // 3) Facebook progressive browser_native_hd_url / playable_url + Facebook Comet progressive_urls array (allocated lazily)
+      let shihabFbFound = null;
       let mehediFbEfgGroup = "";
-      const shihabFbAltSet = new Set(shihabNodeAltIds);
-      const mehediFbOrigW = Number(shihabNode.original_width || shihabNode.width || 0);
-      const shihabFbOrigH = Number(shihabNode.original_height || shihabNode.height || 0);
+      let shihabFbAltSet = null;
+      let mehediFbOrigW = 0;
+      let shihabFbOrigH = 0;
 
-      for (const mehediFbSpec of mehediFbProgressiveFields) {
+      for (let mehediFi = 0; mehediFi < MEHEDI_FB_PROGRESSIVE_FIELDS.length; mehediFi++) {
+        const mehediFbSpec = MEHEDI_FB_PROGRESSIVE_FIELDS[mehediFi];
         const shihabVal = shihabNode[mehediFbSpec.shihabField];
         if (typeof shihabVal === "string" && shihabVal.startsWith("http")) {
           const mehediCleanFb = mehediNormalizeHookMediaUrl(shihabVal);
           if (mehediCleanFb) {
+            if (!shihabFbFound) {
+              shihabFbFound = [];
+              shihabFbAltSet = new Set(shihabGetNodeAltIds());
+              mehediFbOrigW = Number(shihabNode.original_width || shihabNode.width || 0);
+              shihabFbOrigH = Number(shihabNode.original_height || shihabNode.height || 0);
+            }
             const shihabFbEfg = mehediExtractEfgIds(mehediCleanFb);
             for (const mehediAlt of shihabFbEfg.shihabAltIds) shihabFbAltSet.add(mehediAlt);
             if (!mehediFbEfgGroup && shihabFbEfg.mehediCanonicalGroup) {
@@ -1483,6 +1544,12 @@
           if (!shihabProgRaw.startsWith("http")) continue;
           const mehediCleanProg = mehediNormalizeHookMediaUrl(shihabProgRaw);
           if (!mehediCleanProg) continue;
+          if (!shihabFbFound) {
+            shihabFbFound = [];
+            shihabFbAltSet = new Set(shihabGetNodeAltIds());
+            mehediFbOrigW = Number(shihabNode.original_width || shihabNode.width || 0);
+            shihabFbOrigH = Number(shihabNode.original_height || shihabNode.height || 0);
+          }
           const shihabProgEfg = mehediExtractEfgIds(mehediCleanProg);
           for (const mehediAlt of shihabProgEfg.shihabAltIds) shihabFbAltSet.add(mehediAlt);
           if (!mehediFbEfgGroup && shihabProgEfg.mehediCanonicalGroup) {
@@ -1508,7 +1575,7 @@
         }
       }
 
-      if (shihabFbFound.length > 0) {
+      if (shihabFbFound && shihabFbFound.length > 0) {
         const shihabFinalFbGroup =
           mehediFbEfgGroup ||
           mehediMpdResolvedGroup ||
@@ -1548,7 +1615,7 @@
                   ? `tw:${shihabVideoAssetId}`
                   : `tw:${shihabFnv1aStringHash((shihabNode.video_info.variants[0] && shihabNode.video_info.variants[0].url) || "")}`));
 
-        const shihabTwAltSet = new Set([...shihabNodeAltIds, mehediTwGroup]);
+        const shihabTwAltSet = new Set([...shihabGetNodeAltIds(), mehediTwGroup]);
         if (shihabResolvedTweetId) {
           shihabTwAltSet.add(shihabResolvedTweetId);
           shihabTwAltSet.add(`tw:${shihabResolvedTweetId}`);
@@ -1892,7 +1959,13 @@
         }
       }
 
-      const mehediNextParentCtx = {
+      const mehediNextParentCtx = (
+        shihabVideoAssetId === shihabInherited.shihabStoryVideoId &&
+        shihabTweetRestId === shihabInherited.shihabTweetRestId &&
+        mehediShortcode === shihabInherited.mehediParentCode &&
+        mehediUsername === shihabInherited.shihabParentUser &&
+        shihabCaptionTxt === shihabInherited.mehediParentCaption
+      ) ? shihabInherited : {
         shihabStoryVideoId: shihabVideoAssetId,
         shihabTweetRestId: shihabTweetRestId,
         mehediParentCode: mehediShortcode,
@@ -2324,12 +2397,8 @@
             (typeof MediaSource !== "undefined" && mehediObj instanceof MediaSource) ||
             (typeof ManagedMediaSource !== "undefined" && mehediObj instanceof ManagedMediaSource);
           if (shihabIsMs) {
+            shihabHasMediaSource = true;
             shihabMediaSourceToBlobUrl.set(mehediObj, shihabBlobUrl);
-            mehediBlobUrlToMediaSource.set(shihabBlobUrl, mehediObj);
-            if (mehediBlobUrlToMediaSource.size > 100) {
-              const shihabOldBlob = mehediBlobUrlToMediaSource.keys().next().value;
-              mehediBlobUrlToMediaSource.delete(shihabOldBlob);
-            }
           }
         } catch (_) {}
         return shihabBlobUrl;
@@ -2374,6 +2443,12 @@
           set: function (mehediObj) {
             try {
               if (this && this.tagName === "VIDEO" && mehediObj) {
+                if (
+                  (typeof MediaSource !== "undefined" && mehediObj instanceof MediaSource) ||
+                  (typeof ManagedMediaSource !== "undefined" && mehediObj instanceof ManagedMediaSource)
+                ) {
+                  shihabHasMediaSource = true;
+                }
                 const mehediUid = shihabEnsureVideoUidOnElement(this);
                 if (mehediUid) shihabMediaSourceToVideoUid.set(mehediObj, mehediUid);
               }
@@ -2390,6 +2465,7 @@
       shihabMsCtor.prototype.__shihabHookedAddSb = true;
       const mehediOrigAddSb = shihabMsCtor.prototype.addSourceBuffer;
       shihabMsCtor.prototype.addSourceBuffer = function (shihabMimeCodec) {
+        shihabHasMediaSource = true;
         const mehediSb = mehediOrigAddSb.apply(this, arguments);
         try {
           const shihabBlobUrl = shihabMediaSourceToBlobUrl.get(this) || "";
@@ -2416,13 +2492,21 @@
                   if (mehediLiveBlob || shihabLiveUid) {
                     if (mehediLiveBlob) shihabMeta.shihabBlobUrl = mehediLiveBlob;
 
+                    // Once exact byte binding is already established, skip synchronous 196 KB signature scanning
+                    // unless a brand-new unseen fetched media slice was indexed in the last 5 seconds!
+                    const shihabShouldScanBytes =
+                      shihabMeta.shihabExactReportedUrls.size === 0 ||
+                      (shihabLastNewSliceIndexedAtMs > 0 && (Date.now() - shihabLastNewSliceIndexedAtMs) <= 5000);
+
                     let shihabExactMatchedUrl = "";
-                    const mehediBufSigs = shihabComputeMediaChunkSignatures(mehediBuffer);
-                    for (const shihabSig of mehediBufSigs) {
-                      const mehediHit = shihabChunkHashToStreamUrl.get(shihabSig);
-                      if (mehediHit) {
-                        shihabExactMatchedUrl = mehediHit;
-                        break;
+                    if (shihabShouldScanBytes && shihabChunkHashToStreamUrl.size > 0) {
+                      const mehediBufSigs = shihabComputeMediaChunkSignatures(mehediBuffer);
+                      for (const shihabSig of mehediBufSigs) {
+                        const mehediHit = shihabChunkHashToStreamUrl.get(shihabSig);
+                        if (mehediHit) {
+                          shihabExactMatchedUrl = mehediHit;
+                          break;
+                        }
                       }
                     }
 
@@ -2534,7 +2618,7 @@
               shihabJoined.set(shihabP, mehediOff);
               mehediOff += shihabP.byteLength;
             }
-            const mehediDecoded = new TextDecoder("utf-8", { fatal: false }).decode(shihabJoined);
+            const mehediDecoded = SHIHAB_UTF8_DECODER.decode(shihabJoined);
             shihabOnText(mehediDecoded);
           }
         }).catch(() => {
@@ -2545,7 +2629,38 @@
     } catch (_) {}
   }
 
-  // 2. Hook window.fetch non-destructively (reads up to 128 KB of media clone for ftyp/moof box fingerprinting + byte-capped HLS/DASH/JSON manifests)
+  const SHIHAB_KNOWN_EMBED_API_URL_RX = /^https?:\/\/[^/]*(?:vimeo\.com|vimeocdn\.com|jwplatform\.com|jwplayer\.com|brightcove\.com|brightcove\.net|wistia\.com|wistia\.net|loom\.com|dailymotion\.com|twitch\.tv|youtube\.com|tiktok\.com|reddit\.com|licdn\.com|linkedin\.com|twimg\.com|x\.com|twitter\.com|facebook\.com|instagram\.com)\//i;
+
+  function shihabIsExplicitManifestRequest(mehediFinalUrl, mehediLowerCt) {
+    return (
+      mehediLowerCt.includes("mpegurl") ||
+      mehediLowerCt.includes("dash+xml") ||
+      /\.(m3u8|m3u|mpd)(\?|#|$)/i.test(mehediFinalUrl) ||
+      /\/hls[-_]?manifest\b/i.test(mehediFinalUrl)
+    );
+  }
+
+  function shihabShouldInspectJsonOrXmlBody(mehediFinalUrl, mehediLowerCt) {
+    if (mehediLowerCt.includes("text/event-stream")) return false;
+    if (mehediLowerCt.includes("dash+xml")) return true;
+    if (mehediLowerCt.includes("javascript")) {
+      return SHIHAB_IS_META_HOST;
+    }
+    const shihabLooksJsonOrXml =
+      mehediLowerCt.includes("json") ||
+      mehediLowerCt.includes("xml") ||
+      /\/(graphql|api\/v1\/|youtubei\/v1\/player|ajax\/bz|voyager\/api)/i.test(mehediFinalUrl);
+    if (!shihabLooksJsonOrXml) return false;
+    if (SHIHAB_IS_KNOWN_VIDEO_PLATFORM_HOST || SHIHAB_KNOWN_EMBED_API_URL_RX.test(mehediFinalUrl)) {
+      return true;
+    }
+    if (SHIHAB_GENERIC_JSON_VIDEO_URL_RX.test(mehediFinalUrl)) {
+      return true;
+    }
+    return false;
+  }
+
+  // 2. Hook window.fetch non-destructively (reads up to 128 KB of media clone ONLY when MSE active + LRU capped, plus gated HLS/DASH/JSON manifests)
   try {
     const mehediOrigFetch = window.fetch;
     if (typeof mehediOrigFetch === "function") {
@@ -2566,16 +2681,17 @@
             const mehediLowerCt = shihabCt.toLowerCase();
             const shihabClHdr = parseInt((shihabResp.headers && shihabResp.headers.get("content-length")) || "-1", 10);
 
-            const shihabIsExplicitManifest =
-              mehediLowerCt.includes("mpegurl") ||
-              mehediLowerCt.includes("dash+xml") ||
-              /\.(m3u8|m3u|mpd)(\?|#|$)/i.test(mehediFinalUrl) ||
-              /\/hls[-_]?manifest\//i.test(mehediFinalUrl);
+            const shihabIsExplicitManifest = shihabIsExplicitManifestRequest(mehediFinalUrl, mehediLowerCt);
 
             if (shihabLooksLikeMediaSliceUrl(mehediFinalUrl, mehediLowerCt)) {
               mehediRememberFetchedSlice(mehediFinalUrl, mehediLowerCt);
-              // Fingerprint binary fMP4/MP4 slices only (skip explicit manifests and text/* so we never double-clone!)
-              if (!shihabIsExplicitManifest && !mehediLowerCt.startsWith("text/")) {
+              // Fingerprint binary fMP4/MP4 slices ONLY when MediaSource is active and URL hasn't exceeded LRU index cap
+              if (
+                !shihabIsExplicitManifest &&
+                !mehediLowerCt.startsWith("text/") &&
+                shihabHasMediaSource &&
+                shihabCanIndexMediaUrlForMse(mehediFinalUrl, mehediLowerCt)
+              ) {
                 try {
                   const mehediMediaClone = shihabResp.clone();
                   if (mehediMediaClone.body && typeof mehediMediaClone.body.getReader === "function") {
@@ -2612,12 +2728,7 @@
               }
             }
 
-            const mehediIsJsonOrXml =
-              !mehediLowerCt.includes("text/event-stream") &&
-              (mehediLowerCt.includes("json") ||
-               mehediLowerCt.includes("xml") ||
-               mehediLowerCt.includes("javascript") ||
-               /\/(graphql|api\/v1\/|youtubei\/v1\/player|ajax\/bz|voyager\/api)/i.test(mehediFinalUrl));
+            const mehediIsJsonOrXml = shihabShouldInspectJsonOrXmlBody(mehediFinalUrl, mehediLowerCt);
 
             const shihabIsAmbiguousPlaylist =
               !shihabIsExplicitManifest &&
@@ -2669,22 +2780,45 @@
             }
             const mehediFinalUrl = this.responseURL || this.__shihabReqUrl || "";
             const shihabCt = (this.getResponseHeader && this.getResponseHeader("content-type")) || "";
-            if (shihabLooksLikeMediaSliceUrl(mehediFinalUrl, shihabCt)) {
-              mehediRememberFetchedSlice(mehediFinalUrl, shihabCt);
-              if (this.responseType === "arraybuffer" && this.response instanceof ArrayBuffer && this.response.byteLength >= 28) {
-                mehediIndexChunkBytesForUrl(mehediFinalUrl, new Uint8Array(this.response, 0, Math.min(196608, this.response.byteLength)), shihabCt);
+            const mehediLowerCt = shihabCt.toLowerCase();
+            if (shihabLooksLikeMediaSliceUrl(mehediFinalUrl, mehediLowerCt)) {
+              mehediRememberFetchedSlice(mehediFinalUrl, mehediLowerCt);
+              if (
+                shihabHasMediaSource &&
+                this.responseType === "arraybuffer" &&
+                this.response instanceof ArrayBuffer &&
+                this.response.byteLength >= 28 &&
+                shihabCanIndexMediaUrlForMse(mehediFinalUrl, mehediLowerCt)
+              ) {
+                mehediIndexChunkBytesForUrl(mehediFinalUrl, new Uint8Array(this.response, 0, Math.min(196608, this.response.byteLength)), mehediLowerCt);
               }
             }
-            if ((this.responseType === "" || this.responseType === "text") && typeof this.responseText === "string") {
-              mehediInspectTextBodyIfManifest(this.responseText, mehediFinalUrl, shihabCt);
-            } else if (this.responseType === "json" && this.response && typeof this.response === "object") {
-              shihabWalkJsonForMediaMetadata(this.response);
+            const shihabIsExplicitManifest = shihabIsExplicitManifestRequest(mehediFinalUrl, mehediLowerCt);
+            const shihabAllowJsonOrXml = shihabShouldInspectJsonOrXmlBody(mehediFinalUrl, mehediLowerCt);
+            const shihabIsAmbiguousXhrPlaylist =
+              !shihabIsExplicitManifest &&
+              !shihabAllowJsonOrXml &&
+              (mehediLowerCt === "" || mehediLowerCt.includes("text/plain") || mehediLowerCt.includes("octet-stream")) &&
+              /(m3u8|m3u|hls|manifest|playlist|master|index|chunklist|stream|video|media)/i.test(mehediFinalUrl);
+
+            if (this.responseType === "" || this.responseType === "text") {
+              // Gate URL & Content-Type BEFORE accessing this.responseText to avoid unnecessary UTF-16 decoding!
+              if (shihabIsExplicitManifest || shihabAllowJsonOrXml || shihabIsAmbiguousXhrPlaylist) {
+                const mehediTxt = this.responseText;
+                if (typeof mehediTxt === "string") {
+                  mehediInspectTextBodyIfManifest(mehediTxt, mehediFinalUrl, mehediLowerCt);
+                }
+              }
+            } else if (this.responseType === "json") {
+              if (shihabAllowJsonOrXml && this.response && typeof this.response === "object") {
+                shihabWalkJsonForMediaMetadata(this.response);
+              }
             } else if (this.responseType === "arraybuffer" && this.response instanceof ArrayBuffer && this.response.byteLength >= 20 && this.response.byteLength <= 524288) {
               // Some obfuscated HLS.js loaders request playlists with responseType="arraybuffer"
               const shihabHeadBytes = new Uint8Array(this.response, 0, Math.min(16, this.response.byteLength));
               if (shihabHeadBytes[0] === 0x23 && shihabHeadBytes[1] === 0x45 && shihabHeadBytes[2] === 0x58 && shihabHeadBytes[3] === 0x54) {
-                const mehediHlsStr = new TextDecoder("utf-8", { fatal: false }).decode(new Uint8Array(this.response));
-                mehediInspectTextBodyIfManifest(mehediHlsStr, mehediFinalUrl, shihabCt);
+                const mehediHlsStr = SHIHAB_UTF8_DECODER.decode(new Uint8Array(this.response));
+                mehediInspectTextBodyIfManifest(mehediHlsStr, mehediFinalUrl, mehediLowerCt);
               }
             }
           } catch (_) {}
@@ -2694,102 +2828,128 @@
     };
   } catch (_) {}
 
-  // 4. Scan SSR embedded <script type="application/json"> / ld+json + Shadow DOM live <video> elements
-  function shihabScanInitialDomPayloads() {
+  // 4. Scan SSR embedded <script type="application/json"> / ld+json (single JSON.parse, deferred via requestIdleCallback on non-video pages!) + Shadow DOM live <video> elements
+  function shihabExtractLdJsonContentUrls(shihabLd) {
     try {
-      if (window.ytInitialPlayerResponse && typeof window.ytInitialPlayerResponse === "object") {
-        mehediInspectYouTubePlayerResponse(window.ytInitialPlayerResponse);
+      const mehediRoots = Array.isArray(shihabLd) ? shihabLd : [shihabLd];
+      const mehediItems = [];
+      for (const shihabR of mehediRoots) {
+        if (!shihabR || typeof shihabR !== "object") continue;
+        mehediItems.push(shihabR);
+        if (Array.isArray(shihabR["@graph"])) {
+          for (const mehediG of shihabR["@graph"]) {
+            if (mehediG && typeof mehediG === "object") mehediItems.push(mehediG);
+          }
+        }
       }
+      const mehediParseLdDim = (shihabVal) => {
+        const mehediRawV = (shihabVal && typeof shihabVal === "object") ? (shihabVal.value || 0) : shihabVal;
+        const shihabParsedN = parseInt(String(mehediRawV || "0"), 10);
+        return Number.isFinite(shihabParsedN) && shihabParsedN > 0 ? shihabParsedN : 0;
+      };
+      const shihabLdRef = shihabGetSafeHttpReferer();
+      const mehediLdOrg = shihabGetSafeHttpOrigin();
+      for (const shihabEntry of mehediItems) {
+        const mehediCu = shihabEntry && typeof shihabEntry.contentUrl === "string" ? shihabEntry.contentUrl : "";
+        if (mehediCu.startsWith("http") && /\.(mp4|webm|mkv|mov|m4v|m3u8)(\?|#|$)/i.test(mehediCu)) {
+          const shihabCleanCu = mehediNormalizeHookMediaUrl(mehediCu);
+          if (shihabCleanCu) {
+            const mehediIsHlsCu = /\.m3u8(\?|#|$)/i.test(shihabCleanCu);
+            const shihabLdGrp = `ld:${shihabFnv1aStringHash(shihabExtractUrlPathKey(shihabCleanCu))}`;
+            const shihabLdW = mehediParseLdDim(shihabEntry.width);
+            const mehediLdH = mehediParseLdDim(shihabEntry.height);
+            const shihabLdSig = `ld:${shihabLdGrp}`;
+            if (!mehediEmittedManifestKeys.has(shihabLdSig)) {
+              shihabMarkEmittedManifestKey(shihabLdSig);
+              shihabPostToContentBridge("mehedi_manifest_streams", {
+                shihabStreams: [{
+                  shihabUrl: shihabCleanCu,
+                  mehediMimeType: mehediIsHlsCu ? "application/vnd.apple.mpegurl" : "video/mp4",
+                  shihabExt: mehediIsHlsCu ? "m3u8" : "mp4",
+                  mehediTrackRole: "progressive",
+                  shihabWidth: shihabLdW,
+                  mehediHeight: mehediLdH,
+                  shihabResolution: mehediHeightToStandardLabel(shihabLdW, mehediLdH),
+                  shihabSizeBytes: -1,
+                  shihabGroupKey: shihabLdGrp,
+                  mehediAltIds: [shihabLdGrp],
+                  mehediCapturedReferer: shihabLdRef,
+                  shihabOrigin: mehediLdOrg,
+                  shihabSkipBinaryProbe: mehediIsHlsCu,
+                  shihabTitleHint: String(shihabEntry.name || "")
+                }],
+                mehediGroupKey: shihabLdGrp,
+                shihabShortcode: "",
+                mehediAltIds: [shihabLdGrp],
+                mehediTitleHint: String(shihabEntry.name || "")
+              });
+            }
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
+  function shihabScanSsrJsonScripts() {
+    try {
       const mehediJsonScripts = document.querySelectorAll('script[type="application/json"], script[type="application/ld+json"], script#__UNIVERSAL_DATA_FOR_REHYDRATION__, script#SIGI_STATE, script#__NEXT_DATA__');
       for (const shihabScript of mehediJsonScripts) {
         if (shihabScript.__mehediScanned) continue;
         shihabScript.__mehediScanned = true;
         const mehediRaw = shihabScript.textContent || "";
-        if (
-          mehediRaw.length > 40 &&
-          mehediRaw.length < 6 * 1024 * 1024 &&
-          (mehediRaw.includes("video_dash_manifest") ||
-           mehediRaw.includes("dash_manifests") ||
-           mehediRaw.includes("manifest_xml") ||
-           mehediRaw.includes("progressive_urls") ||
-           mehediRaw.includes("video_versions") ||
-           mehediRaw.includes("browser_native_hd_url") ||
-           mehediRaw.includes("playable_url") ||
-           mehediRaw.includes("progressiveStreams") ||
-           mehediRaw.includes("adaptiveStreams") ||
-           mehediRaw.includes("bitrateInfo") ||
-           mehediRaw.includes("playAddr") ||
-           mehediRaw.includes("video_info") ||
-           mehediRaw.includes("contentUrl"))
-        ) {
-          mehediInspectTextBodyIfManifest(mehediRaw, location.href, "application/json");
-          // Also inspect Schema.org VideoObject contentUrl in application/ld+json (including @graph arrays)
-          if (mehediRaw.includes("contentUrl")) {
-            try {
-              const shihabLd = JSON.parse(mehediRaw);
-              const mehediRoots = Array.isArray(shihabLd) ? shihabLd : [shihabLd];
-              const mehediItems = [];
-              for (const shihabR of mehediRoots) {
-                if (!shihabR || typeof shihabR !== "object") continue;
-                mehediItems.push(shihabR);
-                if (Array.isArray(shihabR["@graph"])) {
-                  for (const mehediG of shihabR["@graph"]) {
-                    if (mehediG && typeof mehediG === "object") mehediItems.push(mehediG);
-                  }
-                }
-              }
-              const mehediParseLdDim = (shihabVal) => {
-                const mehediRawV = (shihabVal && typeof shihabVal === "object") ? (shihabVal.value || 0) : shihabVal;
-                const shihabParsedN = parseInt(String(mehediRawV || "0"), 10);
-                return Number.isFinite(shihabParsedN) && shihabParsedN > 0 ? shihabParsedN : 0;
-              };
-              const shihabLdRef = shihabGetSafeHttpReferer();
-              const mehediLdOrg = shihabGetSafeHttpOrigin();
-              for (const shihabEntry of mehediItems) {
-                const mehediCu = shihabEntry && typeof shihabEntry.contentUrl === "string" ? shihabEntry.contentUrl : "";
-                if (mehediCu.startsWith("http") && /\.(mp4|webm|mkv|mov|m4v|m3u8)(\?|#|$)/i.test(mehediCu)) {
-                  const shihabCleanCu = mehediNormalizeHookMediaUrl(mehediCu);
-                  if (shihabCleanCu) {
-                    const mehediIsHlsCu = /\.m3u8(\?|#|$)/i.test(shihabCleanCu);
-                    const shihabLdGrp = `ld:${shihabFnv1aStringHash(shihabExtractUrlPathKey(shihabCleanCu))}`;
-                    const shihabLdW = mehediParseLdDim(shihabEntry.width);
-                    const mehediLdH = mehediParseLdDim(shihabEntry.height);
-                    const shihabLdSig = `ld:${shihabLdGrp}`;
-                    if (!mehediEmittedManifestKeys.has(shihabLdSig)) {
-                      shihabMarkEmittedManifestKey(shihabLdSig);
-                      shihabPostToContentBridge("mehedi_manifest_streams", {
-                        shihabStreams: [{
-                          shihabUrl: shihabCleanCu,
-                          mehediMimeType: mehediIsHlsCu ? "application/vnd.apple.mpegurl" : "video/mp4",
-                          shihabExt: mehediIsHlsCu ? "m3u8" : "mp4",
-                          mehediTrackRole: "progressive",
-                          shihabWidth: shihabLdW,
-                          mehediHeight: mehediLdH,
-                          shihabResolution: mehediHeightToStandardLabel(shihabLdW, mehediLdH),
-                          shihabSizeBytes: -1,
-                          shihabGroupKey: shihabLdGrp,
-                          mehediAltIds: [shihabLdGrp],
-                          mehediCapturedReferer: shihabLdRef,
-                          shihabOrigin: mehediLdOrg,
-                          shihabSkipBinaryProbe: mehediIsHlsCu,
-                          shihabTitleHint: String(shihabEntry.name || "")
-                        }],
-                        mehediGroupKey: shihabLdGrp,
-                        shihabShortcode: "",
-                        mehediAltIds: [shihabLdGrp],
-                        mehediTitleHint: String(shihabEntry.name || "")
-                      });
-                    }
-                  }
-                }
-              }
-            } catch (_) {}
+        if (mehediRaw.length <= 40 || mehediRaw.length >= 6 * 1024 * 1024) continue;
+        const shihabHasContentUrl = mehediRaw.includes("contentUrl");
+        const shihabHasPlatformJson =
+          mehediRaw.includes("video_dash_manifest") ||
+          mehediRaw.includes("dash_manifests") ||
+          mehediRaw.includes("manifest_xml") ||
+          mehediRaw.includes("progressive_urls") ||
+          mehediRaw.includes("video_versions") ||
+          mehediRaw.includes("browser_native_hd_url") ||
+          mehediRaw.includes("playable_url") ||
+          mehediRaw.includes("progressiveStreams") ||
+          mehediRaw.includes("adaptiveStreams") ||
+          mehediRaw.includes("bitrateInfo") ||
+          mehediRaw.includes("playAddr") ||
+          mehediRaw.includes("video_info");
+
+        if (!shihabHasContentUrl && !shihabHasPlatformJson) continue;
+
+        if (shihabHasContentUrl) {
+          // Single JSON.parse for ld+json / contentUrl scripts (avoid double parse!)
+          try {
+            const shihabParsedLd = JSON.parse(mehediRaw.trimStart());
+            if (shihabHasPlatformJson) {
+              shihabWalkJsonForMediaMetadata(shihabParsedLd);
+            }
+            shihabExtractLdJsonContentUrls(shihabParsedLd);
+          } catch (_) {
+            if (shihabHasPlatformJson) {
+              mehediInspectTextBodyIfManifest(mehediRaw, location.href, "application/json");
+            }
           }
+        } else {
+          mehediInspectTextBodyIfManifest(mehediRaw, location.href, "application/json");
         }
+      }
+    } catch (_) {}
+  }
+
+  function shihabScanInitialDomPayloads(shihabForceImmediateScripts) {
+    try {
+      if (window.ytInitialPlayerResponse && typeof window.ytInitialPlayerResponse === "object") {
+        mehediInspectYouTubePlayerResponse(window.ytInitialPlayerResponse);
       }
       const shihabVideos = shihabCollectVideosDeepHook(document, []);
       for (const mehediVid of shihabVideos) {
         mehediInspectLiveDomVideoElement(mehediVid);
+      }
+      if (shihabForceImmediateScripts || shihabVideos.length > 0 || SHIHAB_IS_KNOWN_VIDEO_PLATFORM_HOST) {
+        shihabScanSsrJsonScripts();
+      } else if (typeof window.requestIdleCallback === "function") {
+        window.requestIdleCallback(() => { shihabScanSsrJsonScripts(); }, { timeout: 400 });
+      } else {
+        setTimeout(shihabScanSsrJsonScripts, 50);
       }
     } catch (_) {}
   }
@@ -2804,7 +2964,7 @@
           mehediKind: "shihab_eme_drm_detected",
           shihabPayload: { keySystem: String(mehediKeySystem || "EME") }
         },
-        "*"
+        shihabGetSafePostOrigin()
       );
     } catch (_) {}
   }
@@ -2838,6 +2998,14 @@
       (shihabEvt) => {
         const shihabTarget = (shihabEvt && typeof shihabEvt.composedPath === "function" ? shihabEvt.composedPath()[0] : shihabEvt.target) || (shihabEvt && shihabEvt.target);
         if (shihabTarget && shihabTarget.tagName === "VIDEO") {
+          if (mehediEvtName === "pointerover") {
+            const shihabNow = Date.now();
+            const mehediPrevHover = shihabPointerOverCooldownMap.get(shihabTarget) || 0;
+            if (shihabNow - mehediPrevHover < 2000) {
+              return;
+            }
+            shihabPointerOverCooldownMap.set(shihabTarget, shihabNow);
+          }
           if (shihabTarget.mediaKeys) {
             shihabNotifyEmeDrmDetected("video.mediaKeys");
           }
@@ -2849,16 +3017,16 @@
   }
 
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", shihabScanInitialDomPayloads, { once: true });
+    document.addEventListener("DOMContentLoaded", () => shihabScanInitialDomPayloads(false), { once: true });
   } else {
-    shihabScanInitialDomPayloads();
+    shihabScanInitialDomPayloads(false);
   }
   window.addEventListener("yt-navigate-finish", () => {
     mehediLastKnownHookHref = location.href;
     mehediEmittedManifestKeys.clear();
     mehediRecentManifestPayloads.length = 0;
     shihabRecentBlobBindings.clear();
-    setTimeout(shihabScanInitialDomPayloads, 250);
+    setTimeout(() => shihabScanInitialDomPayloads(true), 250);
   });
   window.addEventListener("message", (shihabEv) => {
     try {
@@ -2880,26 +3048,28 @@
         return;
       }
       if (shihabEv.data.__shihabMehediContentPing === true) {
-        mehediEmittedManifestKeys.clear();
-        const mehediScripts = document.querySelectorAll('script[type="application/json"], script[type="application/ld+json"], script#__UNIVERSAL_DATA_FOR_REHYDRATION__, script#SIGI_STATE, script#__NEXT_DATA__');
-        for (const shihabSc of mehediScripts) {
-          shihabSc.__mehediScanned = false;
-        }
-        // Only replay buffered manifests & exact MSE blob bindings on initial late-attach sync (NOT on user re-track, so narrowed/stale SPA history isn't resurrected!)
+        const shihabSafeOrigin = shihabGetSafePostOrigin();
+        // On initial sync, replay buffered manifests & exact MSE blob bindings ONLY (do NOT reset __mehediScanned or re-walk SSR scripts a second time!)
         if (shihabEv.data.shihabIsInitialSync === true) {
           for (const shihabPayload of mehediRecentManifestPayloads) {
             try {
-              window.postMessage({ __shihabMehediPageHook: true, mehediKind: "mehedi_manifest_streams", shihabPayload }, "*");
+              window.postMessage({ __shihabMehediPageHook: true, mehediKind: "mehedi_manifest_streams", shihabPayload }, shihabSafeOrigin);
             } catch (_) {}
           }
           for (const mehediBindPayload of shihabRecentBlobBindings.values()) {
             if (!mehediBindPayload || !mehediBindPayload.mehediExactByteMatch) continue;
             try {
-              window.postMessage({ __shihabMehediPageHook: true, mehediKind: "shihab_mse_blob_binding", shihabPayload: mehediBindPayload }, "*");
+              window.postMessage({ __shihabMehediPageHook: true, mehediKind: "shihab_mse_blob_binding", shihabPayload: mehediBindPayload }, shihabSafeOrigin);
             } catch (_) {}
           }
+          return;
         }
-        shihabScanInitialDomPayloads();
+        mehediEmittedManifestKeys.clear();
+        const mehediScripts = document.querySelectorAll('script[type="application/json"], script[type="application/ld+json"], script#__UNIVERSAL_DATA_FOR_REHYDRATION__, script#SIGI_STATE, script#__NEXT_DATA__');
+        for (const shihabSc of mehediScripts) {
+          shihabSc.__mehediScanned = false;
+        }
+        shihabScanInitialDomPayloads(true);
       }
     } catch (_) {}
   });

@@ -6,6 +6,7 @@ using System.IO.Compression;
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
+using System.Runtime.InteropServices.ComTypes;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -20,7 +21,78 @@ namespace ShihabMehediShared
     {
         private static readonly Regex GitHubSlugRegex = new Regex(
             @"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]{1,100}$",
-            RegexOptions.Compiled | RegexOptions.CultureInvariant);
+            RegexOptions.CultureInvariant);
+
+        private static readonly object CurrentProcessCacheLock = new object();
+        private static int _cachedCurrentProcessId;
+        private static string _cachedCurrentExePath;
+
+        internal static int CurrentProcessId
+        {
+            get
+            {
+                if (_cachedCurrentProcessId != 0) return _cachedCurrentProcessId;
+                lock (CurrentProcessCacheLock)
+                {
+                    if (_cachedCurrentProcessId == 0)
+                    {
+                        using (Process cur = Process.GetCurrentProcess())
+                        {
+                            _cachedCurrentProcessId = cur.Id;
+                            if (string.IsNullOrEmpty(_cachedCurrentExePath))
+                            {
+                                try
+                                {
+                                    ProcessModule mod = cur.MainModule;
+                                    if (mod != null && !string.IsNullOrWhiteSpace(mod.FileName))
+                                    {
+                                        _cachedCurrentExePath = Path.GetFullPath(mod.FileName);
+                                    }
+                                }
+                                catch { }
+                            }
+                        }
+                    }
+                    return _cachedCurrentProcessId;
+                }
+            }
+        }
+
+        internal static string CurrentExePath
+        {
+            get
+            {
+                if (!string.IsNullOrEmpty(_cachedCurrentExePath)) return _cachedCurrentExePath;
+                lock (CurrentProcessCacheLock)
+                {
+                    if (string.IsNullOrEmpty(_cachedCurrentExePath))
+                    {
+                        using (Process cur = Process.GetCurrentProcess())
+                        {
+                            _cachedCurrentProcessId = cur.Id;
+                            try
+                            {
+                                ProcessModule mod = cur.MainModule;
+                                if (mod != null && !string.IsNullOrWhiteSpace(mod.FileName))
+                                {
+                                    _cachedCurrentExePath = Path.GetFullPath(mod.FileName);
+                                }
+                            }
+                            catch { }
+                        }
+                        if (string.IsNullOrEmpty(_cachedCurrentExePath))
+                        {
+                            try
+                            {
+                                _cachedCurrentExePath = Path.GetFullPath(System.Reflection.Assembly.GetEntryAssembly().Location);
+                            }
+                            catch { _cachedCurrentExePath = string.Empty; }
+                        }
+                    }
+                    return _cachedCurrentExePath;
+                }
+            }
+        }
 
         private static readonly HashSet<string> WindowsReservedDeviceNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -31,25 +103,34 @@ namespace ShihabMehediShared
             "LPT\u00B9", "LPT\u00B2", "LPT\u00B3"
         };
 
+#if !SHIHAB_INSTALLER
         private static readonly HashSet<string> AllowedSystem32Tools = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             "cmd.exe",
             "explorer.exe",
-            "ie4uinit.exe",
-            "rundll32.exe",
-            "powershell.exe",
-            "conhost.exe"
+            "shutdown.exe"
         };
+#endif
 
         private const uint HANDLE_FLAG_INHERIT = 0x00000001u;
         private const int MOVEFILE_REPLACE_EXISTING = 0x1;
         private const int MOVEFILE_WRITE_THROUGH = 0x8;
+        private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000u;
 
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool SetHandleInformation(IntPtr hObject, uint dwMask, uint dwFlags);
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern bool MoveFileExW(string lpExistingFileName, string lpNewFileName, int dwFlags);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern IntPtr OpenProcess(uint dwDesiredAccess, bool bInheritHandle, int dwProcessId);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool QueryFullProcessImageNameW(IntPtr hProcess, uint dwFlags, StringBuilder lpExeName, ref int lpdwSize);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool CloseHandle(IntPtr hObject);
 
         internal static void DisableHandleInheritance(IntPtr handle)
         {
@@ -366,10 +447,173 @@ namespace ShihabMehediShared
             }
         }
 
+        internal static bool HasAnyReparsePointInPath(string targetPath)
+        {
+            if (string.IsNullOrWhiteSpace(targetPath) || targetPath.IndexOf('\0') >= 0)
+            {
+                return true;
+            }
+            try
+            {
+                string full = Path.GetFullPath(targetPath.Trim()).TrimEnd('\\', '/');
+                string root = Path.GetPathRoot(full);
+                string cursor = full;
+                while (!string.IsNullOrEmpty(cursor) &&
+                       !string.Equals(cursor, root, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (Directory.Exists(cursor) || File.Exists(cursor))
+                    {
+                        FileAttributes attr = File.GetAttributes(cursor);
+                        if ((attr & FileAttributes.ReparsePoint) != 0)
+                        {
+                            return true;
+                        }
+                    }
+                    string parent = Path.GetDirectoryName(cursor);
+                    if (string.IsNullOrEmpty(parent) || string.Equals(parent, cursor, StringComparison.OrdinalIgnoreCase))
+                    {
+                        break;
+                    }
+                    cursor = parent;
+                }
+                return false;
+            }
+            catch
+            {
+                return true;
+            }
+        }
+
+        internal static void SafeDeleteDirectoryNoFollow(string dirPath)
+        {
+            if (string.IsNullOrWhiteSpace(dirPath) || !Directory.Exists(dirPath))
+            {
+                return;
+            }
+            FileAttributes attr = File.GetAttributes(dirPath);
+            if ((attr & FileAttributes.ReparsePoint) != 0)
+            {
+                // Remove only the junction/symlink entry itself without descending into target
+                Directory.Delete(dirPath, false);
+                return;
+            }
+            string[] files = Directory.GetFiles(dirPath);
+            for (int i = 0; i < files.Length; i++)
+            {
+                try
+                {
+                    FileAttributes fAttr = File.GetAttributes(files[i]);
+                    if ((fAttr & FileAttributes.ReadOnly) != 0)
+                    {
+                        File.SetAttributes(files[i], fAttr & ~FileAttributes.ReadOnly);
+                    }
+                }
+                catch { }
+                File.Delete(files[i]);
+            }
+            string[] subdirs = Directory.GetDirectories(dirPath);
+            for (int i = 0; i < subdirs.Length; i++)
+            {
+                SafeDeleteDirectoryNoFollow(subdirs[i]);
+            }
+            Directory.Delete(dirPath, false);
+        }
+
+        internal static bool IsUncOrDevicePath(string rawPath)
+        {
+            if (string.IsNullOrWhiteSpace(rawPath))
+            {
+                return true;
+            }
+            string t = rawPath.Trim().Trim('"');
+            if (t.StartsWith("\\\\", StringComparison.Ordinal) || t.StartsWith("//", StringComparison.Ordinal))
+            {
+                return true;
+            }
+            Uri u;
+            if (Uri.TryCreate(t, UriKind.Absolute, out u) && u.IsUnc)
+            {
+                return true;
+            }
+            return false;
+        }
+
+        internal static string NormalizeSafeCaptureSaveDirectory(string rawDir)
+        {
+            if (string.IsNullOrWhiteSpace(rawDir) || ContainsControlOrNewline(rawDir) || IsUncOrDevicePath(rawDir))
+            {
+                return string.Empty;
+            }
+            try
+            {
+                string trimmed = rawDir.Trim().Trim('"');
+                if (!Path.IsPathRooted(trimmed))
+                {
+                    return string.Empty;
+                }
+                string full = Path.GetFullPath(trimmed).TrimEnd('\\', '/');
+                if (string.IsNullOrWhiteSpace(full) || full.Length < 4 || full[1] != ':')
+                {
+                    return string.Empty;
+                }
+                if (HasAnyReparsePointInPath(full))
+                {
+                    return string.Empty;
+                }
+
+                string appDataRoot = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "ShihabMehediIDM");
+                string exeBaseDir = AppDomain.CurrentDomain.BaseDirectory;
+                string[] blockedRoots = new string[]
+                {
+                    Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+                    Environment.GetFolderPath(Environment.SpecialFolder.System),
+                    Environment.GetFolderPath(Environment.SpecialFolder.SystemX86),
+                    Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                    Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+                    Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                    Environment.GetFolderPath(Environment.SpecialFolder.Startup),
+                    Environment.GetFolderPath(Environment.SpecialFolder.CommonStartup),
+                    appDataRoot
+                };
+                for (int i = 0; i < blockedRoots.Length; i++)
+                {
+                    string br = blockedRoots[i];
+                    if (string.IsNullOrWhiteSpace(br)) continue;
+                    string normBr = Path.GetFullPath(br).TrimEnd('\\', '/');
+                    if (string.Equals(full, normBr, StringComparison.OrdinalIgnoreCase) ||
+                        full.StartsWith(normBr + "\\", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return string.Empty;
+                    }
+                }
+                // Block writing directly beside mdm.exe (DLL sideloading), while allowing subdirectories
+                // in case a portable user placed mdm.exe inside a broad parent folder.
+                if (!string.IsNullOrWhiteSpace(exeBaseDir))
+                {
+                    string normExeBase = Path.GetFullPath(exeBaseDir).TrimEnd('\\', '/');
+                    if (string.Equals(full, normExeBase, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return string.Empty;
+                    }
+                }
+                return full;
+            }
+            catch
+            {
+                return string.Empty;
+            }
+        }
+
         internal static bool HasReparsePointUnderRoot(string rootDirectory, string targetFullPath)
         {
             string normRoot = NormalizeFullDirectoryPath(rootDirectory);
             if (string.IsNullOrEmpty(normRoot) || string.IsNullOrEmpty(targetFullPath))
+            {
+                return true;
+            }
+            if (HasAnyReparsePointInPath(normRoot))
             {
                 return true;
             }
@@ -676,6 +920,7 @@ namespace ShihabMehediShared
             return sb.ToString();
         }
 
+#if !SHIHAB_INSTALLER
         internal static string ResolveSystem32ToolPath(string toolName)
         {
             if (string.IsNullOrWhiteSpace(toolName) || !AllowedSystem32Tools.Contains(toolName.Trim()))
@@ -707,6 +952,42 @@ namespace ShihabMehediShared
             }
             return Path.Combine(@"C:\Windows\System32", cleanName);
         }
+#endif
+
+        internal static string QueryProcessImagePathLimited(int pid)
+        {
+            if (pid <= 0)
+            {
+                return string.Empty;
+            }
+            IntPtr hProc = IntPtr.Zero;
+            try
+            {
+                hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+                if (hProc == IntPtr.Zero)
+                {
+                    return string.Empty;
+                }
+                int cap = 1024;
+                StringBuilder sb = new StringBuilder(cap);
+                if (QueryFullProcessImageNameW(hProc, 0u, sb, ref cap) && cap > 0)
+                {
+                    return Path.GetFullPath(sb.ToString(0, cap));
+                }
+                return string.Empty;
+            }
+            catch
+            {
+                return string.Empty;
+            }
+            finally
+            {
+                if (hProc != IntPtr.Zero)
+                {
+                    try { CloseHandle(hProc); } catch { }
+                }
+            }
+        }
 
         internal static bool TryVerifyProcessIdentity(int pid, string expectedExeFullPath)
         {
@@ -717,20 +998,12 @@ namespace ShihabMehediShared
             try
             {
                 string normalizedExpected = Path.GetFullPath(expectedExeFullPath);
-                using (Process proc = Process.GetProcessById(pid))
+                string actualPath = QueryProcessImagePathLimited(pid);
+                if (string.IsNullOrWhiteSpace(actualPath))
                 {
-                    if (proc.HasExited)
-                    {
-                        return false;
-                    }
-                    ProcessModule mod = proc.MainModule;
-                    if (mod == null || string.IsNullOrWhiteSpace(mod.FileName))
-                    {
-                        return false;
-                    }
-                    string actualPath = Path.GetFullPath(mod.FileName);
-                    return string.Equals(actualPath, normalizedExpected, StringComparison.OrdinalIgnoreCase);
+                    return false;
                 }
+                return string.Equals(actualPath, normalizedExpected, StringComparison.OrdinalIgnoreCase);
             }
             catch
             {
@@ -814,7 +1087,7 @@ namespace ShihabMehediShared
         internal static bool TryValidateLocalTorrentFilePath(string rawPath, out string validatedFullPath)
         {
             validatedFullPath = string.Empty;
-            if (string.IsNullOrWhiteSpace(rawPath) || ContainsControlOrNewline(rawPath))
+            if (string.IsNullOrWhiteSpace(rawPath) || ContainsControlOrNewline(rawPath) || IsUncOrDevicePath(rawPath))
             {
                 return false;
             }
@@ -830,6 +1103,10 @@ namespace ShihabMehediShared
                     return false;
                 }
                 string full = Path.GetFullPath(trimmed);
+                if (IsUncOrDevicePath(full) || HasAnyReparsePointInPath(full))
+                {
+                    return false;
+                }
                 if (!File.Exists(full))
                 {
                     return false;
@@ -870,12 +1147,54 @@ namespace ShihabMehediShared
                 return false;
             }
             string host = (uri.Host ?? string.Empty).ToLowerInvariant();
-            return host == "github.com" ||
-                   host == "api.github.com" ||
-                   host == "objects.githubusercontent.com" ||
+            if (host == "github.com")
+            {
+                string path = uri.AbsolutePath ?? string.Empty;
+                return path.StartsWith("/sshihabb007/MHS-DOWNLOAD-MANAGER/", StringComparison.OrdinalIgnoreCase) ||
+                       string.Equals(path, "/sshihabb007/MHS-DOWNLOAD-MANAGER", StringComparison.OrdinalIgnoreCase) ||
+                       path.StartsWith("/yt-dlp/", StringComparison.OrdinalIgnoreCase) ||
+                       path.StartsWith("/BtbN/", StringComparison.OrdinalIgnoreCase) ||
+                       path.StartsWith("/GyanD/", StringComparison.OrdinalIgnoreCase) ||
+                       path.StartsWith("/denoland/", StringComparison.OrdinalIgnoreCase) ||
+                       path.StartsWith("/mikf/", StringComparison.OrdinalIgnoreCase);
+            }
+            if (host == "api.github.com")
+            {
+                string path = uri.AbsolutePath ?? string.Empty;
+                return path.StartsWith("/repos/sshihabb007/MHS-DOWNLOAD-MANAGER/", StringComparison.OrdinalIgnoreCase) ||
+                       path.StartsWith("/repos/yt-dlp/", StringComparison.OrdinalIgnoreCase) ||
+                       path.StartsWith("/repos/BtbN/", StringComparison.OrdinalIgnoreCase) ||
+                       path.StartsWith("/repos/denoland/", StringComparison.OrdinalIgnoreCase) ||
+                       path.StartsWith("/repos/mikf/", StringComparison.OrdinalIgnoreCase);
+            }
+            return host == "objects.githubusercontent.com" ||
                    host == "release-assets.githubusercontent.com" ||
-                   host == "github-releases.githubusercontent.com" ||
-                   host.EndsWith(".githubusercontent.com");
+                   host == "github-releases.githubusercontent.com";
+        }
+
+        internal static bool IsOfficialMhsReleaseHttpsUri(Uri uri)
+        {
+            if (uri == null ||
+                !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) ||
+                !string.IsNullOrEmpty(uri.UserInfo))
+            {
+                return false;
+            }
+            string host = (uri.Host ?? string.Empty).ToLowerInvariant();
+            if (host == "github.com")
+            {
+                string path = uri.AbsolutePath ?? string.Empty;
+                return path.StartsWith("/sshihabb007/MHS-DOWNLOAD-MANAGER/", StringComparison.OrdinalIgnoreCase) ||
+                       string.Equals(path, "/sshihabb007/MHS-DOWNLOAD-MANAGER", StringComparison.OrdinalIgnoreCase);
+            }
+            if (host == "api.github.com")
+            {
+                string path = uri.AbsolutePath ?? string.Empty;
+                return path.StartsWith("/repos/sshihabb007/MHS-DOWNLOAD-MANAGER/", StringComparison.OrdinalIgnoreCase);
+            }
+            return host == "objects.githubusercontent.com" ||
+                   host == "release-assets.githubusercontent.com" ||
+                   host == "github-releases.githubusercontent.com";
         }
 
         internal static bool IsDisallowedInternalIpAddress(IPAddress address)
@@ -1002,7 +1321,8 @@ namespace ShihabMehediShared
             }
             catch
             {
-                return false;
+                // Fail closed when DNS resolution cannot verify the host is public
+                return true;
             }
         }
 
@@ -1059,6 +1379,234 @@ namespace ShihabMehediShared
                     chars[i * 2 + 1] = (char)('a' + (b & 0x0F));
                 }
                 return new string(chars);
+            }
+        }
+
+        [DllImport("iphlpapi.dll", SetLastError = true)]
+        private static extern uint GetExtendedTcpTable(
+            IntPtr pTcpTable,
+            ref int dwOutBufLen,
+            bool sort,
+            int ipVersion,
+            int tblClass,
+            uint reserved);
+
+        internal static bool TryGetLoopbackListenerPid(int port, out int owningPid)
+        {
+            owningPid = 0;
+            if (port <= 0 || port > 65535) return false;
+            const int AF_INET = 2;
+            const int TCP_TABLE_OWNER_PID_LISTENER = 3;
+            const uint ERROR_INSUFFICIENT_BUFFER = 122u;
+            for (int attempt = 0; attempt < 2; attempt++)
+            {
+                int bufSize = 0;
+                uint res = GetExtendedTcpTable(IntPtr.Zero, ref bufSize, false, AF_INET, TCP_TABLE_OWNER_PID_LISTENER, 0u);
+                if (res != ERROR_INSUFFICIENT_BUFFER && res != 0u) return false;
+                if (bufSize < 4 || bufSize > 16 * 1024 * 1024) return false;
+
+                IntPtr buf = Marshal.AllocHGlobal(bufSize);
+                try
+                {
+                    res = GetExtendedTcpTable(buf, ref bufSize, false, AF_INET, TCP_TABLE_OWNER_PID_LISTENER, 0u);
+                    if (res == ERROR_INSUFFICIENT_BUFFER) continue;
+                    if (res != 0u) return false;
+                    int count = Marshal.ReadInt32(buf, 0);
+                    int maxRows = (bufSize - 4) / 24;
+                    if (count < 0) count = 0;
+                    if (count > maxRows) count = maxRows;
+                    for (int i = 0; i < count; i++)
+                    {
+                        int rowOff = 4 + i * 24;
+                        uint localAddr = unchecked((uint)Marshal.ReadInt32(buf, rowOff + 4));
+                        uint localPortRaw = unchecked((uint)Marshal.ReadInt32(buf, rowOff + 8));
+                        int pid = Marshal.ReadInt32(buf, rowOff + 20);
+                        int hostPort = (int)(((localPortRaw & 0xFFu) << 8) | ((localPortRaw >> 8) & 0xFFu));
+                        if (hostPort == port && (localAddr == 0x0100007Fu || localAddr == 0u) && pid > 0)
+                        {
+                            owningPid = pid;
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+                catch
+                {
+                    return false;
+                }
+                finally
+                {
+                    Marshal.FreeHGlobal(buf);
+                }
+            }
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Strongly-typed Win32 Shell COM (.lnk) helper using IShellLinkW + IPersistFile.
+    /// Avoids dynamic WScript.Shell scripting host automation.
+    /// </summary>
+    internal static class ShihabShellLinkHelper
+    {
+        [ComImport]
+        [Guid("00021401-0000-0000-C000-000000000046")]
+        private class ShellLinkCoClass
+        {
+        }
+
+        [ComImport]
+        [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        [Guid("000214F9-0000-0000-C000-000000000046")]
+        private interface IShellLinkW
+        {
+            void GetPath([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszFile, int cchMaxPath, IntPtr pfd, uint fFlags);
+            void GetIDList(out IntPtr ppidl);
+            void SetIDList(IntPtr pidl);
+            void GetDescription([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszName, int cchMaxName);
+            void SetDescription([MarshalAs(UnmanagedType.LPWStr)] string pszName);
+            void GetWorkingDirectory([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszDir, int cchMaxPath);
+            void SetWorkingDirectory([MarshalAs(UnmanagedType.LPWStr)] string pszDir);
+            void GetArguments([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszArgs, int cchMaxPath);
+            void SetArguments([MarshalAs(UnmanagedType.LPWStr)] string pszArgs);
+            void GetHotkey(out short pwHotkey);
+            void SetHotkey(short wHotkey);
+            void GetShowCmd(out int piShowCmd);
+            void SetShowCmd(int iShowCmd);
+            void GetIconLocation([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszIconPath, int cchIconPath, out int piIcon);
+            void SetIconLocation([MarshalAs(UnmanagedType.LPWStr)] string pszIconPath, int iIcon);
+            void SetRelativePath([MarshalAs(UnmanagedType.LPWStr)] string pszPathRel, uint dwReserved);
+            void Resolve(IntPtr hwnd, uint fFlags);
+            void SetPath([MarshalAs(UnmanagedType.LPWStr)] string pszFile);
+        }
+
+        private const uint SLGP_RAWPATH = 0x0004u;
+        private const int STGM_READ = 0x00000000;
+
+        internal static string TryGetShortcutTargetPath(string lnkPath)
+        {
+            if (string.IsNullOrWhiteSpace(lnkPath) || !File.Exists(lnkPath)) return string.Empty;
+            if (ShihabProcessAndPathSafety.HasAnyReparsePointInPath(lnkPath)) return string.Empty;
+
+            object linkObj = null;
+            try
+            {
+                linkObj = new ShellLinkCoClass();
+                IPersistFile pf = (IPersistFile)linkObj;
+                pf.Load(lnkPath, STGM_READ);
+                IShellLinkW link = (IShellLinkW)linkObj;
+                StringBuilder sb = new StringBuilder(1024);
+                link.GetPath(sb, sb.Capacity, IntPtr.Zero, SLGP_RAWPATH);
+                string raw = sb.ToString().Trim();
+                if (string.IsNullOrEmpty(raw))
+                {
+                    sb.Length = 0;
+                    link.GetPath(sb, sb.Capacity, IntPtr.Zero, 0u);
+                    raw = sb.ToString().Trim();
+                }
+                return string.IsNullOrEmpty(raw) ? string.Empty : Path.GetFullPath(raw);
+            }
+            catch
+            {
+                return string.Empty;
+            }
+            finally
+            {
+                if (linkObj != null && Marshal.IsComObject(linkObj))
+                {
+                    try { Marshal.FinalReleaseComObject(linkObj); } catch { }
+                }
+            }
+        }
+
+        internal static bool CreateOrUpdateShortcut(
+            string lnkPath,
+            string targetPath,
+            string arguments,
+            string workingDir,
+            string description,
+            string iconPath,
+            int iconIndex)
+        {
+            if (string.IsNullOrWhiteSpace(lnkPath) || string.IsNullOrWhiteSpace(targetPath)) return false;
+            if (ShihabProcessAndPathSafety.HasAnyReparsePointInPath(lnkPath)) return false;
+
+            object linkObj = null;
+            try
+            {
+                linkObj = new ShellLinkCoClass();
+                IShellLinkW link = (IShellLinkW)linkObj;
+                link.SetPath(targetPath);
+                if (!string.IsNullOrEmpty(arguments))
+                {
+                    link.SetArguments(arguments);
+                }
+                if (!string.IsNullOrEmpty(workingDir))
+                {
+                    link.SetWorkingDirectory(workingDir);
+                }
+                if (!string.IsNullOrEmpty(description))
+                {
+                    link.SetDescription(description);
+                }
+                if (!string.IsNullOrEmpty(iconPath))
+                {
+                    link.SetIconLocation(iconPath, iconIndex);
+                }
+                IPersistFile pf = (IPersistFile)linkObj;
+                pf.Save(lnkPath, true);
+                try { File.SetLastWriteTimeUtc(lnkPath, DateTime.UtcNow); } catch { }
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+            finally
+            {
+                if (linkObj != null && Marshal.IsComObject(linkObj))
+                {
+                    try { Marshal.FinalReleaseComObject(linkObj); } catch { }
+                }
+            }
+        }
+
+        internal static bool RefreshShortcutIconLocation(string lnkPath, string targetExePath, int iconIndex)
+        {
+            if (string.IsNullOrWhiteSpace(lnkPath) || string.IsNullOrWhiteSpace(targetExePath) || !File.Exists(lnkPath)) return false;
+            if (ShihabProcessAndPathSafety.HasAnyReparsePointInPath(lnkPath)) return false;
+
+            object linkObj = null;
+            try
+            {
+                string normExe = Path.GetFullPath(targetExePath);
+                linkObj = new ShellLinkCoClass();
+                IPersistFile pf = (IPersistFile)linkObj;
+                pf.Load(lnkPath, STGM_READ);
+                IShellLinkW link = (IShellLinkW)linkObj;
+                StringBuilder sb = new StringBuilder(1024);
+                link.GetPath(sb, sb.Capacity, IntPtr.Zero, 0u);
+                string scTarget = sb.ToString().Trim();
+                if (!string.IsNullOrEmpty(scTarget) &&
+                    string.Equals(Path.GetFullPath(scTarget), normExe, StringComparison.OrdinalIgnoreCase))
+                {
+                    link.SetIconLocation(normExe, iconIndex);
+                    pf.Save(lnkPath, true);
+                    try { File.SetLastWriteTimeUtc(lnkPath, DateTime.UtcNow); } catch { }
+                    return true;
+                }
+                return false;
+            }
+            catch
+            {
+                return false;
+            }
+            finally
+            {
+                if (linkObj != null && Marshal.IsComObject(linkObj))
+                {
+                    try { Marshal.FinalReleaseComObject(linkObj); } catch { }
+                }
             }
         }
     }

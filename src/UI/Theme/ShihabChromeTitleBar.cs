@@ -229,7 +229,6 @@ namespace ShihabMehediIDM
         {
             _shihabWindowActive = true;
             base.OnActivated(e);
-            ApplyDwmChromeAttributes();
             Invalidate(false);
         }
 
@@ -237,7 +236,6 @@ namespace ShihabMehediIDM
         {
             _shihabWindowActive = false;
             base.OnDeactivate(e);
-            ApplyDwmChromeAttributes();
             Invalidate(false);
         }
 
@@ -250,10 +248,6 @@ namespace ShihabMehediIDM
             if (Padding != targetPad)
             {
                 Padding = targetPad;
-            }
-            if (WindowState != FormWindowState.Minimized)
-            {
-                ApplyDwmChromeAttributes();
             }
         }
 
@@ -696,9 +690,9 @@ namespace ShihabMehediIDM
 
             int downSlot = _pressedSlot;
             _pressedSlot = -1;
+            if (downSlot < 0) return;
             Invalidate();
 
-            if (downSlot < 0) return;
             if (HitTestSlot(e.Location) != downSlot) return;
 
             if (downSlot == 0)

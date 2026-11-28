@@ -238,6 +238,15 @@ namespace ShihabMehediIDM
             catch { return -1L; }
         }
 
+        private static bool MatchesDownloadIdStrict(string candidateId, string requestedId, bool allowAllWildcard)
+        {
+            if (string.IsNullOrEmpty(candidateId) || string.IsNullOrWhiteSpace(requestedId)) return false;
+            string trimmed = requestedId.Trim();
+            if (allowAllWildcard && string.Equals(trimmed, "all", StringComparison.OrdinalIgnoreCase)) return true;
+            if (string.Equals(candidateId, trimmed, StringComparison.OrdinalIgnoreCase)) return true;
+            return trimmed.Length >= 8 && candidateId.StartsWith(trimmed, StringComparison.OrdinalIgnoreCase);
+        }
+
         private static string ExecuteMcpToolCall(
             ShihabStateStore store,
             MehediAppConfiguration cfg,
@@ -331,7 +340,7 @@ namespace ShihabMehediIDM
                 int count = 0;
                 for (int i = 0; i < items.Count; i++)
                 {
-                    if (id == "all" || items[i].ShihabId.StartsWith(id, StringComparison.OrdinalIgnoreCase))
+                    if (MatchesDownloadIdStrict(items[i].ShihabId, id, true))
                     {
                         items[i].SetMehediStatusEnum(ShihabDownloadStatus.ShihabPaused, "Paused");
                         count++;
@@ -364,7 +373,7 @@ namespace ShihabMehediIDM
                     if (items[i].GetShihabStatusEnum() == ShihabDownloadStatus.ShihabCompleted) continue;
                     bool matches = (toolName == "start_queue" || toolName == "stop_queue")
                         ? (string.Equals(queueName, "all", StringComparison.OrdinalIgnoreCase) || string.Equals(items[i].MehediQueueName ?? "", queueName, StringComparison.OrdinalIgnoreCase))
-                        : (id == "all" || items[i].ShihabId.StartsWith(id, StringComparison.OrdinalIgnoreCase));
+                        : MatchesDownloadIdStrict(items[i].ShihabId, id, true);
                     if (matches)
                     {
                         if (toolName == "stop_queue") items[i].SetMehediStatusEnum(ShihabDownloadStatus.ShihabPaused, "Paused");
@@ -382,6 +391,10 @@ namespace ShihabMehediIDM
                 string id = ShihabJsonCodec.GetString(args, "id");
                 bool delFile = ShihabJsonCodec.GetBool(args, "deleteFile", false);
                 if (string.IsNullOrWhiteSpace(id)) return "Error: id is required.";
+                if (delFile && string.Equals(id.Trim(), "all", StringComparison.OrdinalIgnoreCase))
+                {
+                    return "Error: explicit download IDs are required for destructive disk deletion; wildcard 'all' is disallowed when deleteFile=true.";
+                }
                 Dictionary<string, object> payload = new Dictionary<string, object>();
                 payload["action"] = delFile ? "delete" : "remove";
                 payload["id"] = id;
@@ -393,7 +406,7 @@ namespace ShihabMehediIDM
                 int removed = 0;
                 for (int i = items.Count - 1; i >= 0; i--)
                 {
-                    if (items[i].ShihabId.StartsWith(id, StringComparison.OrdinalIgnoreCase))
+                    if (MatchesDownloadIdStrict(items[i].ShihabId, id, !delFile))
                     {
                         if (delFile)
                         {
@@ -638,7 +651,8 @@ namespace ShihabMehediIDM
             }
             ShihabCategoryRule cat = cfg.ResolveMehediCategoryForFile(item.ShihabFileName);
             item.ShihabCategoryName = !string.IsNullOrWhiteSpace(categoryName) ? categoryName.Trim() : cat.ShihabName;
-            item.MehediSaveDirectory = !string.IsNullOrWhiteSpace(saveDir) ? saveDir.Trim() : cat.ShihabDefaultFolder;
+            string safeSaveDir = ShihabProcessAndPathSafety.NormalizeSafeCaptureSaveDirectory(saveDir);
+            item.MehediSaveDirectory = !string.IsNullOrWhiteSpace(safeSaveDir) ? safeSaveDir : cat.ShihabDefaultFolder;
             item.MehediQueueName = !string.IsNullOrWhiteSpace(queueName) ? queueName.Trim() : "Main Download Queue";
             item.SetMehediStatusEnum(ShihabDownloadStatus.ShihabQueued, "Queued");
             items.Insert(0, item);
@@ -1106,6 +1120,11 @@ namespace ShihabMehediIDM
             if ((cmd == "pause" || cmd == "start" || cmd == "resume" || cmd == "remove" || cmd == "delete") && cleaned.Count > 1)
             {
                 string targetId = cleaned[1];
+                if (cmd == "delete" && string.Equals((targetId ?? "").Trim(), "all", StringComparison.OrdinalIgnoreCase))
+                {
+                    Console.Error.WriteLine("Explicit download IDs are required for destructive 'delete'; wildcard 'all' is disallowed.");
+                    return 1;
+                }
                 string liveResp;
                 Dictionary<string, object> actObj = new Dictionary<string, object>();
                 actObj["action"] = cmd;
@@ -1119,7 +1138,7 @@ namespace ShihabMehediIDM
                 List<ShihabDownloadItem> items = store.LoadMehediDownloads();
                 for (int i = items.Count - 1; i >= 0; i--)
                 {
-                    if (targetId == "all" || items[i].ShihabId.StartsWith(targetId, StringComparison.OrdinalIgnoreCase))
+                    if (MatchesDownloadIdStrict(items[i].ShihabId, targetId, cmd != "delete"))
                     {
                         if (cmd == "pause") items[i].SetMehediStatusEnum(ShihabDownloadStatus.ShihabPaused, "Paused");
                         else if (cmd == "start" || cmd == "resume") items[i].SetMehediStatusEnum(ShihabDownloadStatus.ShihabQueued, "Queued");

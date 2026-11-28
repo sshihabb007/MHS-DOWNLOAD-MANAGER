@@ -18,6 +18,28 @@ namespace ShihabMehediIDM
         private int _mehediHoveredRowIndex = -1;
         private readonly ImageList _shihabRowHeightScaler;
 
+        // Cached theme-keyed GDI+ objects for DrawShihabTransferGridCell & transfer header
+        private bool _gridGdiInitialized;
+        private bool _gridGdiDarkMode;
+        private int _gridGdiThemeVersion = -1;
+        private SolidBrush _gridBaseBgBrush;
+        private SolidBrush _gridHoverBgBrush;
+        private SolidBrush _gridSelectedBgBrush;
+        private Pen _gridHorizPen;
+        private Pen _gridHorizSelectedPen;
+        private Pen _gridVertPen;
+        private SolidBrush _gridTrackBrush;
+        private SolidBrush _gridProgDoneBrush;
+        private SolidBrush _gridProgPausedBrush;
+        private SolidBrush _gridProgActiveBrush;
+        private SolidBrush _gridHdrBgBrush;
+        private Pen _gridHdrLinePen;
+        private Color _gridIdxTextColor;
+        private Color _gridNameTextColor;
+        private Color _gridPctTextColor;
+        private Color _gridDefaultTextColor;
+        private Color _gridOtherStatusTextColor;
+
         public bool ShihabSpaciousRows
         {
             get { return _shihabSpaciousRows; }
@@ -66,11 +88,82 @@ namespace ShihabMehediIDM
             SmallImageList = _shihabRowHeightScaler;
         }
 
+        private void EnsureTransferGridGdiCache()
+        {
+            int curVer = ShihabThemePalette.ThemePaletteVersion;
+            if (_gridGdiInitialized && _gridGdiDarkMode == MehediDarkMode && _gridGdiThemeVersion == curVer)
+            {
+                return;
+            }
+
+            DisposeTransferGridGdiCache();
+
+            bool dark = MehediDarkMode;
+            Color baseBg = ShihabThemePalette.GetMehediWindowBg(dark);
+            Color surfBg = ShihabThemePalette.GetShihabSurfaceBg(dark);
+            Color accentCol = ShihabThemePalette.GetShihabAccentBlue();
+            Color borderCol = ShihabThemePalette.GetShihabBorder(dark);
+
+            Color selectedFill = dark
+                ? ShihabThemePalette.BlendThemeColor(baseBg, accentCol, 0.22)
+                : Color.FromArgb(219, 234, 254);
+            Color hoverFill = dark ? surfBg : Color.FromArgb(241, 245, 249);
+            Color selectedHoriz = ShihabThemePalette.BlendThemeColor(borderCol, accentCol, 0.45);
+            Color vertLine = ShihabThemePalette.BlendThemeColor(baseBg, borderCol, 0.65);
+            Color trackCol = dark ? Color.FromArgb(35, 40, 50) : Color.FromArgb(220, 226, 236);
+            Color hdrBg = dark ? Color.FromArgb(24, 27, 33) : Color.FromArgb(238, 242, 247);
+            Color hdrBorder = dark ? Color.FromArgb(36, 40, 50) : Color.FromArgb(206, 214, 224);
+
+            _gridBaseBgBrush = new SolidBrush(baseBg);
+            _gridHoverBgBrush = new SolidBrush(hoverFill);
+            _gridSelectedBgBrush = new SolidBrush(selectedFill);
+            _gridHorizPen = new Pen(borderCol);
+            _gridHorizSelectedPen = new Pen(selectedHoriz);
+            _gridVertPen = new Pen(vertLine);
+            _gridTrackBrush = new SolidBrush(trackCol);
+            _gridProgDoneBrush = new SolidBrush(Color.FromArgb(16, 185, 129));
+            _gridProgPausedBrush = new SolidBrush(Color.FromArgb(245, 158, 11));
+            _gridProgActiveBrush = new SolidBrush(Color.FromArgb(13, 116, 231));
+            _gridHdrBgBrush = new SolidBrush(hdrBg);
+            _gridHdrLinePen = new Pen(hdrBorder);
+
+            _gridIdxTextColor = ShihabThemePalette.GetMehediMutedText(dark);
+            _gridNameTextColor = ShihabThemePalette.GetShihabPrimaryText(dark);
+            _gridPctTextColor = dark ? Color.FromArgb(146, 155, 174) : Color.FromArgb(71, 85, 105);
+            _gridDefaultTextColor = dark ? Color.FromArgb(136, 145, 165) : Color.FromArgb(71, 85, 105);
+            _gridOtherStatusTextColor = dark ? Color.FromArgb(156, 163, 178) : Color.FromArgb(51, 65, 85);
+
+            _gridGdiDarkMode = dark;
+            _gridGdiThemeVersion = curVer;
+            _gridGdiInitialized = true;
+        }
+
+        private void DisposeTransferGridGdiCache()
+        {
+            if (_gridBaseBgBrush != null) { _gridBaseBgBrush.Dispose(); _gridBaseBgBrush = null; }
+            if (_gridHoverBgBrush != null) { _gridHoverBgBrush.Dispose(); _gridHoverBgBrush = null; }
+            if (_gridSelectedBgBrush != null) { _gridSelectedBgBrush.Dispose(); _gridSelectedBgBrush = null; }
+            if (_gridHorizPen != null) { _gridHorizPen.Dispose(); _gridHorizPen = null; }
+            if (_gridHorizSelectedPen != null) { _gridHorizSelectedPen.Dispose(); _gridHorizSelectedPen = null; }
+            if (_gridVertPen != null) { _gridVertPen.Dispose(); _gridVertPen = null; }
+            if (_gridTrackBrush != null) { _gridTrackBrush.Dispose(); _gridTrackBrush = null; }
+            if (_gridProgDoneBrush != null) { _gridProgDoneBrush.Dispose(); _gridProgDoneBrush = null; }
+            if (_gridProgPausedBrush != null) { _gridProgPausedBrush.Dispose(); _gridProgPausedBrush = null; }
+            if (_gridProgActiveBrush != null) { _gridProgActiveBrush.Dispose(); _gridProgActiveBrush = null; }
+            if (_gridHdrBgBrush != null) { _gridHdrBgBrush.Dispose(); _gridHdrBgBrush = null; }
+            if (_gridHdrLinePen != null) { _gridHdrLinePen.Dispose(); _gridHdrLinePen = null; }
+            _gridGdiInitialized = false;
+        }
+
         protected override void Dispose(bool shihabDisposing)
         {
-            if (shihabDisposing && _shihabRowHeightScaler != null)
+            if (shihabDisposing)
             {
-                _shihabRowHeightScaler.Dispose();
+                DisposeTransferGridGdiCache();
+                if (_shihabRowHeightScaler != null)
+                {
+                    _shihabRowHeightScaler.Dispose();
+                }
             }
             base.Dispose(shihabDisposing);
         }
@@ -118,15 +211,10 @@ namespace ShihabMehediIDM
 
             if (_mehediTransferGridMode)
             {
-                Color shihabGridHdrBg = MehediDarkMode ? Color.FromArgb(24, 27, 33) : Color.FromArgb(238, 242, 247);
-                Color mehediGridBorder = MehediDarkMode ? Color.FromArgb(36, 40, 50) : Color.FromArgb(206, 214, 224);
-                using (SolidBrush shihabHdrFill = new SolidBrush(shihabGridHdrBg))
-                using (Pen mehediHdrLine = new Pen(mehediGridBorder))
-                {
-                    mehediG.FillRectangle(shihabHdrFill, shihabBounds);
-                    mehediG.DrawLine(mehediHdrLine, shihabBounds.Left, shihabBounds.Bottom - 1, shihabBounds.Right, shihabBounds.Bottom - 1);
-                    mehediG.DrawLine(mehediHdrLine, shihabBounds.Right - 1, shihabBounds.Top, shihabBounds.Right - 1, shihabBounds.Bottom - 1);
-                }
+                EnsureTransferGridGdiCache();
+                mehediG.FillRectangle(_gridHdrBgBrush, shihabBounds);
+                mehediG.DrawLine(_gridHdrLinePen, shihabBounds.Left, shihabBounds.Bottom - 1, shihabBounds.Right, shihabBounds.Bottom - 1);
+                mehediG.DrawLine(_gridHdrLinePen, shihabBounds.Right - 1, shihabBounds.Top, shihabBounds.Right - 1, shihabBounds.Bottom - 1);
 
                 string mehediUpperTitle = (shihabHdrArgs.Header != null && shihabHdrArgs.Header.Text != null)
                     ? shihabHdrArgs.Header.Text.ToUpperInvariant()
@@ -468,39 +556,16 @@ namespace ShihabMehediIDM
             bool mehediSelected,
             bool shihabHovered)
         {
-            Color baseBg = ShihabThemePalette.GetMehediWindowBg(MehediDarkMode);
-            Color surfBg = ShihabThemePalette.GetShihabSurfaceBg(MehediDarkMode);
-            Color accentCol = ShihabThemePalette.GetShihabAccentBlue();
-            Color shihabRowFill;
-            if (mehediSelected)
-            {
-                shihabRowFill = MehediDarkMode
-                    ? ShihabThemePalette.BlendThemeColor(baseBg, accentCol, 0.22)
-                    : Color.FromArgb(219, 234, 254);
-            }
-            else if (shihabHovered)
-            {
-                shihabRowFill = MehediDarkMode ? surfBg : Color.FromArgb(241, 245, 249);
-            }
-            else
-            {
-                shihabRowFill = baseBg;
-            }
+            EnsureTransferGridGdiCache();
 
-            Color borderCol = ShihabThemePalette.GetShihabBorder(MehediDarkMode);
-            Color mehediHorizLine = mehediSelected
-                ? ShihabThemePalette.BlendThemeColor(borderCol, accentCol, 0.45)
-                : borderCol;
-            Color shihabVertLine = ShihabThemePalette.BlendThemeColor(baseBg, borderCol, 0.65);
+            SolidBrush mehediFillBr = mehediSelected
+                ? _gridSelectedBgBrush
+                : (shihabHovered ? _gridHoverBgBrush : _gridBaseBgBrush);
+            Pen shihabRowPen = mehediSelected ? _gridHorizSelectedPen : _gridHorizPen;
 
-            using (SolidBrush mehediFillBr = new SolidBrush(shihabRowFill))
-            using (Pen shihabRowPen = new Pen(mehediHorizLine))
-            using (Pen mehediColPen = new Pen(shihabVertLine))
-            {
-                mehediG.FillRectangle(mehediFillBr, shihabCell);
-                mehediG.DrawLine(shihabRowPen, shihabCell.Left, shihabCell.Bottom - 1, shihabCell.Right, shihabCell.Bottom - 1);
-                mehediG.DrawLine(mehediColPen, shihabCell.Right - 1, shihabCell.Top, shihabCell.Right - 1, shihabCell.Bottom - 1);
-            }
+            mehediG.FillRectangle(mehediFillBr, shihabCell);
+            mehediG.DrawLine(shihabRowPen, shihabCell.Left, shihabCell.Bottom - 1, shihabCell.Right, shihabCell.Bottom - 1);
+            mehediG.DrawLine(_gridVertPen, shihabCell.Right - 1, shihabCell.Top, shihabCell.Right - 1, shihabCell.Bottom - 1);
 
             string mehediCellText = shihabSubArgs.SubItem != null ? (shihabSubArgs.SubItem.Text ?? "") : "";
             ShihabDownloadItem shihabDl = shihabSubArgs.Item != null ? (shihabSubArgs.Item.Tag as ShihabDownloadItem) : null;
@@ -508,27 +573,25 @@ namespace ShihabMehediIDM
 
             if (shihabCol == 0)
             {
-                Color mehediIdxCol = ShihabThemePalette.GetMehediMutedText(MehediDarkMode);
                 TextRenderer.DrawText(
                     mehediG,
                     mehediCellText,
                     ShihabThemePalette.UiRegular86Font,
                     shihabCell,
-                    mehediIdxCol,
+                    _gridIdxTextColor,
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
                 return;
             }
 
             if (shihabCol == 1)
             {
-                Color mehediNameCol = ShihabThemePalette.GetShihabPrimaryText(MehediDarkMode);
                 Rectangle shihabNameBounds = new Rectangle(shihabCell.X + 10, shihabCell.Y, Math.Max(4, shihabCell.Width - 16), shihabCell.Height);
                 TextRenderer.DrawText(
                     mehediG,
                     mehediCellText,
                     ShihabThemePalette.UiBold9Font,
                     shihabNameBounds,
-                    mehediNameCol,
+                    _gridNameTextColor,
                     TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
                 return;
             }
@@ -543,35 +606,25 @@ namespace ShihabMehediIDM
                 }
 
                 Rectangle mehediTrack = new Rectangle(shihabCell.X + 10, shihabCell.Y + shihabCell.Height - 10, Math.Max(14, shihabCell.Width - 20), 4);
-                Color shihabTrackCol = MehediDarkMode ? Color.FromArgb(35, 40, 50) : Color.FromArgb(220, 226, 236);
-                using (GraphicsPath mehediTrackPath = ShihabThemePalette.CreateShihabRoundedRect(mehediTrack, 2))
-                using (SolidBrush shihabTrackBr = new SolidBrush(shihabTrackCol))
-                {
-                    mehediG.FillPath(shihabTrackBr, mehediTrackPath);
-                }
+                mehediG.FillRectangle(_gridTrackBrush, mehediTrack);
 
                 if (shihabPct > 0.005)
                 {
                     int mehediFillW = Math.Max(4, (int)Math.Round(mehediTrack.Width * Math.Min(1.0, shihabPct)));
                     Rectangle shihabBarFillRect = new Rectangle(mehediTrack.X, mehediTrack.Y, Math.Min(mehediTrack.Width, mehediFillW), mehediTrack.Height);
-                    Color mehediBarCol = mehediSt == ShihabDownloadStatus.ShihabCompleted
-                        ? Color.FromArgb(16, 185, 129)
-                        : (mehediSt == ShihabDownloadStatus.ShihabPaused ? Color.FromArgb(245, 158, 11) : Color.FromArgb(13, 116, 231));
-                    using (GraphicsPath shihabFillPath = ShihabThemePalette.CreateShihabRoundedRect(shihabBarFillRect, 2))
-                    using (SolidBrush mehediProgBr = new SolidBrush(mehediBarCol))
-                    {
-                        mehediG.FillPath(mehediProgBr, shihabFillPath);
-                    }
+                    SolidBrush mehediProgBr = mehediSt == ShihabDownloadStatus.ShihabCompleted
+                        ? _gridProgDoneBrush
+                        : (mehediSt == ShihabDownloadStatus.ShihabPaused ? _gridProgPausedBrush : _gridProgActiveBrush);
+                    mehediG.FillRectangle(mehediProgBr, shihabBarFillRect);
                 }
 
                 Rectangle mehediPctTxtRect = new Rectangle(shihabCell.X + 10, shihabCell.Y + 3, Math.Max(8, shihabCell.Width - 16), 17);
-                Color shihabPctCol = MehediDarkMode ? Color.FromArgb(146, 155, 174) : Color.FromArgb(71, 85, 105);
                 TextRenderer.DrawText(
                     mehediG,
                     mehediCellText,
                     ShihabThemePalette.UiRegular82Font,
                     mehediPctTxtRect,
-                    shihabPctCol,
+                    _gridPctTextColor,
                     TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
                 return;
             }
@@ -602,7 +655,7 @@ namespace ShihabMehediIDM
                 }
                 else
                 {
-                    mehediStatusCol = MehediDarkMode ? Color.FromArgb(156, 163, 178) : Color.FromArgb(51, 65, 85);
+                    mehediStatusCol = _gridOtherStatusTextColor;
                 }
 
                 Rectangle shihabStatRect = new Rectangle(shihabCell.X + 10, shihabCell.Y, Math.Max(4, shihabCell.Width - 14), shihabCell.Height);
@@ -616,7 +669,7 @@ namespace ShihabMehediIDM
                 return;
             }
 
-            Color shihabDefaultCol = MehediDarkMode ? Color.FromArgb(136, 145, 165) : Color.FromArgb(71, 85, 105);
+            Color shihabDefaultCol = _gridDefaultTextColor;
             if (shihabCol == 4 && shihabDl != null && shihabDl.ShihabCurrentSpeedBps > 5.0)
             {
                 shihabDefaultCol = Color.FromArgb(56, 189, 248);

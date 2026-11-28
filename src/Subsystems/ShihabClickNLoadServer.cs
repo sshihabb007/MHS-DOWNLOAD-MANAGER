@@ -20,15 +20,18 @@ namespace ShihabMehediIDM
         private const int MaxBodyBytes = 256 * 1024;
         private const int MaxLinksPerRequest = 500;
         private const int RateLimitMaxRequestsPerMinute = 10;
+        private const int GlobalRateLimitMaxRequestsPerMinute = 20;
+        private const int MaxTrackedOrigins = 256;
+        private const int MaxConcurrentConnections = 32;
 
         private static readonly TimeSpan RegexTimeout = TimeSpan.FromMilliseconds(250);
         private static readonly Regex JkQuotedHexRegex = new Regex(
             @"['""]([0-9a-fA-F]{32})['""]",
-            RegexOptions.Compiled | RegexOptions.CultureInvariant,
+            RegexOptions.CultureInvariant,
             RegexTimeout);
         private static readonly Regex JkRawHexRegex = new Regex(
             @"\b([0-9a-fA-F]{32})\b",
-            RegexOptions.Compiled | RegexOptions.CultureInvariant,
+            RegexOptions.CultureInvariant,
             RegexTimeout);
 
         private readonly MehediAppConfiguration _config;
@@ -37,6 +40,8 @@ namespace ShihabMehediIDM
         private readonly int _portOverride;
         private readonly object _rateLock = new object();
         private readonly Dictionary<string, List<DateTime>> _originHits = new Dictionary<string, List<DateTime>>(StringComparer.OrdinalIgnoreCase);
+        private readonly List<DateTime> _globalHits = new List<DateTime>();
+        private readonly SemaphoreSlim _connectionGate = new SemaphoreSlim(MaxConcurrentConnections, MaxConcurrentConnections);
 
         private TcpListener _listener;
         private CancellationTokenSource _stopCts;
@@ -77,9 +82,21 @@ namespace ShihabMehediIDM
                 _listener.Start();
                 ShihabMehediShared.ShihabProcessAndPathSafety.DisableListenerInheritance(_listener);
                 _running = true;
-                _stopCts = new CancellationTokenSource();
-                CancellationToken tok = _stopCts.Token;
-                Task.Run(delegate { AcceptLoop(tok); });
+                CancellationTokenSource newCts = new CancellationTokenSource();
+                CancellationTokenSource oldCts = Interlocked.Exchange(ref _stopCts, newCts);
+                if (oldCts != null)
+                {
+                    try { oldCts.Cancel(); } catch { }
+                    try { oldCts.Dispose(); } catch { }
+                }
+                CancellationToken tok = newCts.Token;
+                Thread acceptThread = new Thread(delegate()
+                {
+                    AcceptLoop(tok);
+                });
+                acceptThread.IsBackground = true;
+                acceptThread.Name = "ShihabClickNLoadAccept";
+                acceptThread.Start();
                 return true;
             }
             catch
@@ -94,7 +111,12 @@ namespace ShihabMehediIDM
         public void Stop()
         {
             _running = false;
-            try { if (_stopCts != null) _stopCts.Cancel(); } catch { }
+            CancellationTokenSource cts = Interlocked.Exchange(ref _stopCts, null);
+            if (cts != null)
+            {
+                try { cts.Cancel(); } catch { }
+                try { cts.Dispose(); } catch { }
+            }
             try { if (_listener != null) _listener.Stop(); } catch { }
             _listener = null;
         }
@@ -102,8 +124,6 @@ namespace ShihabMehediIDM
         public void Dispose()
         {
             Stop();
-            try { if (_stopCts != null) _stopCts.Dispose(); } catch { }
-            _stopCts = null;
         }
 
         private void AcceptLoop(CancellationToken tok)
@@ -114,8 +134,31 @@ namespace ShihabMehediIDM
                 try
                 {
                     client = _listener.AcceptTcpClient();
+                    if (!_connectionGate.Wait(0))
+                    {
+                        try { client.Close(); } catch { }
+                        continue;
+                    }
                     TcpClient captured = client;
-                    Task.Run(delegate { HandleClient(captured); });
+                    try
+                    {
+                        Task.Run(delegate
+                        {
+                            try
+                            {
+                                HandleClient(captured);
+                            }
+                            finally
+                            {
+                                try { _connectionGate.Release(); } catch { }
+                            }
+                        });
+                    }
+                    catch
+                    {
+                        try { _connectionGate.Release(); } catch { }
+                        try { captured.Close(); } catch { }
+                    }
                 }
                 catch
                 {
@@ -128,7 +171,7 @@ namespace ShihabMehediIDM
 
         private static bool IsLoopbackHostHeader(string hostHeader)
         {
-            if (string.IsNullOrWhiteSpace(hostHeader)) return true;
+            if (string.IsNullOrWhiteSpace(hostHeader)) return false;
             string raw = hostHeader.Trim();
             if (ShihabProcessAndPathSafety.ContainsControlOrNewline(raw)) return false;
             string hostOnly = raw;
@@ -160,10 +203,51 @@ namespace ShihabMehediIDM
             DateTime cutoff = now.AddSeconds(-60.0);
             lock (_rateLock)
             {
-                if (_originHits.Count > 256)
+                for (int i = _globalHits.Count - 1; i >= 0; i--)
                 {
-                    _originHits.Clear();
+                    if (_globalHits[i] < cutoff) _globalHits.RemoveAt(i);
                 }
+                if (_globalHits.Count >= GlobalRateLimitMaxRequestsPerMinute)
+                {
+                    return false;
+                }
+
+                if (_originHits.Count >= MaxTrackedOrigins && !_originHits.ContainsKey(key))
+                {
+                    List<string> staleKeys = new List<string>();
+                    string oldestKey = null;
+                    DateTime oldestActivity = DateTime.MaxValue;
+                    foreach (KeyValuePair<string, List<DateTime>> kv in _originHits)
+                    {
+                        List<DateTime> list = kv.Value;
+                        for (int i = list.Count - 1; i >= 0; i--)
+                        {
+                            if (list[i] < cutoff) list.RemoveAt(i);
+                        }
+                        if (list.Count == 0)
+                        {
+                            staleKeys.Add(kv.Key);
+                        }
+                        else
+                        {
+                            DateTime latest = list[list.Count - 1];
+                            if (latest < oldestActivity)
+                            {
+                                oldestActivity = latest;
+                                oldestKey = kv.Key;
+                            }
+                        }
+                    }
+                    for (int i = 0; i < staleKeys.Count; i++)
+                    {
+                        _originHits.Remove(staleKeys[i]);
+                    }
+                    if (_originHits.Count >= MaxTrackedOrigins && oldestKey != null)
+                    {
+                        _originHits.Remove(oldestKey);
+                    }
+                }
+
                 List<DateTime> hits;
                 if (!_originHits.TryGetValue(key, out hits))
                 {
@@ -179,6 +263,7 @@ namespace ShihabMehediIDM
                     return false;
                 }
                 hits.Add(now);
+                _globalHits.Add(now);
                 return true;
             }
         }
@@ -192,14 +277,15 @@ namespace ShihabMehediIDM
                     client.ReceiveTimeout = 10000;
                     client.SendTimeout = 10000;
                     using (NetworkStream ns = client.GetStream())
-                    using (BufferedStream bs = new BufferedStream(ns, 8192))
                     {
                         string method;
                         string path;
                         string hostHeader;
                         string originHeader;
                         int contentLength;
-                        if (!ReadHeaders(bs, out method, out path, out hostHeader, out originHeader, out contentLength))
+                        byte[] leftover;
+                        int leftoverLen;
+                        if (!ReadHeaders(ns, out method, out path, out hostHeader, out originHeader, out contentLength, out leftover, out leftoverLen))
                         {
                             return;
                         }
@@ -227,13 +313,6 @@ namespace ShihabMehediIDM
                             return;
                         }
 
-                        if (cleanPath == "/crossdomain.xml" && string.Equals(method, "GET", StringComparison.OrdinalIgnoreCase))
-                        {
-                            string xml = "<?xml version=\"1.0\"?>\r\n<!DOCTYPE cross-domain-policy SYSTEM \"http://www.macromedia.com/xml/dtds/cross-domain-policy.dtd\">\r\n<cross-domain-policy><allow-access-from domain=\"*\" /></cross-domain-policy>";
-                            WriteResponse(ns, 200, "OK", "application/xml; charset=utf-8", xml, safeCorsOrigin);
-                            return;
-                        }
-
                         if ((cleanPath == "/flash/add" || cleanPath == "/flash/addcrypted2") &&
                             string.Equals(method, "POST", StringComparison.OrdinalIgnoreCase))
                         {
@@ -241,11 +320,11 @@ namespace ShihabMehediIDM
                             {
                                 if (contentLength > 0 && contentLength <= MaxBodyBytes)
                                 {
-                                    byte[] discard = new byte[Math.Min(contentLength, 8192)];
-                                    int rem = contentLength;
+                                    int rem = Math.Max(0, contentLength - leftoverLen);
+                                    byte[] discard = new byte[Math.Min(Math.Max(1, rem), 8192)];
                                     while (rem > 0)
                                     {
-                                        int r = bs.Read(discard, 0, Math.Min(rem, discard.Length));
+                                        int r = ns.Read(discard, 0, Math.Min(rem, discard.Length));
                                         if (r <= 0) break;
                                         rem -= r;
                                     }
@@ -262,7 +341,7 @@ namespace ShihabMehediIDM
                             }
 
                             byte[] bodyBytes = new byte[contentLength];
-                            int got = ReadExact(bs, bodyBytes, contentLength);
+                            int got = ReadExactWithPrefix(ns, leftover, leftoverLen, bodyBytes, contentLength);
                             if (got < contentLength)
                             {
                                 WriteResponse(ns, 400, "Bad Request", "text/plain; charset=utf-8", "Truncated request body.", safeCorsOrigin);
@@ -531,26 +610,58 @@ namespace ShihabMehediIDM
             out string path,
             out string hostHeader,
             out string originHeader,
-            out int contentLength)
+            out int contentLength,
+            out byte[] leftover,
+            out int leftoverLen)
         {
             method = "";
             path = "/";
             hostHeader = "";
             originHeader = "";
             contentLength = 0;
+            leftover = null;
+            leftoverLen = 0;
 
-            using (MemoryStream ms = new MemoryStream())
+            byte[] readBuf = new byte[4096];
+            using (MemoryStream ms = new MemoryStream(1024))
             {
-                int p3 = -1, p2 = -1, p1 = -1;
+                int headerEndIdx = -1;
                 while (ms.Length < MaxHeaderBytes)
                 {
-                    int b = stream.ReadByte();
-                    if (b < 0) break;
-                    ms.WriteByte((byte)b);
-                    if (p3 == '\r' && p2 == '\n' && p1 == '\r' && b == '\n') break;
-                    p3 = p2; p2 = p1; p1 = b;
+                    int toRead = (int)Math.Min(readBuf.Length, MaxHeaderBytes - ms.Length);
+                    int got = stream.Read(readBuf, 0, toRead);
+                    if (got <= 0) break;
+                    int prevLen = (int)ms.Length;
+                    ms.Write(readBuf, 0, got);
+                    byte[] acc = ms.GetBuffer();
+                    int totalLen = (int)ms.Length;
+                    int scanStart = Math.Max(0, prevLen - 3);
+                    for (int idx = scanStart; idx <= totalLen - 4; idx++)
+                    {
+                        if (acc[idx] == '\r' && acc[idx + 1] == '\n' && acc[idx + 2] == '\r' && acc[idx + 3] == '\n')
+                        {
+                            headerEndIdx = idx + 4;
+                            break;
+                        }
+                    }
+                    if (headerEndIdx >= 0) break;
                 }
-                string hdrText = Encoding.ASCII.GetString(ms.ToArray());
+                int totalAccum = (int)ms.Length;
+                if (totalAccum == 0) return false;
+                if (headerEndIdx < 0)
+                {
+                    if (totalAccum >= MaxHeaderBytes) return false;
+                    headerEndIdx = totalAccum;
+                }
+                byte[] rawBuf = ms.GetBuffer();
+                leftoverLen = totalAccum - headerEndIdx;
+                if (leftoverLen > 0)
+                {
+                    leftover = new byte[leftoverLen];
+                    Buffer.BlockCopy(rawBuf, headerEndIdx, leftover, 0, leftoverLen);
+                }
+
+                string hdrText = Encoding.ASCII.GetString(rawBuf, 0, headerEndIdx);
                 if (string.IsNullOrWhiteSpace(hdrText)) return false;
                 string[] lines = hdrText.Split(new string[] { "\r\n" }, StringSplitOptions.RemoveEmptyEntries);
                 if (lines.Length == 0) return false;
@@ -581,9 +692,15 @@ namespace ShihabMehediIDM
             return true;
         }
 
-        private static int ReadExact(Stream s, byte[] buf, int count)
+        private static int ReadExactWithPrefix(Stream s, byte[] prefix, int prefixLen, byte[] buf, int count)
         {
             int total = 0;
+            if (prefix != null && prefixLen > 0 && count > 0)
+            {
+                int take = Math.Min(prefixLen, count);
+                Buffer.BlockCopy(prefix, 0, buf, 0, take);
+                total = take;
+            }
             while (total < count)
             {
                 int r = s.Read(buf, total, count - total);
@@ -596,10 +713,13 @@ namespace ShihabMehediIDM
         private static void WriteResponse(NetworkStream ns, int statusCode, string reason, string contentType, string body, string corsOrigin)
         {
             byte[] bodyBytes = Encoding.UTF8.GetBytes(body ?? "");
-            StringBuilder sb = new StringBuilder(384);
+            StringBuilder sb = new StringBuilder(512);
             sb.AppendFormat("HTTP/1.1 {0} {1}\r\n", statusCode, reason);
             sb.AppendFormat("Content-Type: {0}\r\n", contentType);
             sb.Append("X-Content-Type-Options: nosniff\r\n");
+            sb.Append("Cache-Control: no-store\r\n");
+            sb.Append("Referrer-Policy: no-referrer\r\n");
+            sb.Append("X-Frame-Options: DENY\r\n");
             sb.AppendFormat("Access-Control-Allow-Origin: {0}\r\n", string.IsNullOrEmpty(corsOrigin) ? "*" : corsOrigin);
             sb.Append("Access-Control-Allow-Private-Network: true\r\n");
             sb.Append("Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n");

@@ -29,7 +29,6 @@ namespace ShihabMehediIDM
         private readonly Font _titleFont;
         private readonly Font _subFont;
         private readonly Font _notesFont;
-        private readonly Icon _ownedIcon;
 
         public ShihabAutoUpdateDialog(
             ShihabUpdateCheckResult updateInfo,
@@ -56,9 +55,8 @@ namespace ShihabMehediIDM
             _titleFont = new Font("Segoe UI Semibold", 11.5f);
             _subFont = new Font("Segoe UI Semibold", 9f);
             _notesFont = new Font("Consolas", 9f);
-            _ownedIcon = ShihabThemePalette.CreateShihabAppIcon();
             Font = _baseFont;
-            Icon = _ownedIcon;
+            Icon = ShihabThemePalette.CreateShihabAppIcon();
             ShihabThemePalette.ApplyMehediNativeDarkFrame(this, dark);
             Shown += delegate { try { Activate(); BringToFront(); } catch { } };
 
@@ -304,7 +302,6 @@ namespace ShihabMehediIDM
             {
                 try { if (_downloadCts != null) { _downloadCts.Cancel(); _downloadCts.Dispose(); } } catch { }
                 try { if (_iconBox != null && _iconBox.Image != null) { _iconBox.Image.Dispose(); _iconBox.Image = null; } } catch { }
-                try { if (_ownedIcon != null) _ownedIcon.Dispose(); } catch { }
                 try { if (_notesFont != null) _notesFont.Dispose(); } catch { }
                 try { if (_titleFont != null) _titleFont.Dispose(); } catch { }
                 try { if (_subFont != null) _subFont.Dispose(); } catch { }

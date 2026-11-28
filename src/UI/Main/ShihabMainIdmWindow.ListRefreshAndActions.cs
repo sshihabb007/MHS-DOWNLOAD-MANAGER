@@ -11,17 +11,44 @@ namespace ShihabMehediIDM
 {
     public partial class ShihabMainIdmWindow
     {
+        private void MarkShihabUiDirty()
+        {
+            Interlocked.Increment(ref _uiDirtyVersion);
+        }
+
         private void OnEngineItemUpdated(ShihabDownloadItem unused)
         {
+            MarkShihabUiDirty();
             if (Interlocked.Exchange(ref _engineRefreshPending, 1) == 0)
             {
-                SafeShihabUiInvoke(delegate { HandleCoalescedEngineRefreshSignal(); });
+                if (!SafeShihabUiInvoke(delegate { HandleCoalescedEngineRefreshSignal(); }))
+                {
+                    Interlocked.Exchange(ref _engineRefreshPending, 0);
+                }
             }
         }
 
         private void HandleCoalescedEngineRefreshSignal()
         {
             if (IsDisposed) return;
+
+            bool hiddenOrMin = !Visible || WindowState == FormWindowState.Minimized;
+            bool hasActive = _shihabEngine != null && _shihabEngine.HasAnyActiveDownloads();
+            if (hasActive)
+            {
+                UpdateShihabUiTickInterval(hiddenOrMin, true);
+            }
+
+            if (hiddenOrMin)
+            {
+                Interlocked.Exchange(ref _engineRefreshPending, 0);
+                if (_refreshDebounceTimer != null && _refreshDebounceTimer.Enabled)
+                {
+                    _refreshDebounceTimer.Stop();
+                }
+                return;
+            }
+
             double msSinceLast = (DateTime.UtcNow - _lastGridRefreshUtc).TotalMilliseconds;
             if (msSinceLast >= 80.0)
             {
@@ -98,7 +125,7 @@ namespace ShihabMehediIDM
             return string.Equals(itemCategory, filterCategory, StringComparison.OrdinalIgnoreCase);
         }
 
-        private bool MatchesShihabTreeAndSearch(ShihabDownloadItem mehediItem)
+        private bool MatchesShihabTreeAndSearch(ShihabDownloadItem mehediItem, string searchTerm)
         {
             ShihabDownloadStatus shihabSt = mehediItem.GetShihabStatusEnum();
             bool mehediIsDone = shihabSt == ShihabDownloadStatus.ShihabCompleted;
@@ -135,14 +162,13 @@ namespace ShihabMehediIDM
                 if (!string.Equals(mehediItem.MehediQueueName, mehediQ, StringComparison.OrdinalIgnoreCase)) return false;
             }
 
-            string shihabSearch = _mehediSearchBox.Text.Trim().ToLowerInvariant();
-            if (!string.IsNullOrEmpty(shihabSearch))
+            if (!string.IsNullOrEmpty(searchTerm))
             {
                 bool mehediHit =
-                    (mehediItem.ShihabFileName ?? "").ToLowerInvariant().Contains(shihabSearch) ||
-                    (mehediItem.MehediUrl ?? "").ToLowerInvariant().Contains(shihabSearch) ||
-                    (mehediItem.ShihabDescription ?? "").ToLowerInvariant().Contains(shihabSearch) ||
-                    (mehediItem.MehediReferer ?? "").ToLowerInvariant().Contains(shihabSearch);
+                    (mehediItem.ShihabFileName != null && mehediItem.ShihabFileName.IndexOf(searchTerm, StringComparison.OrdinalIgnoreCase) >= 0) ||
+                    (mehediItem.MehediUrl != null && mehediItem.MehediUrl.IndexOf(searchTerm, StringComparison.OrdinalIgnoreCase) >= 0) ||
+                    (mehediItem.ShihabDescription != null && mehediItem.ShihabDescription.IndexOf(searchTerm, StringComparison.OrdinalIgnoreCase) >= 0) ||
+                    (mehediItem.MehediReferer != null && mehediItem.MehediReferer.IndexOf(searchTerm, StringComparison.OrdinalIgnoreCase) >= 0);
                 if (!mehediHit) return false;
             }
             return true;
@@ -173,18 +199,103 @@ namespace ShihabMehediIDM
             return "Paused";
         }
 
-        private static void UpdateSubItemIfChanged(ListViewItem row, int subIndex, string nextText)
+        private void UpdateSubItemIfChangedLazy(ListViewItem row, int subIndex, string nextText, ref bool anyVisualChange)
         {
             string normalized = nextText ?? "";
             if (!string.Equals(row.SubItems[subIndex].Text, normalized, StringComparison.Ordinal))
             {
+                if (!anyVisualChange)
+                {
+                    _shihabDownloadsListView.BeginUpdate();
+                    anyVisualChange = true;
+                }
                 row.SubItems[subIndex].Text = normalized;
             }
+        }
+
+        private void UpdateTrayAndDropTargetStatus(int activeSockets, double globalSpeedBps, bool useBitsFooter)
+        {
+            if (_mehediTrayIcon != null)
+            {
+                string trayTip;
+                if (activeSockets > 0 || globalSpeedBps > 5.0)
+                {
+                    string spdShort = ShihabFormatHelpers.FormatShihabSpeed(globalSpeedBps, useBitsFooter, true);
+                    if (string.IsNullOrEmpty(spdShort)) spdShort = ShihabFormatHelpers.FormatZeroSpeed(useBitsFooter, true);
+                    trayTip = string.Format("MHS · {0} sock · {1}", activeSockets, spdShort);
+                    if (_mehediConfig.MehediGlobalSpeedLimiterEnabled && _mehediConfig.ShihabGlobalSpeedLimitKb > 0)
+                    {
+                        trayTip = trayTip + (useBitsFooter
+                            ? (" (Lim " + ShihabFormatHelpers.FormatSpeedLimitCap(_mehediConfig.ShihabGlobalSpeedLimitKb, true) + ")")
+                            : string.Format(" (Lim {0}K)", _mehediConfig.ShihabGlobalSpeedLimitKb));
+                    }
+                    _lastTrayShowedActive = true;
+                }
+                else
+                {
+                    trayTip = (_mehediConfig.MehediGlobalSpeedLimiterEnabled && _mehediConfig.ShihabGlobalSpeedLimitKb > 0)
+                        ? (useBitsFooter
+                            ? ("MHS Download Manager · Idle (Lim " + ShihabFormatHelpers.FormatSpeedLimitCap(_mehediConfig.ShihabGlobalSpeedLimitKb, true) + ")")
+                            : string.Format("MHS Download Manager · Idle (Lim {0} KB/s)", _mehediConfig.ShihabGlobalSpeedLimitKb))
+                        : "MHS Download Manager · Idle";
+                    _lastTrayShowedActive = false;
+                }
+                if (trayTip.Length > 63) trayTip = trayTip.Substring(0, 63);
+                if (!string.Equals(_mehediTrayIcon.Text, trayTip, StringComparison.Ordinal))
+                {
+                    try { _mehediTrayIcon.Text = trayTip; } catch { }
+                }
+            }
+
+            if (_shihabDropTargetForm != null && !_shihabDropTargetForm.IsDisposed && _shihabDropTargetForm.Visible)
+            {
+                _shihabDropTargetForm.UpdateShihabLiveSpeed(globalSpeedBps);
+            }
+        }
+
+        private void UpdateTrayAndDropTargetWhenHidden(bool hasActiveDownloads)
+        {
+            double globalSpeedBps = 0.0;
+            int activeSockets = 0;
+            if (hasActiveDownloads)
+            {
+                List<ShihabDownloadItem> all = _shihabEngine.GetShihabDownloadsSnapshot();
+                for (int i = 0; i < all.Count; i++)
+                {
+                    ShihabDownloadItem it = all[i];
+                    if (it == null) continue;
+                    ShihabDownloadStatus st = it.GetShihabStatusEnum();
+                    bool live = _shihabEngine.IsMehediItemActive(it.ShihabId) ||
+                                st == ShihabDownloadStatus.ShihabDownloading ||
+                                st == ShihabDownloadStatus.ShihabConnecting ||
+                                st == ShihabDownloadStatus.ShihabRebuilding;
+                    if (!live) continue;
+
+                    globalSpeedBps += it.ShihabCurrentSpeedBps;
+                    int itemWorkers = 0;
+                    List<MehediSegmentChunk> segSnap = _shihabEngine.GetItemSegmentsSnapshot(it);
+                    if (segSnap != null)
+                    {
+                        for (int s = 0; s < segSnap.Count; s++)
+                        {
+                            MehediSegmentChunk chunk = segSnap[s];
+                            if (chunk != null && chunk.ShihabIsActiveWorker)
+                            {
+                                itemWorkers++;
+                            }
+                        }
+                    }
+                    activeSockets += Math.Max(1, itemWorkers);
+                }
+            }
+            bool useBitsFooter = ShihabFormatHelpers.IsBitsSpeedUnit(_mehediConfig != null ? _mehediConfig.ShihabDefaultSpeedUnit : null);
+            UpdateTrayAndDropTargetStatus(activeSockets, globalSpeedBps, useBitsFooter);
         }
 
         private void RefreshMehediDownloadsGrid()
         {
             if (IsDisposed) return;
+            int renderVersion = Interlocked.CompareExchange(ref _uiDirtyVersion, 0, 0);
             _lastGridRefreshUtc = DateTime.UtcNow;
 
             List<ShihabDownloadItem> shihabAll = _shihabEngine.GetShihabDownloadsSnapshot();
@@ -253,10 +364,11 @@ namespace ShihabMehediIDM
                 _shihabTransfersNav.UpdateShihabCounts(shihabSidebarCounts);
             }
 
+            string searchTerm = (_mehediSearchBox != null ? (_mehediSearchBox.Text ?? "") : "").Trim().ToLowerInvariant();
             List<ShihabDownloadItem> mehediFiltered = new List<ShihabDownloadItem>();
             for (int shihabI = 0; shihabI < shihabAll.Count; shihabI++)
             {
-                if (MatchesShihabTreeAndSearch(shihabAll[shihabI]))
+                if (MatchesShihabTreeAndSearch(shihabAll[shihabI], searchTerm))
                 {
                     mehediFiltered.Add(shihabAll[shihabI]);
                 }
@@ -297,23 +409,37 @@ namespace ShihabMehediIDM
                 if (shihabTag != null) shihabSelectedIds.Add(shihabTag.ShihabId);
             }
 
-            _shihabDownloadsListView.BeginUpdate();
+            bool useBitsSpeed = ShihabFormatHelpers.IsBitsSpeedUnit(_mehediConfig != null ? _mehediConfig.ShihabDefaultSpeedUnit : null);
+            bool anyVisualChange = false;
             try
             {
-                while (_shihabDownloadsListView.Items.Count < mehediFiltered.Count)
+                if (_shihabDownloadsListView.Items.Count != mehediFiltered.Count)
                 {
-                    _shihabDownloadsListView.Items.Add(new ListViewItem(new string[] { "", "", "", "", "", "", "", "" }));
-                }
-                while (_shihabDownloadsListView.Items.Count > mehediFiltered.Count)
-                {
-                    _shihabDownloadsListView.Items.RemoveAt(_shihabDownloadsListView.Items.Count - 1);
+                    _shihabDownloadsListView.BeginUpdate();
+                    anyVisualChange = true;
+                    while (_shihabDownloadsListView.Items.Count < mehediFiltered.Count)
+                    {
+                        _shihabDownloadsListView.Items.Add(new ListViewItem(new string[] { "", "", "", "", "", "", "", "" }));
+                    }
+                    while (_shihabDownloadsListView.Items.Count > mehediFiltered.Count)
+                    {
+                        _shihabDownloadsListView.Items.RemoveAt(_shihabDownloadsListView.Items.Count - 1);
+                    }
                 }
 
                 for (int mehediIdx = 0; mehediIdx < mehediFiltered.Count; mehediIdx++)
                 {
                     ShihabDownloadItem shihabIt = mehediFiltered[mehediIdx];
                     ListViewItem mehediRow = _shihabDownloadsListView.Items[mehediIdx];
-                    mehediRow.Tag = shihabIt;
+                    if (!object.ReferenceEquals(mehediRow.Tag, shihabIt))
+                    {
+                        if (!anyVisualChange)
+                        {
+                            _shihabDownloadsListView.BeginUpdate();
+                            anyVisualChange = true;
+                        }
+                        mehediRow.Tag = shihabIt;
+                    }
 
                     int shihabOrderNum;
                     if (!mehediOrderMap.TryGetValue(shihabIt.ShihabId, out shihabOrderNum))
@@ -325,21 +451,20 @@ namespace ShihabMehediIDM
                                            shihabIt.GetShihabStatusEnum() == ShihabDownloadStatus.ShihabDownloading;
                     double shihabPctVal = shihabIt.GetMehediPercent();
 
-                    UpdateSubItemIfChanged(mehediRow, 0, shihabOrderNum.ToString());
-                    UpdateSubItemIfChanged(mehediRow, 1, shihabIt.ShihabFileName ?? "");
-                    UpdateSubItemIfChanged(mehediRow, 2, shihabIt.ShihabTotalBytes > 0
+                    UpdateSubItemIfChangedLazy(mehediRow, 0, shihabOrderNum.ToString(), ref anyVisualChange);
+                    UpdateSubItemIfChangedLazy(mehediRow, 1, shihabIt.ShihabFileName ?? "", ref anyVisualChange);
+                    UpdateSubItemIfChangedLazy(mehediRow, 2, shihabIt.ShihabTotalBytes > 0
                         ? ShihabFormatHelpers.FormatMehediBytes(shihabIt.ShihabTotalBytes)
-                        : (shihabIt.MehediDownloadedBytes > 0 ? ShihabFormatHelpers.FormatMehediBytes(shihabIt.MehediDownloadedBytes) : "--"));
-                    UpdateSubItemIfChanged(mehediRow, 3, (shihabIt.GetShihabStatusEnum() == ShihabDownloadStatus.ShihabCompleted || shihabIt.ShihabTotalBytes > 0)
+                        : (shihabIt.MehediDownloadedBytes > 0 ? ShihabFormatHelpers.FormatMehediBytes(shihabIt.MehediDownloadedBytes) : "--"), ref anyVisualChange);
+                    UpdateSubItemIfChangedLazy(mehediRow, 3, (shihabIt.GetShihabStatusEnum() == ShihabDownloadStatus.ShihabCompleted || shihabIt.ShihabTotalBytes > 0)
                         ? string.Format("{0:0}%", shihabPctVal)
-                        : (mehediRowActive ? "Live" : "0%"));
-                    bool useBitsSpeed = ShihabFormatHelpers.IsBitsSpeedUnit(_mehediConfig != null ? _mehediConfig.ShihabDefaultSpeedUnit : null);
-                    UpdateSubItemIfChanged(mehediRow, 4, (mehediRowActive && shihabIt.ShihabCurrentSpeedBps > 1.0)
+                        : (mehediRowActive ? "Live" : "0%"), ref anyVisualChange);
+                    UpdateSubItemIfChangedLazy(mehediRow, 4, (mehediRowActive && shihabIt.ShihabCurrentSpeedBps > 1.0)
                         ? ShihabFormatHelpers.FormatShihabSpeed(shihabIt.ShihabCurrentSpeedBps, useBitsSpeed, true)
-                        : ShihabFormatHelpers.FormatZeroSpeed(useBitsSpeed, true));
-                    UpdateSubItemIfChanged(mehediRow, 5, (mehediRowActive && shihabIt.MehediEtaSeconds > 0)
+                        : ShihabFormatHelpers.FormatZeroSpeed(useBitsSpeed, true), ref anyVisualChange);
+                    UpdateSubItemIfChangedLazy(mehediRow, 5, (mehediRowActive && shihabIt.MehediEtaSeconds > 0)
                         ? ShihabFormatHelpers.FormatMehediTimeLeft(shihabIt.MehediEtaSeconds)
-                        : "0s");
+                        : "0s", ref anyVisualChange);
 
                     string geoPrefix = !string.IsNullOrWhiteSpace(shihabIt.ShihabServerCountryCode)
                         ? ("[" + shihabIt.ShihabServerCountryCode + "] ")
@@ -347,28 +472,35 @@ namespace ShihabMehediIDM
                     string chkBadge = (!string.IsNullOrWhiteSpace(shihabIt.ShihabChecksumStatus) && shihabIt.ShihabChecksumStatus.StartsWith("Verified", StringComparison.OrdinalIgnoreCase))
                         ? " ✔"
                         : "";
-                    UpdateSubItemIfChanged(mehediRow, 6, geoPrefix + ResolveCleanStatusWord(shihabIt, mehediRowActive) + chkBadge);
-                    UpdateSubItemIfChanged(mehediRow, 7, ExtractShihabCompactDate(shihabIt));
+                    UpdateSubItemIfChangedLazy(mehediRow, 6, geoPrefix + ResolveCleanStatusWord(shihabIt, mehediRowActive) + chkBadge, ref anyVisualChange);
+                    UpdateSubItemIfChangedLazy(mehediRow, 7, ExtractShihabCompactDate(shihabIt), ref anyVisualChange);
 
                     bool shouldSelect = shihabSelectedIds.Contains(shihabIt.ShihabId);
                     if (mehediRow.Selected != shouldSelect)
                     {
+                        if (!anyVisualChange)
+                        {
+                            _shihabDownloadsListView.BeginUpdate();
+                            anyVisualChange = true;
+                        }
                         mehediRow.Selected = shouldSelect;
                     }
                 }
             }
             finally
             {
-                _shihabDownloadsListView.EndUpdate();
+                if (anyVisualChange)
+                {
+                    _shihabDownloadsListView.EndUpdate();
+                }
             }
 
-            bool useBitsFooter = ShihabFormatHelpers.IsBitsSpeedUnit(_mehediConfig != null ? _mehediConfig.ShihabDefaultSpeedUnit : null);
             string shihabSpeedPill = mehediGlobalSpeedBps > 5.0
-                ? ("Speed: " + ShihabFormatHelpers.FormatShihabSpeed(mehediGlobalSpeedBps, useBitsFooter, true))
-                : ("Speed: " + ShihabFormatHelpers.FormatFooterZeroSpeed(useBitsFooter));
+                ? ("Speed: " + ShihabFormatHelpers.FormatShihabSpeed(mehediGlobalSpeedBps, useBitsSpeed, true))
+                : ("Speed: " + ShihabFormatHelpers.FormatFooterZeroSpeed(useBitsSpeed));
             if (_mehediConfig.MehediGlobalSpeedLimiterEnabled && _mehediConfig.ShihabGlobalSpeedLimitKb > 0)
             {
-                shihabSpeedPill = shihabSpeedPill + (useBitsFooter
+                shihabSpeedPill = shihabSpeedPill + (useBitsSpeed
                     ? (" (Lim: " + ShihabFormatHelpers.FormatSpeedLimitCap(_mehediConfig.ShihabGlobalSpeedLimitKb, true) + ")")
                     : string.Format(" (Lim: {0} KB/s)", _mehediConfig.ShihabGlobalSpeedLimitKb));
             }
@@ -380,47 +512,17 @@ namespace ShihabMehediIDM
                     shihabSpeedPill,
                     string.Format("Active Sockets: {0}", shihabActiveSockets));
             }
-            if (_mehediTrayIcon != null)
-            {
-                string trayTip;
-                if (shihabActiveSockets > 0 || mehediGlobalSpeedBps > 5.0)
-                {
-                    string spdShort = ShihabFormatHelpers.FormatShihabSpeed(mehediGlobalSpeedBps, useBitsFooter, true);
-                    if (string.IsNullOrEmpty(spdShort)) spdShort = ShihabFormatHelpers.FormatZeroSpeed(useBitsFooter, true);
-                    trayTip = string.Format("MHS · {0} sock · {1}", shihabActiveSockets, spdShort);
-                    if (_mehediConfig.MehediGlobalSpeedLimiterEnabled && _mehediConfig.ShihabGlobalSpeedLimitKb > 0)
-                    {
-                        trayTip = trayTip + (useBitsFooter
-                            ? (" (Lim " + ShihabFormatHelpers.FormatSpeedLimitCap(_mehediConfig.ShihabGlobalSpeedLimitKb, true) + ")")
-                            : string.Format(" (Lim {0}K)", _mehediConfig.ShihabGlobalSpeedLimitKb));
-                    }
-                }
-                else
-                {
-                    trayTip = (_mehediConfig.MehediGlobalSpeedLimiterEnabled && _mehediConfig.ShihabGlobalSpeedLimitKb > 0)
-                        ? (useBitsFooter
-                            ? ("MHS Download Manager · Idle (Lim " + ShihabFormatHelpers.FormatSpeedLimitCap(_mehediConfig.ShihabGlobalSpeedLimitKb, true) + ")")
-                            : string.Format("MHS Download Manager · Idle (Lim {0} KB/s)", _mehediConfig.ShihabGlobalSpeedLimitKb))
-                        : "MHS Download Manager · Idle";
-                }
-                if (trayTip.Length > 63) trayTip = trayTip.Substring(0, 63);
-                if (!string.Equals(_mehediTrayIcon.Text, trayTip, StringComparison.Ordinal))
-                {
-                    try { _mehediTrayIcon.Text = trayTip; } catch { }
-                }
-            }
 
-            if (_shihabDropTargetForm != null && !_shihabDropTargetForm.IsDisposed && _shihabDropTargetForm.Visible)
-            {
-                _shihabDropTargetForm.UpdateShihabLiveSpeed(mehediGlobalSpeedBps);
-            }
+            UpdateTrayAndDropTargetStatus(shihabActiveSockets, mehediGlobalSpeedBps, useBitsSpeed);
             UpdateMehediToolbarActionIcons();
             UpdateShihabStatusBadges();
+            _lastRenderedUiVersion = renderVersion;
         }
 
         private void UpdateShihabStatusBadges()
         {
             if (_mehediStorageCard == null) return;
+            if (!Visible || WindowState == FormWindowState.Minimized) return;
 
             bool useBitsCap = ShihabFormatHelpers.IsBitsSpeedUnit(_mehediConfig != null ? _mehediConfig.ShihabDefaultSpeedUnit : null);
             string mehediSpeedLimitLabel = _mehediConfig.MehediGlobalSpeedLimiterEnabled
@@ -430,8 +532,11 @@ namespace ShihabMehediIDM
                 : "Speed: Unlimited";
             _mehediStorageCard.SetShihabStorageAndSpeed(_shihabCachedUsedGb, _mehediCachedTotalGb, _shihabCachedFreeGb, mehediSpeedLimitLabel);
 
+            bool hasActive = _shihabEngine != null && _shihabEngine.HasAnyActiveDownloads();
+            double drivePollIntervalSec = hasActive ? 5.0 : 60.0;
+
             DateTime shihabNowUtc = DateTime.UtcNow;
-            if ((shihabNowUtc - _mehediLastDrivePollUtc).TotalSeconds >= 5.0 &&
+            if ((shihabNowUtc - _mehediLastDrivePollUtc).TotalSeconds >= drivePollIntervalSec &&
                 Interlocked.CompareExchange(ref _drivePollInFlight, 1, 0) == 0)
             {
                 _mehediLastDrivePollUtc = shihabNowUtc;
@@ -592,6 +697,8 @@ namespace ShihabMehediIDM
                 mehediItem.SetMehediStatusEnum(ShihabDownloadStatus.ShihabQueued, "Queued");
             }
             _shihabEngine.AddShihabDownloadItem(mehediItem, shihabStartNow);
+            MarkShihabUiDirty();
+            if (shihabStartNow) UpdateShihabUiTickInterval(!Visible || WindowState == FormWindowState.Minimized, true);
         }
 
         private void PromptAndAddNewShihabUrl(string mehediPrefillUrl)
@@ -674,6 +781,11 @@ namespace ShihabMehediIDM
                     _shihabEngine.StartOrResumeMehediDownload(mehediSel[shihabI]);
                 }
             }
+            if (mehediSel.Count > 0)
+            {
+                MarkShihabUiDirty();
+                UpdateShihabUiTickInterval(!Visible || WindowState == FormWindowState.Minimized, true);
+            }
         }
 
         private void PauseSelectedMehediDownloads()
@@ -683,6 +795,7 @@ namespace ShihabMehediIDM
             {
                 _shihabEngine.PauseShihabDownload(shihabSel[mehediI]);
             }
+            if (shihabSel.Count > 0) MarkShihabUiDirty();
         }
 
         private void PromptAndDeleteSelectedDownloads(bool initialDeleteFromDisk)
@@ -706,6 +819,7 @@ namespace ShihabMehediIDM
             {
                 _shihabEngine.RemoveShihabDownload(shihabSel[mehediI], mehediAlsoDeleteDiskFile);
             }
+            MarkShihabUiDirty();
             RefreshMehediDownloadsGrid();
         }
 
@@ -719,6 +833,7 @@ namespace ShihabMehediIDM
                     _shihabEngine.RemoveShihabDownload(shihabAll[mehediI], false);
                 }
             }
+            MarkShihabUiDirty();
             RefreshMehediDownloadsGrid();
         }
 
@@ -800,6 +915,7 @@ namespace ShihabMehediIDM
                 }
             }
             _shihabEngine.PersistShihabState();
+            MarkShihabUiDirty();
             RefreshMehediDownloadsGrid();
         }
 
@@ -894,6 +1010,7 @@ namespace ShihabMehediIDM
                 if (shihabProp.ShowDialog(this) == DialogResult.OK)
                 {
                     _shihabEngine.PersistShihabState();
+                    MarkShihabUiDirty();
                     RefreshMehediDownloadsGrid();
                 }
             }
@@ -923,12 +1040,12 @@ namespace ShihabMehediIDM
                     {
                         _mehediBridgeListening = mehediOpts.MehediBridgeRestartSucceeded;
                     }
-                    if (_shihabClickNLoadServer != null)
-                    {
-                        if (_mehediConfig.ShihabEnableClickNLoad) _shihabClickNLoadServer.Start();
-                        else _shihabClickNLoadServer.Stop();
-                    }
+                    SyncShihabClickNLoadServerState();
+                    SyncShihabRemoteServerState();
+                    SyncShihabRssPollTimerState();
                     ApplyConfiguredGlobalHotkey();
+                    _mehediLastDrivePollUtc = DateTime.MinValue;
+                    MarkShihabUiDirty();
                     ApplyMehediTheme();
                     PopulateShihabCategoryTree();
                     RefreshMehediDownloadsGrid();
@@ -942,6 +1059,7 @@ namespace ShihabMehediIDM
             using (MehediSchedulerQueuesForm shihabSched = new MehediSchedulerQueuesForm(_mehediConfig, _shihabEngine, _shihabStore))
             {
                 shihabSched.ShowDialog(this);
+                MarkShihabUiDirty();
                 PopulateShihabCategoryTree();
                 RefreshMehediDownloadsGrid();
             }
@@ -1079,7 +1197,9 @@ namespace ShihabMehediIDM
         {
             using (ShihabRssFeedDialog dlg = new ShihabRssFeedDialog(_mehediConfig, _shihabStore))
             {
-                if (dlg.ShowDialog(this) == DialogResult.OK && dlg.SelectedEnclosureUrls.Count > 0)
+                DialogResult res = dlg.ShowDialog(this);
+                SyncShihabRssPollTimerState();
+                if (res == DialogResult.OK && dlg.SelectedEnclosureUrls.Count > 0)
                 {
                     for (int i = 0; i < dlg.SelectedEnclosureUrls.Count; i++)
                     {
@@ -1094,10 +1214,9 @@ namespace ShihabMehediIDM
             using (ShihabRemotePairingDialog dlg = new ShihabRemotePairingDialog(_mehediConfig, _shihabStore))
             {
                 dlg.ShowDialog(this);
-                if (dlg.RemoteConfigChanged && _shihabRemoteServer != null)
+                if (dlg.RemoteConfigChanged)
                 {
-                    if (_mehediConfig.ShihabRemoteWebEnabled) _shihabRemoteServer.Start();
-                    else _shihabRemoteServer.Stop();
+                    SyncShihabRemoteServerState();
                 }
             }
         }

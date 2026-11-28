@@ -2,7 +2,47 @@
 
 All notable releases, new features, security enhancements, and bug fixes for **MHS Download Manager** (`mdm.exe` + Manifest V3 Browser Extension + Windows x64 Setup Wizard) are documented here in **reverse chronological order (newest first)**.
 
-> **Live GitHub Releases:** [All Releases (`v1.2.2` → `v1.0.0`)](https://github.com/sshihabb007/MHS-DOWNLOAD-MANAGER/releases)
+> **Live GitHub Releases:** [All Releases (`v1.2.3` → `v1.0.0`)](https://github.com/sshihabb007/MHS-DOWNLOAD-MANAGER/releases)
+
+---
+
+## [v1.2.3] — 2026-11-28
+
+### Installer Trust, PE Hygiene & Antivirus False-Positive Remediation
+- **Clean Win32 `.rsrc` Packaging & Valid PE Headers (`build.ps1`, `ShihabSetupWizard.cs`, `MehediProgramEntry.cs`)**:
+  - Moved the Setup install payload out of the executable `.text` section into a standard Win32 `RT_RCDATA` resource (`MHS_INSTALL_PAYLOAD`) via `BeginUpdateResourceW`/`UpdateResourceW`/`EndUpdateResourceW`, reducing `Setup.exe` `.text` Shannon entropy from **`7.9607` → `5.5875`** (normal `.NET` IL) and shrinking Setup size by ~180 KB.
+  - Built a dedicated, payload-free **`Uninstall.exe`** (`279 KB` vs. the previous `1.92 MB` installer self-copy), compiled all binaries with `/subsystemversion:6.00`, stamped valid PE `CheckSum` values via `imagehlp.dll!CheckSumMappedFile`, and added `[assembly: NeutralResourcesLanguage("en-US")]`.
+- **Removed AV-Heuristic Win32 APIs & LOLBin Patterns (`setup.manifest`, `ShihabSetupWizard.cs`, `ShihabProcessAndPathSafety.cs`, `ShihabAutoUpdater.cs`)**:
+  - Switched `setup.manifest` from `requireAdministrator` to `asInvoker` with targeted UAC worker elevation (`--shihab-elevated-worker`), completely removing `OpenProcessToken`/`DuplicateTokenEx`/`CreateProcessWithTokenW` token duplication and `IShellWindows` late-bound COM reflection.
+  - Replaced `WScript.Shell` reflection with strongly-typed COM `[ComImport] IShellLinkW` + `IPersistFile`, `cmd.exe /c ... ping ... del` self-deletion with `MoveFileExW(..., MOVEFILE_DELAY_UNTIL_REBOOT)`, hidden `ie4uinit.exe` spawns with `SHChangeNotify`, and `Process.MainModule` (`PROCESS_VM_READ`) with `QueryFullProcessImageNameW` (`PROCESS_QUERY_LIMITED_INFORMATION`).
+  - Excluded unused LOLBin tool names (`powershell.exe`, `rundll32.exe`, `cmd.exe`) from Setup and Uninstall binaries via `#if !SHIHAB_INSTALLER`.
+- **Authenticode Code Signing & SLSA Supply-Chain Provenance (`build.ps1`, `.github/workflows/build.yml`, `docs/CODE_SIGNING_AND_TRUST.md`)**:
+  - Added optional Authenticode code signing (`-SignCertPfx` / `-SignCertThumbprint` / `MHS_CODESIGN_PFX_BASE64` + `MHS_CODESIGN_PFX_PASSWORD` GitHub Secrets) with RFC 3161 SHA-256 timestamping, inner-before-outer signing (`mdm.exe` & `Uninstall.exe` before `Setup.exe`), and `signtool verify /pa /v`.
+  - Hardened GitHub Actions CI with `permissions: contents: read`, `persist-credentials: false`, SHA-pinned actions, SemVer verification, `actions/attest-build-provenance` (SLSA attestations), and safe release preservation (`force_recreate_release` opt-in). Added [docs/CODE_SIGNING_AND_TRUST.md](docs/CODE_SIGNING_AND_TRUST.md) covering SignPath Foundation (free OSS signing), Azure Artifact Signing, BYO PFX CI setup, and Microsoft WDSI submission.
+
+### Comprehensive Security Hardening
+- **Installer & Auto-Updater LPE / TOCTOU Protection (`ShihabSetupWizard.cs`, `ShihabAutoUpdater.cs`, `ShihabProcessAndPathSafety.cs`)**:
+  - Enforced NTFS junction/symlink detection (`HasAnyReparsePointInPath`) and non-following directory deletion (`SafeDeleteDirectoryNoFollow`) across install, uninstall, and updater cleanup.
+  - Held a non-inheritable `FileShare.Read` file lock across SHA-256 verification and `Process.Start` in `ShihabAutoUpdater` to eliminate pre-UAC TOCTOU, pinned update origins to official GitHub releases (`IsOfficialMhsReleaseHttpsUri`), and verified loopback listener PID via `GetExtendedTcpTable` before sending `X-MHS-Bridge-Token` during setup shutdown.
+- **Browser Extension Isolation, SSRF & Spoofing Defenses (`shihab_background.js`, `mehedi_content.js`, `mehedi_page_hook.js`)**:
+  - Strictly separated privileged popup/extension-page commands (`isExtensionPage`) from content-script messages, enforced per-tab ownership (`activeRelayJobOwnerTabById`) on relay chunks, blocked private/loopback/metadata SSRF URLs, and scoped browser cookie attachment to observed/same-site/known-CDN media URLs (including expanded HLS variants).
+  - Switched the floating video button overlay to a **closed Shadow DOM**, required `ev.isTrusted === true` on interactive clicks, removed page-observable DOM attributes/`CustomEvent`s, pinned `postMessage` origins, and narrowed `POST` body secret redaction to credentials/payment fields without breaking CSRF or download tokens.
+- **Local Bridge, Proxy Relay, Archives, External Tools, Vault & Remote UI Hardening**:
+  - Removed the unauthenticated `|| isPinnedExtension` bridge bypass (requiring `X-MHS-Bridge-Token` on all non-ping endpoints), added idempotent per-user HKCU Native Messaging registration on Portable startup + Chrome Beta/Dev/Canary, Edge Beta/Dev, and Opera GX support, blocked wildcard `delete all`, and added concurrency caps (`SemaphoreSlim`) and HTTP security headers across Bridge (`:45779`), Proxy Relay, Remote Control (`:8463`), and Click'n'Load (`:9666`).
+  - Added ephemeral 128-bit CSPRNG `Proxy-Authorization` on the local proxy relay, fail-closed `aes3:` ACL-restricted CSPRNG vault fallback with HMAC domain separation, sealed `ShihabPostBody` storage, atomic Remote Control pairing rotation + pre-body auth + CSRF `Host`/`Origin`/`Content-Type` checks, and removed `/crossdomain.xml`.
+  - Added pre-extraction `7z.exe l -slt -ba` symlink/traversal audit, staged HatchZip extraction, ZIP Windows reparse check, SSRF & `WorkingDirectory = toolsDir` isolation for `yt-dlp`/`gallery-dl` (blocking `yt-dlp.conf` hijack from Downloads), secret-free external tool arguments, Google Drive host pinning, TorBox query-token removal, UNC/device path & `.exe`-only virus scanner guards, and same-cluster redirect cookie preservation with cross-origin `Authorization` stripping.
+
+### Browser & Desktop Resource Optimization (Zero Feature Compromise)
+- **Browser Extension CPU, Wakeup & Memory Reduction (`extension/*`, `BrowserRelayHub.cs`)**:
+  - Replaced 450 ms relay polling with server-side `/shihab/relay-jobs?wait=20000` long-polling (`AutoResetEvent`, `< 5 ms` wakeup when online, zero requests when offline/paused), guarded `chrome.alarms` scheduling, and dirty-checked DNR/storage/badge updates so the MV3 Service Worker sleeps cleanly when idle.
+  - Filtered `webRequest` listeners by resource `types`, removed unused `extraHeaders`, cached single-pass `new URL()`, deferred 32 KB probes behind a concurrency-2 queue, debounced `storage.session` writes, and capped caches.
+  - Removed the 900 ms `setInterval` and global `style`/`class`/`src` `MutationObserver` in `mehedi_content.js` in favor of per-video `IntersectionObserver`/`ResizeObserver`, GPU `translate3d` positioning, no always-on `backdrop-filter: blur`, `WeakRef` video references, and O(1) stream lookups.
+  - Gated `fetch`/`XHR` cloning and 128 KB MSE `appendBuffer` byte scanning without losing universal HLS/DASH or generic JSON video config capture, removed the leaking `mehediBlobUrlToMediaSource` map, reused a single `TextDecoder`, enabled instant cached popup rendering, and downscaled `extension/images/author_shihab.jpg` from `2000×2000` (`158 KB`) to `96×96` (`2.1 KB`).
+- **Desktop App Disk I/O, RAM, GC LOH & GDI+ Handle Optimization (`src/*`)**:
+  - Replaced file-based crash heartbeats with a 4 KB named `MemoryMappedFile` (`ShihabCrashMonitor.cs`, eliminating ~72,000 disk I/O ops/day and UI stalls) and cached bound network adapter IPs with `NetworkChange` invalidation.
+  - Standardized 64 KB SOH buffers across HTTP, HLS, Muxer, PostProcessor, ChecksumVerifier, and streamed `/shihab/relay-chunk` (eliminating 32 MB LOH allocations), replaced blocking proxy `Stream.CopyTo` threads with full-duplex async `NetworkStream` pumping, added debounced off-lock `downloads.json` persistence, O(1) `_itemsById` lookup, and lock-free quota batching.
+  - Added BitTorrent `TorrentPieceBufferPool`, 16-handle LRU `TorrentDiskIoCache`, debounced `.state` writes, O(1) piece counting, and binary `SemaphoreSlim(0, 1)` signaling.
+  - Fixed 24 `HICON` handle leaks via shared `CreateShihabAppIcon()`, cached `CurrentUserSid` (fixing `WindowsIdentity` leaks), disposed `ContextMenuStrip`s and dynamic items, stopped caching a `2000×2000` bitmap in WinForms (`16 MB → 64 KB`), gated/paused WinForms UI timers when minimized or idle, lazy-initialized disabled Remote/Click'n'Load servers, cached GDI+ brushes/pens, and reduced `RegexOptions.Compiled` usage from **69 → 1**.
 
 ---
 

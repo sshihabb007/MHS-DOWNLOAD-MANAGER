@@ -91,6 +91,7 @@ namespace ShihabMehediIDM
         [DataMember(Name = "captureMinSizeKb")] public int ShihabCaptureMinSizeKb { get; set; }
         [DataMember(Name = "contextMenuItems")] public string ShihabContextMenuItems { get; set; }
         [DataMember(Name = "activeDownloads")] public int ShihabActiveDownloads { get; set; }
+        [DataMember(Name = "pendingRelayCount")] public int ShihabPendingRelayCount { get; set; }
         [DataMember(Name = "updateAvailable")] public bool ShihabUpdateAvailable { get; set; }
         [DataMember(Name = "latestVersion")] public string ShihabLatestVersion { get; set; }
         [DataMember(Name = "latestHtmlUrl")] public string ShihabLatestHtmlUrl { get; set; }

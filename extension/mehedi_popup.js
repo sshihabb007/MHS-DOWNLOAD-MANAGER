@@ -209,36 +209,54 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   }
 
-  async function mehediRefreshPopupState() {
-    const shihabRes = await shihabSendRuntimeMessageBounded({
-      shihabCmd: "shihab_query_tab_streams",
-      mehediTabId: shihabActiveTabId,
-      shihabForceBridgeSync: true
-    }, 3500);
-    mehediRenderUpdateBanner(shihabRes);
+  let mehediLastPopupStreamsSig = "";
 
+  function shihabRenderConnectionStatus(shihabRes, mehediIsPendingSync) {
+    mehediRenderUpdateBanner(shihabRes);
     if (!shihabRes || shihabRes.__shihabDisconnected || shihabRes.__shihabTimedOut) {
       shihabDot.classList.remove("online");
-      mehediSub.textContent = "Worker busy — Reload extension or launch mdm.exe";
-      shihabToggleBtn.textContent = "Offline";
-      return;
+      mehediSub.textContent = mehediIsPendingSync
+        ? "Checking mdm.exe bridge..."
+        : "Worker busy — Reload extension or launch mdm.exe";
+      shihabToggleBtn.textContent = mehediIsPendingSync ? "..." : "Offline";
+      return false;
     }
 
     if (!shihabRes.mehediOnline) {
       shihabDot.classList.remove("online");
-      mehediSub.textContent = "Offline — Launch mdm.exe v1.2.2";
-      shihabToggleBtn.textContent = "Offline";
+      mehediSub.textContent = mehediIsPendingSync
+        ? "Checking mdm.exe bridge..."
+        : "Offline — Launch mdm.exe v1.2.3";
+      shihabToggleBtn.textContent = mehediIsPendingSync ? "..." : "Offline";
+    } else if (shihabRes.shihabAuthFailed) {
+      shihabDot.classList.remove("online");
+      mehediSub.textContent = "Native Host needed — open mdm.exe → Options → Register";
+      shihabToggleBtn.textContent = "Auth";
     } else {
-      const mehediBridgeVer = (shihabRes.shihabBridgeInfo && shihabRes.shihabBridgeInfo.version) || "1.2.2";
+      const mehediBridgeVer = (shihabRes.shihabBridgeInfo && shihabRes.shihabBridgeInfo.version) || "1.2.3";
       shihabDot.classList.add("online");
       mehediSub.textContent = shihabRes.shihabEnabled
         ? `Connected · mdm.exe v${mehediBridgeVer}`
         : "Integration Paused";
       shihabToggleBtn.textContent = shihabRes.shihabEnabled ? "Enabled" : "Paused";
     }
+    return true;
+  }
 
+  async function shihabRenderStreamsFromResponse(shihabRes) {
+    if (!shihabRes || shihabRes.__shihabDisconnected || shihabRes.__shihabTimedOut) {
+      return;
+    }
     const mehediStreams = await mehediResolveIsolatedSelectedStreams(shihabRes.mehediStreams);
+    const shihabNextSig = mehediStreams.map((s) =>
+      `${s.shihabStreamUrl || ""}|${s.mehediResolvedFileName || ""}|${s.mehediBadge || ""}|${s.mehediDisplaySizeBytes || s.shihabSizeBytes || -1}`
+    ).join("\n");
     mehediCountBadge.textContent = String(mehediStreams.length);
+    if (shihabNextSig === mehediLastPopupStreamsSig && shihabStreamsBox.childElementCount > 0) {
+      return;
+    }
+    mehediLastPopupStreamsSig = shihabNextSig;
+
     if (mehediStreams.length === 0) {
       shihabStreamsBox.textContent = "";
       const mehediEmptyDiv = document.createElement("div");
@@ -247,79 +265,102 @@ document.addEventListener("DOMContentLoaded", async () => {
       shihabStreamsBox.appendChild(mehediEmptyDiv);
       return;
     }
-    if (mehediStreams.length > 0) {
-      shihabStreamsBox.textContent = "";
-      for (const shihabStream of mehediStreams) {
-        const mehediDiv = document.createElement("div");
-        mehediDiv.className = "shihab-stream-row";
+    shihabStreamsBox.textContent = "";
+    for (const shihabStream of mehediStreams) {
+      const mehediDiv = document.createElement("div");
+      mehediDiv.className = "shihab-stream-row";
 
-        const shihabIsAudio = Boolean(shihabStream.shihabIsAudioOnly || shihabStream.mehediMediaKind === "AUDIO");
-        const shihabRealFileName =
-          shihabStream.mehediResolvedFileName ||
-          shihabStream.shihabDisplayName ||
-          "Video.mp4";
-        const mehediCleanTitle =
-          shihabStream.shihabDisplayName ||
-          shihabRealFileName.replace(/\s*\[[^\]]+\](\.[a-z0-9]{2,5})?$/i, "").replace(/\.[a-z0-9]{2,5}$/i, "");
+      const shihabIsAudio = Boolean(shihabStream.shihabIsAudioOnly || shihabStream.mehediMediaKind === "AUDIO");
+      const shihabRealFileName =
+        shihabStream.mehediResolvedFileName ||
+        shihabStream.shihabDisplayName ||
+        "Video.mp4";
+      const mehediCleanTitle =
+        shihabStream.shihabDisplayName ||
+        shihabRealFileName.replace(/\s*\[[^\]]+\](\.[a-z0-9]{2,5})?$/i, "").replace(/\.[a-z0-9]{2,5}$/i, "");
 
-        const shihabDisplayBytes = shihabStream.mehediDisplaySizeBytes > 0
-          ? shihabStream.mehediDisplaySizeBytes
-          : shihabStream.shihabSizeBytes;
-        const mehediSizeStr = shihabFormatPopupBytes(shihabDisplayBytes);
+      const shihabDisplayBytes = shihabStream.mehediDisplaySizeBytes > 0
+        ? shihabStream.mehediDisplaySizeBytes
+        : shihabStream.shihabSizeBytes;
+      const mehediSizeStr = shihabFormatPopupBytes(shihabDisplayBytes);
 
-        const mehediLeftWrap = document.createElement("div");
-        mehediLeftWrap.className = "mehedi-stream-left";
+      const mehediLeftWrap = document.createElement("div");
+      mehediLeftWrap.className = "mehedi-stream-left";
 
-        const shihabKindBadge = document.createElement("span");
-        shihabKindBadge.className = "shihab-kind-badge " + (shihabIsAudio ? "mehedi-kind-audio" : "mehedi-kind-video");
-        shihabKindBadge.textContent = shihabIsAudio ? "AUDIO" : "VIDEO";
+      const shihabKindBadge = document.createElement("span");
+      shihabKindBadge.className = "shihab-kind-badge " + (shihabIsAudio ? "mehedi-kind-audio" : "mehedi-kind-video");
+      shihabKindBadge.textContent = shihabIsAudio ? "AUDIO" : "VIDEO";
 
-        const shihabNameSpan = document.createElement("span");
-        shihabNameSpan.className = "mehedi-stream-name";
-        shihabNameSpan.title = shihabRealFileName;
-        shihabNameSpan.textContent = mehediCleanTitle;
+      const shihabNameSpan = document.createElement("span");
+      shihabNameSpan.className = "mehedi-stream-name";
+      shihabNameSpan.title = shihabRealFileName;
+      shihabNameSpan.textContent = mehediCleanTitle;
 
-        mehediLeftWrap.appendChild(shihabKindBadge);
-        mehediLeftWrap.appendChild(shihabNameSpan);
+      mehediLeftWrap.appendChild(shihabKindBadge);
+      mehediLeftWrap.appendChild(shihabNameSpan);
 
-        const shihabRightWrap = document.createElement("div");
-        shihabRightWrap.className = "shihab-stream-right";
+      const shihabRightWrap = document.createElement("div");
+      shihabRightWrap.className = "shihab-stream-right";
 
-        const mehediTagSpan = document.createElement("span");
-        mehediTagSpan.className = "shihab-stream-tag" + (shihabIsAudio ? " mehedi-tag-audio" : "");
-        mehediTagSpan.textContent = shihabStream.mehediBadge || (shihabIsAudio ? "M4A Audio" : "MP4 HD");
+      const mehediTagSpan = document.createElement("span");
+      mehediTagSpan.className = "shihab-stream-tag" + (shihabIsAudio ? " mehedi-tag-audio" : "");
+      mehediTagSpan.textContent = shihabStream.mehediBadge || (shihabIsAudio ? "M4A Audio" : "MP4 HD");
 
-        const shihabSizeSpan = document.createElement("span");
-        shihabSizeSpan.className = "mehedi-stream-size";
-        shihabSizeSpan.textContent = mehediSizeStr || (shihabStream.shihabExt === "m3u8" ? "HLS" : "Ready");
+      const shihabSizeSpan = document.createElement("span");
+      shihabSizeSpan.className = "mehedi-stream-size";
+      shihabSizeSpan.textContent = mehediSizeStr || (shihabStream.shihabExt === "m3u8" ? "HLS" : "Ready");
 
-        shihabRightWrap.appendChild(mehediTagSpan);
-        shihabRightWrap.appendChild(shihabSizeSpan);
+      shihabRightWrap.appendChild(mehediTagSpan);
+      shihabRightWrap.appendChild(shihabSizeSpan);
 
-        mehediDiv.appendChild(mehediLeftWrap);
-        mehediDiv.appendChild(shihabRightWrap);
+      mehediDiv.appendChild(mehediLeftWrap);
+      mehediDiv.appendChild(shihabRightWrap);
 
-        mehediDiv.addEventListener("click", async () => {
-          await chrome.runtime.sendMessage({
-            shihabCmd: "mehedi_send_download_now",
-            shihabUrl: shihabStream.shihabStreamUrl,
-            shihabFileName: shihabRealFileName,
-            mehediMimeType: shihabStream.mehediMimeType || (shihabStream.shihabExt === "m3u8" ? "application/vnd.apple.mpegurl" : ""),
-            mehediReferrer: shihabStream.mehediCapturedReferer || (mehediActiveTab ? mehediActiveTab.url : ""),
-            shihabFileSize: shihabStream.shihabSizeBytes || -1,
-            mehediTabTitle: mehediCleanTitle,
-            shihabOrigin: shihabStream.shihabOrigin || "",
-            mehediOmitCookies: shihabStream.mehediOmitCookies,
-            mehediUserAgent: shihabStream.mehediCustomUserAgent || "",
-            mehediAudioCompanionUrl: shihabStream.mehediAudioCompanionUrl || "",
-            shihabAudioCompanionBytes: shihabStream.shihabAudioCompanionBytes || -1,
-            shihabQualityLabel: shihabStream.shihabQualityLabel || shihabStream.shihabResolution || (shihabIsAudio ? "Audio" : ""),
-            shihabTabId: shihabActiveTabId
-          });
-          window.close();
+      mehediDiv.addEventListener("click", async () => {
+        await chrome.runtime.sendMessage({
+          shihabCmd: "mehedi_send_download_now",
+          shihabUrl: shihabStream.shihabStreamUrl,
+          shihabFileName: shihabRealFileName,
+          mehediMimeType: shihabStream.mehediMimeType || (shihabStream.shihabExt === "m3u8" ? "application/vnd.apple.mpegurl" : ""),
+          mehediReferrer: shihabStream.mehediCapturedReferer || (mehediActiveTab ? mehediActiveTab.url : ""),
+          shihabFileSize: shihabStream.shihabSizeBytes || -1,
+          mehediTabTitle: mehediCleanTitle,
+          shihabOrigin: shihabStream.shihabOrigin || "",
+          mehediOmitCookies: shihabStream.mehediOmitCookies,
+          mehediUserAgent: shihabStream.mehediCustomUserAgent || "",
+          mehediAudioCompanionUrl: shihabStream.mehediAudioCompanionUrl || "",
+          shihabAudioCompanionBytes: shihabStream.shihabAudioCompanionBytes || -1,
+          shihabQualityLabel: shihabStream.shihabQualityLabel || shihabStream.shihabResolution || (shihabIsAudio ? "Audio" : ""),
+          shihabTabId: shihabActiveTabId
         });
-        shihabStreamsBox.appendChild(mehediDiv);
-      }
+        window.close();
+      });
+      shihabStreamsBox.appendChild(mehediDiv);
+    }
+  }
+
+  async function mehediRefreshPopupState() {
+    // Launch fast cached query AND parallel live bridge sync simultaneously so detected videos render instantaneously even when mdm.exe is offline!
+    const shihabFastPromise = shihabSendRuntimeMessageBounded({
+      shihabCmd: "shihab_query_tab_streams",
+      mehediTabId: shihabActiveTabId,
+      shihabForceBridgeSync: false
+    }, 2000);
+    const mehediLiveSyncPromise = shihabSendRuntimeMessageBounded({
+      shihabCmd: "shihab_query_tab_streams",
+      mehediTabId: shihabActiveTabId,
+      shihabForceBridgeSync: true
+    }, 3500);
+
+    const shihabFastRes = await shihabFastPromise;
+    if (shihabFastRes && !shihabFastRes.__shihabDisconnected && !shihabFastRes.__shihabTimedOut) {
+      shihabRenderConnectionStatus(shihabFastRes, !shihabFastRes.mehediOnline);
+      await shihabRenderStreamsFromResponse(shihabFastRes);
+    }
+
+    const shihabLiveRes = await mehediLiveSyncPromise;
+    if (shihabRenderConnectionStatus(shihabLiveRes, false)) {
+      await shihabRenderStreamsFromResponse(shihabLiveRes);
     }
   }
 
@@ -365,7 +406,7 @@ document.addEventListener("DOMContentLoaded", async () => {
           latestHtmlUrl: mehediLatestReleaseUrl || ""
         }, 5500);
       } catch (_) {
-        if (mehediLatestReleaseUrl && /^https?:\/\//i.test(mehediLatestReleaseUrl)) {
+        if (mehediLatestReleaseUrl && /^https:\/\/github\.com\/sshihabb007\/MHS-DOWNLOAD-MANAGER\/releases(\/|$)/i.test(mehediLatestReleaseUrl)) {
           chrome.tabs.create({ url: mehediLatestReleaseUrl }).catch(() => {});
         }
       }

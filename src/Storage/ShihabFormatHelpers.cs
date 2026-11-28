@@ -13,7 +13,7 @@ namespace ShihabMehediIDM
 
         private static readonly Regex TranslationSuffixRx = new Regex(
             @"\s*(?:Hide translation|See translation|See original|Translated from [A-Za-z ]+)\s*$",
-            RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant,
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
             TimeSpan.FromMilliseconds(250));
 
         public static string FormatMehediBytes(long shihabBytes)
@@ -362,7 +362,7 @@ namespace ShihabMehediIDM
                     WildcardRegexCache.Clear();
                 }
                 string shihabRegex = "^" + Regex.Escape(patKey).Replace("\\*", ".*").Replace("\\?", ".") + "$";
-                rx = new Regex(shihabRegex, RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(250));
+                rx = new Regex(shihabRegex, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(250));
                 WildcardRegexCache.TryAdd(patKey, rx);
             }
             try

@@ -20,12 +20,12 @@ namespace ShihabMehediIDM
         private const int MaxTarMetadataBlockBytes = 65536;
 
         private static readonly TimeSpan ArchiveRegexTimeout = TimeSpan.FromMilliseconds(250);
-        private static readonly Regex SplitNumericExtRegex = new Regex(@"\.(7z|zip)\.001$", RegexOptions.Compiled | RegexOptions.CultureInvariant, ArchiveRegexTimeout);
-        private static readonly Regex RarPartVolRegex = new Regex(@"^(.+)\.part0*([0-9]+)\.rar$", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant, ArchiveRegexTimeout);
-        private static readonly Regex NumSplitVolRegex = new Regex(@"^(.+\.(?:7z|zip))\.([0-9]{3})$", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant, ArchiveRegexTimeout);
-        private static readonly Regex OldRarVolRegex = new Regex(@"\.r[0-9]{2}$", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant, ArchiveRegexTimeout);
-        private static readonly Regex RarStemRegex = new Regex(@"^(.+?)\.part0*1\.rar$", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant, ArchiveRegexTimeout);
-        private static readonly Regex NumStemRegex = new Regex(@"^(.+?)\.(?:7z|zip)\.001$", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant, ArchiveRegexTimeout);
+        private static readonly Regex SplitNumericExtRegex = new Regex(@"\.(7z|zip)\.001$", RegexOptions.CultureInvariant, ArchiveRegexTimeout);
+        private static readonly Regex RarPartVolRegex = new Regex(@"^(.+)\.part0*([0-9]+)\.rar$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, ArchiveRegexTimeout);
+        private static readonly Regex NumSplitVolRegex = new Regex(@"^(.+\.(?:7z|zip))\.([0-9]{3})$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, ArchiveRegexTimeout);
+        private static readonly Regex OldRarVolRegex = new Regex(@"\.r[0-9]{2}$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, ArchiveRegexTimeout);
+        private static readonly Regex RarStemRegex = new Regex(@"^(.+?)\.part0*1\.rar$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, ArchiveRegexTimeout);
+        private static readonly Regex NumStemRegex = new Regex(@"^(.+?)\.(?:7z|zip)\.001$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, ArchiveRegexTimeout);
 
         private static readonly HashSet<string> WindowsReservedDeviceNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -414,15 +414,28 @@ namespace ShihabMehediIDM
         {
             destDir = "";
             errorMsg = "";
+            string stagingDir = "";
             try
             {
                 string parentDir = Path.GetDirectoryName(Path.GetFullPath(archivePath));
-                string outDir = GetUniqueDirectoryPath(parentDir, GetArchiveStem(Path.GetFileName(archivePath)));
-                Directory.CreateDirectory(outDir);
+                if (string.IsNullOrWhiteSpace(parentDir) || ShihabProcessAndPathSafety.HasAnyReparsePointInPath(parentDir))
+                {
+                    errorMsg = "Blocked extraction into unsafe or reparse-point parent directory.";
+                    return false;
+                }
+                string stem = GetArchiveStem(Path.GetFileName(archivePath));
+                stagingDir = Path.Combine(parentDir, ".mdm-hatch-" + Guid.NewGuid().ToString("N").Substring(0, 8));
+                Directory.CreateDirectory(stagingDir);
+                ShihabSecretsVault.ApplyRestrictedUserDirectoryAcl(stagingDir);
+
+                long compressedBytes = new FileInfo(archivePath).Length;
+                long availDisk = ShihabOsAndDiskSafety.GetAvailableDiskBytes(parentDir);
+                long diskBudgetCap = Math.Min(MaxDecompressedBytes, Math.Max(64L * 1024L * 1024L, availDisk - ShihabOsAndDiskSafety.DiskSafetyMarginBytes));
+
                 System.Diagnostics.ProcessStartInfo psi = new System.Diagnostics.ProcessStartInfo();
                 psi.FileName = hatchExe;
-                psi.Arguments = ShihabProcessAndPathSafety.BuildWindowsArgumentString(archivePath, "-o", outDir);
-                psi.WorkingDirectory = parentDir;
+                psi.Arguments = ShihabProcessAndPathSafety.BuildWindowsArgumentString(archivePath, "-o", stagingDir);
+                psi.WorkingDirectory = stagingDir;
                 psi.UseShellExecute = false;
                 psi.CreateNoWindow = true;
                 psi.RedirectStandardOutput = true;
@@ -431,30 +444,120 @@ namespace ShihabMehediIDM
                 {
                     psi.EnvironmentVariables["HATCHZIP_PASSWORD"] = password.Replace("\r", "").Replace("\n", "").Replace("\0", "");
                 }
-                using (System.Diagnostics.Process proc = System.Diagnostics.Process.Start(psi))
+
+                StringBuilder errSb = new StringBuilder();
+                object errLock = new object();
+                using (System.Diagnostics.Process proc = new System.Diagnostics.Process())
                 {
-                    if (proc == null) return false;
-                    string err = proc.StandardError.ReadToEnd();
-                    proc.WaitForExit(600000);
+                    proc.StartInfo = psi;
+                    proc.OutputDataReceived += delegate(object s, System.Diagnostics.DataReceivedEventArgs e)
+                    {
+                        // Drain stdout asynchronously to prevent child pipe deadlock
+                    };
+                    proc.ErrorDataReceived += delegate(object s, System.Diagnostics.DataReceivedEventArgs e)
+                    {
+                        if (e.Data == null) return;
+                        lock (errLock)
+                        {
+                            if (errSb.Length < 1024 * 1024) errSb.AppendLine(e.Data);
+                        }
+                    };
+                    if (!proc.Start())
+                    {
+                        TryDeleteDirectory(stagingDir);
+                        return false;
+                    }
+                    ShihabWindowsJobRunner.AttachProcessToKillOnCloseJob(proc);
+                    proc.BeginOutputReadLine();
+                    proc.BeginErrorReadLine();
+                    bool exited = proc.WaitForExit(600000);
+                    if (!exited)
+                    {
+                        try { proc.Kill(); } catch { }
+                        try { proc.WaitForExit(1000); } catch { }
+                        errorMsg = "hatchzip extraction timed out.";
+                        TryDeleteDirectory(stagingDir);
+                        return false;
+                    }
+                    proc.WaitForExit();
                     if (proc.ExitCode != 0)
                     {
-                        errorMsg = !string.IsNullOrWhiteSpace(err) ? err.Trim() : ("hatchzip exited with code " + proc.ExitCode);
-                        TryDeleteDirectory(outDir);
+                        string err;
+                        lock (errLock) { err = errSb.ToString().Trim(); }
+                        errorMsg = !string.IsNullOrWhiteSpace(err) ? err : ("hatchzip exited with code " + proc.ExitCode);
+                        TryDeleteDirectory(stagingDir);
                         return false;
                     }
                 }
+
+                AuditStagingDirectorySafety(stagingDir, compressedBytes, diskBudgetCap);
                 if (!string.IsNullOrWhiteSpace(motwHostUrl) || !string.IsNullOrWhiteSpace(motwRefererUrl))
                 {
-                    ShihabOsAndDiskSafety.PropagateMarkOfTheWebToDirectory(outDir, motwHostUrl, motwRefererUrl);
+                    ShihabOsAndDiskSafety.PropagateMarkOfTheWebToDirectory(stagingDir, motwHostUrl, motwRefererUrl);
                 }
-                destDir = outDir;
+                destDir = MoveStagingContentsSafely(stagingDir, parentDir, stem, "Always");
                 return true;
             }
             catch (Exception ex)
             {
                 errorMsg = ex.Message;
+                if (!string.IsNullOrEmpty(stagingDir)) TryDeleteDirectory(stagingDir);
                 return false;
             }
+        }
+
+        private static string MoveStagingContentsSafely(string stagingDir, string parentDir, string stem, string subfolderMode)
+        {
+            if (ShihabProcessAndPathSafety.HasAnyReparsePointInPath(parentDir))
+            {
+                throw new InvalidOperationException("Blocked moving extracted archive into reparse-point destination.");
+            }
+            string mode = string.IsNullOrWhiteSpace(subfolderMode) ? "Smart" : subfolderMode.Trim();
+            string[] topDirs = Directory.GetDirectories(stagingDir);
+            string[] topFiles = Directory.GetFiles(stagingDir);
+            int topCount = topDirs.Length + topFiles.Length;
+
+            if (string.Equals(mode, "Always", StringComparison.OrdinalIgnoreCase) ||
+                (string.Equals(mode, "Smart", StringComparison.OrdinalIgnoreCase) && topCount > 1))
+            {
+                string targetSubfolder = GetUniqueDirectoryPath(parentDir, stem);
+                Directory.Move(stagingDir, targetSubfolder);
+                return targetSubfolder;
+            }
+            if (topCount == 1 && !string.Equals(mode, "Never", StringComparison.OrdinalIgnoreCase))
+            {
+                string finalDest;
+                if (topDirs.Length == 1)
+                {
+                    string dirLeaf = Path.GetFileName(topDirs[0]);
+                    string destDir = GetUniqueDirectoryPath(parentDir, dirLeaf);
+                    Directory.Move(topDirs[0], destDir);
+                    finalDest = destDir;
+                }
+                else
+                {
+                    string fileLeaf = Path.GetFileName(topFiles[0]);
+                    string uniqueLeaf = ShihabFormatHelpers.EnsureShihabUniqueFilePath(parentDir, fileLeaf);
+                    string destFile = Path.Combine(parentDir, uniqueLeaf);
+                    File.Move(topFiles[0], destFile);
+                    finalDest = destFile;
+                }
+                TryDeleteDirectory(stagingDir);
+                return finalDest;
+            }
+
+            for (int i = 0; i < topDirs.Length; i++)
+            {
+                string destDir = GetUniqueDirectoryPath(parentDir, Path.GetFileName(topDirs[i]));
+                Directory.Move(topDirs[i], destDir);
+            }
+            for (int i = 0; i < topFiles.Length; i++)
+            {
+                string uniqueLeaf = ShihabFormatHelpers.EnsureShihabUniqueFilePath(parentDir, Path.GetFileName(topFiles[i]));
+                File.Move(topFiles[i], Path.Combine(parentDir, uniqueLeaf));
+            }
+            TryDeleteDirectory(stagingDir);
+            return parentDir;
         }
 
         public static bool ExtractArchiveSafely(
@@ -563,52 +666,7 @@ namespace ShihabMehediIDM
                     ShihabOsAndDiskSafety.PropagateMarkOfTheWebToDirectory(stagingDir, motwHostUrl, motwRefererUrl);
                 }
 
-                string mode = string.IsNullOrWhiteSpace(subfolderMode) ? "Smart" : subfolderMode.Trim();
-                string[] topDirs = Directory.GetDirectories(stagingDir);
-                string[] topFiles = Directory.GetFiles(stagingDir);
-                int topCount = topDirs.Length + topFiles.Length;
-
-                if (string.Equals(mode, "Always", StringComparison.OrdinalIgnoreCase) ||
-                    (string.Equals(mode, "Smart", StringComparison.OrdinalIgnoreCase) && topCount > 1))
-                {
-                    string targetSubfolder = GetUniqueDirectoryPath(parentDir, stem);
-                    Directory.Move(stagingDir, targetSubfolder);
-                    finalDestinationPath = targetSubfolder;
-                }
-                else if (topCount == 1 && !string.Equals(mode, "Never", StringComparison.OrdinalIgnoreCase))
-                {
-                    if (topDirs.Length == 1)
-                    {
-                        string dirLeaf = Path.GetFileName(topDirs[0]);
-                        string destDir = GetUniqueDirectoryPath(parentDir, dirLeaf);
-                        Directory.Move(topDirs[0], destDir);
-                        finalDestinationPath = destDir;
-                    }
-                    else
-                    {
-                        string fileLeaf = Path.GetFileName(topFiles[0]);
-                        string uniqueLeaf = ShihabFormatHelpers.EnsureShihabUniqueFilePath(parentDir, fileLeaf);
-                        string destFile = Path.Combine(parentDir, uniqueLeaf);
-                        File.Move(topFiles[0], destFile);
-                        finalDestinationPath = destFile;
-                    }
-                    TryDeleteDirectory(stagingDir);
-                }
-                else
-                {
-                    for (int i = 0; i < topDirs.Length; i++)
-                    {
-                        string destDir = GetUniqueDirectoryPath(parentDir, Path.GetFileName(topDirs[i]));
-                        Directory.Move(topDirs[i], destDir);
-                    }
-                    for (int i = 0; i < topFiles.Length; i++)
-                    {
-                        string uniqueLeaf = ShihabFormatHelpers.EnsureShihabUniqueFilePath(parentDir, Path.GetFileName(topFiles[i]));
-                        File.Move(topFiles[i], Path.Combine(parentDir, uniqueLeaf));
-                    }
-                    finalDestinationPath = parentDir;
-                    TryDeleteDirectory(stagingDir);
-                }
+                finalDestinationPath = MoveStagingContentsSafely(stagingDir, parentDir, stem, subfolderMode);
 
                 if (deleteArchiveOnSuccess)
                 {
@@ -692,18 +750,30 @@ namespace ShihabMehediIDM
                         throw new InvalidOperationException("Archive exceeds maximum entry count limit (100,000).");
                     }
                     uint unixMode = ((uint)entry.ExternalAttributes >> 16) & 0xF000u;
-                    if (unixMode == 0xA000u)
+                    if (unixMode == 0xA000u || (entry.ExternalAttributes & 0x0400) != 0)
                     {
-                        throw new InvalidOperationException("Blocked symbolic link entry in ZIP archive: " + entry.FullName);
+                        throw new InvalidOperationException("Blocked symbolic link or reparse entry in ZIP archive: " + entry.FullName);
                     }
                     bool isDir = entry.FullName.EndsWith("/") || entry.FullName.EndsWith("\\");
                     string safePath = ValidateSafeRelativeEntryPath(stagingDir, entry.FullName, isDir);
+                    if (!string.IsNullOrEmpty(safePath) && ShihabProcessAndPathSafety.HasAnyReparsePointInPath(safePath))
+                    {
+                        throw new InvalidOperationException("Blocked reparse point in ZIP extraction target: " + entry.FullName);
+                    }
                     if (isDir)
                     {
                         if (!string.IsNullOrEmpty(safePath)) Directory.CreateDirectory(safePath);
                         continue;
                     }
-                    Directory.CreateDirectory(Path.GetDirectoryName(safePath));
+                    string parentDir = Path.GetDirectoryName(safePath);
+                    if (!string.IsNullOrEmpty(parentDir))
+                    {
+                        Directory.CreateDirectory(parentDir);
+                    }
+                    if (ShihabProcessAndPathSafety.HasAnyReparsePointInPath(safePath))
+                    {
+                        throw new InvalidOperationException("Blocked reparse point created during ZIP extraction: " + entry.FullName);
+                    }
                     using (Stream inStream = entry.Open())
                     using (FileStream outFs = new FileStream(safePath, FileMode.Create, FileAccess.Write, FileShare.None))
                     {
@@ -845,6 +915,206 @@ namespace ShihabMehediIDM
             return "";
         }
 
+        private static bool HasSevenZipSymlinkAttribute(string rawAttr)
+        {
+            if (string.IsNullOrWhiteSpace(rawAttr)) return false;
+            string trimmed = rawAttr.Trim();
+            string[] parts = trimmed.Split(new char[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length == 0) return false;
+            // First token is Windows attribute flags (e.g., "D...L", "....L", "L", or "_")
+            if (parts[0].IndexOf('L') >= 0)
+            {
+                return true;
+            }
+            // Optional second token is POSIX mode string (e.g., "lrwxrwxrwx")
+            for (int i = 1; i < parts.Length; i++)
+            {
+                if (parts[i].Length >= 4 && (parts[i][0] == 'l' || parts[i][0] == 'L'))
+                {
+                    return true;
+                }
+            }
+            // Also check single-token POSIX mode string starting with 'l'
+            if (parts.Length == 1 && parts[0].Length >= 9 && parts[0][0] == 'l')
+            {
+                return true;
+            }
+            return false;
+        }
+
+        private static bool AuditSevenZipListingBeforeExtract(
+            string sevenZipExe,
+            string archivePath,
+            string stagingDir,
+            string password,
+            long compressedSize,
+            long diskBudgetCap,
+            out string errorMsg)
+        {
+            errorMsg = "";
+            List<string> listArgs = new List<string>();
+            listArgs.Add("l");
+            listArgs.Add("-slt");
+            listArgs.Add("-ba");
+            if (!string.IsNullOrEmpty(password))
+            {
+                string cleanPwd = password.Replace("\r", "").Replace("\n", "").Replace("\0", "");
+                listArgs.Add("-p" + cleanPwd);
+            }
+            else
+            {
+                listArgs.Add("-p");
+            }
+            listArgs.Add("--");
+            listArgs.Add(archivePath);
+
+            string listStdout;
+            string listStderr;
+            int listCode = ShihabWindowsJobRunner.RunManagedSubprocess(
+                sevenZipExe,
+                ShihabProcessAndPathSafety.BuildWindowsArgumentString(listArgs.ToArray()),
+                stagingDir,
+                120000,
+                null,
+                CancellationToken.None,
+                out listStdout,
+                out listStderr);
+
+            if (listCode != 0)
+            {
+                errorMsg = !string.IsNullOrWhiteSpace(listStderr)
+                    ? listStderr.Trim()
+                    : string.Format("7z.exe pre-extraction listing failed with code {0}.", listCode);
+                return false;
+            }
+
+            int entriesCount = 0;
+            long totalDeclaredBytes = 0;
+            string curPath = "";
+            string curAttrs = "";
+            string curSymLink = "";
+            string curHardLink = "";
+            long curSize = 0;
+            bool curIsFolder = false;
+            bool inEntry = false;
+
+            string[] lines = (listStdout ?? "").Split(new char[] { '\r', '\n' }, StringSplitOptions.None);
+            for (int i = 0; i <= lines.Length; i++)
+            {
+                string line = i < lines.Length ? lines[i] : "";
+                if (string.IsNullOrWhiteSpace(line))
+                {
+                    if (inEntry)
+                    {
+                        entriesCount++;
+                        if (entriesCount > MaxExtractedEntries)
+                        {
+                            errorMsg = "Archive exceeds maximum entry count limit (100,000) during pre-extraction audit.";
+                            return false;
+                        }
+                        if (!string.IsNullOrWhiteSpace(curSymLink) || !string.IsNullOrWhiteSpace(curHardLink) || HasSevenZipSymlinkAttribute(curAttrs))
+                        {
+                            errorMsg = "Blocked symbolic link, hard link, or reparse entry in archive: " + curPath;
+                            return false;
+                        }
+                        if (string.IsNullOrWhiteSpace(curPath))
+                        {
+                            errorMsg = "Archive entry has an empty path in pre-extraction audit.";
+                            return false;
+                        }
+                        if (curPath.StartsWith("/", StringComparison.Ordinal) ||
+                            curPath.StartsWith("\\", StringComparison.Ordinal) ||
+                            curPath.IndexOf(':') >= 0)
+                        {
+                            errorMsg = "Blocked rooted or drive-qualified path in archive: " + curPath;
+                            return false;
+                        }
+                        try
+                        {
+                            ValidateSafeRelativeEntryPath(stagingDir, curPath, curIsFolder);
+                        }
+                        catch (Exception ex)
+                        {
+                            errorMsg = ex.Message;
+                            return false;
+                        }
+                        if (curSize < 0)
+                        {
+                            errorMsg = "Archive entry has negative uncompressed size: " + curPath;
+                            return false;
+                        }
+                        if (curSize > long.MaxValue - totalDeclaredBytes)
+                        {
+                            errorMsg = "Archive total uncompressed size overflowed safety bounds.";
+                            return false;
+                        }
+                        totalDeclaredBytes += curSize;
+                        try
+                        {
+                            CheckDecompressionBombGuard(compressedSize, totalDeclaredBytes, diskBudgetCap);
+                        }
+                        catch (Exception ex)
+                        {
+                            errorMsg = ex.Message;
+                            return false;
+                        }
+
+                        curPath = "";
+                        curAttrs = "";
+                        curSymLink = "";
+                        curHardLink = "";
+                        curSize = 0;
+                        curIsFolder = false;
+                        inEntry = false;
+                    }
+                    continue;
+                }
+
+                int eq = line.IndexOf('=');
+                if (eq <= 0) continue;
+                string key = line.Substring(0, eq).Trim();
+                string val = line.Substring(eq + 1).Trim();
+
+                if (string.Equals(key, "Path", StringComparison.OrdinalIgnoreCase))
+                {
+                    curPath = val;
+                    inEntry = true;
+                }
+                else if (string.Equals(key, "Size", StringComparison.OrdinalIgnoreCase))
+                {
+                    inEntry = true;
+                    long parsedSize;
+                    if (!string.IsNullOrEmpty(val) && long.TryParse(val, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out parsedSize))
+                    {
+                        curSize = parsedSize;
+                    }
+                }
+                else if (string.Equals(key, "Attributes", StringComparison.OrdinalIgnoreCase))
+                {
+                    inEntry = true;
+                    curAttrs = val;
+                    if (val.StartsWith("D", StringComparison.OrdinalIgnoreCase)) curIsFolder = true;
+                }
+                else if (string.Equals(key, "Folder", StringComparison.OrdinalIgnoreCase))
+                {
+                    inEntry = true;
+                    if (val == "+") curIsFolder = true;
+                }
+                else if (string.Equals(key, "Symbolic Link", StringComparison.OrdinalIgnoreCase))
+                {
+                    inEntry = true;
+                    curSymLink = val;
+                }
+                else if (string.Equals(key, "Hard Link", StringComparison.OrdinalIgnoreCase))
+                {
+                    inEntry = true;
+                    curHardLink = val;
+                }
+            }
+
+            return true;
+        }
+
         private static bool ExtractWithSevenZip(
             string archivePath,
             string stagingDir,
@@ -858,6 +1128,12 @@ namespace ShihabMehediIDM
             if (string.IsNullOrEmpty(sevenZipExe))
             {
                 errorMsg = "7-Zip (7z.exe) is required to extract .7z/.rar/encrypted archives. Install 7-Zip and retry.";
+                return false;
+            }
+
+            // Mandatory pre-extraction listing audit before running 7z.exe x
+            if (!AuditSevenZipListingBeforeExtract(sevenZipExe, archivePath, stagingDir, password, compressedSize, diskBudgetCap, out errorMsg))
+            {
                 return false;
             }
 
@@ -1138,7 +1414,10 @@ namespace ShihabMehediIDM
         {
             try
             {
-                if (Directory.Exists(dir)) Directory.Delete(dir, true);
+                if (!string.IsNullOrWhiteSpace(dir) && Directory.Exists(dir))
+                {
+                    ShihabProcessAndPathSafety.SafeDeleteDirectoryNoFollow(dir);
+                }
             }
             catch
             {

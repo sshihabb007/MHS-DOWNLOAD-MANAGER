@@ -471,6 +471,19 @@ namespace ShihabMehediIDM
         private readonly Dictionary<string, Bitmap> _iconBitmapCache = new Dictionary<string, Bitmap>(StringComparer.Ordinal);
         private Font _cachedLabelFont;
         private float _cachedLabelFontPt;
+        private readonly PointF[] _chevronPoints = new PointF[3];
+
+        private bool _gdiCacheInitialized;
+        private bool _gdiCacheDarkMode;
+        private int _gdiCacheThemeVersion = -1;
+        private SolidBrush _barBgBrush;
+        private Pen _botLinePen;
+        private SolidBrush _hoverFillBrush;
+        private SolidBrush _pressedFillBrush;
+        private Pen _hoverEdgePen;
+        private SolidBrush _arrowHotBrush;
+        private SolidBrush _arrowNormalBrush;
+        private SolidBrush _arrowDisabledBrush;
 
         private int _hoveredIndex = -1;
         private bool _hoveredSplitZone = false;
@@ -722,21 +735,54 @@ namespace ShihabMehediIDM
             return _cachedLabelFont;
         }
 
+        private void EnsureRibbonGdiCache()
+        {
+            int curVer = ShihabThemePalette.ThemePaletteVersion;
+            if (_gdiCacheInitialized && _gdiCacheDarkMode == ShihabDarkMode && _gdiCacheThemeVersion == curVer)
+            {
+                return;
+            }
+
+            DisposeRibbonGdiCache();
+
+            bool dark = ShihabDarkMode;
+            _barBgBrush = new SolidBrush(dark ? Color.FromArgb(43, 45, 51) : Color.FromArgb(241, 245, 249));
+            _botLinePen = new Pen(dark ? Color.FromArgb(62, 66, 76) : Color.FromArgb(203, 213, 225), 1f);
+            _hoverFillBrush = new SolidBrush(dark ? Color.FromArgb(52, 56, 65) : Color.FromArgb(228, 235, 247));
+            _pressedFillBrush = new SolidBrush(dark ? Color.FromArgb(56, 60, 70) : Color.FromArgb(219, 228, 243));
+            _hoverEdgePen = new Pen(dark ? Color.FromArgb(78, 84, 98) : Color.FromArgb(186, 198, 218), 1f);
+            _arrowHotBrush = new SolidBrush(dark ? Color.FromArgb(236, 240, 248) : Color.FromArgb(71, 85, 105));
+            _arrowNormalBrush = new SolidBrush(dark ? Color.FromArgb(150, 156, 168) : Color.FromArgb(71, 85, 105));
+            _arrowDisabledBrush = new SolidBrush(dark ? Color.FromArgb(100, 105, 114) : Color.FromArgb(156, 163, 175));
+
+            _gdiCacheDarkMode = dark;
+            _gdiCacheThemeVersion = curVer;
+            _gdiCacheInitialized = true;
+        }
+
+        private void DisposeRibbonGdiCache()
+        {
+            if (_barBgBrush != null) { _barBgBrush.Dispose(); _barBgBrush = null; }
+            if (_botLinePen != null) { _botLinePen.Dispose(); _botLinePen = null; }
+            if (_hoverFillBrush != null) { _hoverFillBrush.Dispose(); _hoverFillBrush = null; }
+            if (_pressedFillBrush != null) { _pressedFillBrush.Dispose(); _pressedFillBrush = null; }
+            if (_hoverEdgePen != null) { _hoverEdgePen.Dispose(); _hoverEdgePen = null; }
+            if (_arrowHotBrush != null) { _arrowHotBrush.Dispose(); _arrowHotBrush = null; }
+            if (_arrowNormalBrush != null) { _arrowNormalBrush.Dispose(); _arrowNormalBrush = null; }
+            if (_arrowDisabledBrush != null) { _arrowDisabledBrush.Dispose(); _arrowDisabledBrush = null; }
+            _gdiCacheInitialized = false;
+        }
+
         protected override void OnPaint(PaintEventArgs e)
         {
             Graphics g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
 
-            Color barBg = ShihabDarkMode ? Color.FromArgb(43, 45, 51) : Color.FromArgb(241, 245, 249);
-            Color botLine = ShihabDarkMode ? Color.FromArgb(62, 66, 76) : Color.FromArgb(203, 213, 225);
+            EnsureRibbonGdiCache();
 
-            using (SolidBrush bgBr = new SolidBrush(barBg))
-            using (Pen botPen = new Pen(botLine, 1f))
-            {
-                g.FillRectangle(bgBr, e.ClipRectangle);
-                g.DrawLine(botPen, 0, Height - 1, Width, Height - 1);
-            }
+            g.FillRectangle(_barBgBrush, e.ClipRectangle);
+            g.DrawLine(_botLinePen, 0, Height - 1, Width, Height - 1);
 
             if (_items.Count == 0) return;
             if (_items[0].Bounds.Width == 0) RecalculateItemBounds();
@@ -758,28 +804,16 @@ namespace ShihabMehediIDM
 
                 if (hot || pressed)
                 {
-                    Color hoverFill = ShihabDarkMode
-                        ? (pressed ? Color.FromArgb(56, 60, 70) : Color.FromArgb(52, 56, 65))
-                        : (pressed ? Color.FromArgb(219, 228, 243) : Color.FromArgb(228, 235, 247));
-                    Color hoverEdge = ShihabDarkMode
-                        ? Color.FromArgb(78, 84, 98)
-                        : Color.FromArgb(186, 198, 218);
-
+                    SolidBrush hBr = pressed ? _pressedFillBrush : _hoverFillBrush;
                     using (GraphicsPath hp = ShihabThemePalette.CreateShihabRoundedRect(r, 6))
-                    using (SolidBrush hBr = new SolidBrush(hoverFill))
-                    using (Pen hPen = new Pen(hoverEdge, 1f))
                     {
                         g.FillPath(hBr, hp);
-                        g.DrawPath(hPen, hp);
+                        g.DrawPath(_hoverEdgePen, hp);
                     }
 
                     if (item.HasSplitDropDown && !item.SplitDropBounds.IsEmpty)
                     {
-                        Color sepCol = ShihabDarkMode ? Color.FromArgb(78, 84, 98) : Color.FromArgb(186, 198, 218);
-                        using (Pen sepPen = new Pen(sepCol, 1f))
-                        {
-                            g.DrawLine(sepPen, item.SplitDropBounds.Left, r.Top + 6, item.SplitDropBounds.Left, r.Bottom - 6);
-                        }
+                        g.DrawLine(_hoverEdgePen, item.SplitDropBounds.Left, r.Top + 6, item.SplitDropBounds.Left, r.Bottom - 6);
                     }
                 }
 
@@ -797,22 +831,18 @@ namespace ShihabMehediIDM
 
                 if (item.HasSplitDropDown && !item.SplitDropBounds.IsEmpty)
                 {
-                    Color arrowCol = item.Enabled
-                        ? (ShihabDarkMode
-                            ? ((hot && _hoveredSplitZone) ? Color.FromArgb(236, 240, 248) : Color.FromArgb(150, 156, 168))
-                            : Color.FromArgb(71, 85, 105))
-                        : (ShihabDarkMode ? Color.FromArgb(100, 105, 114) : Color.FromArgb(156, 163, 175));
+                    SolidBrush arrBr = item.Enabled
+                        ? ((hot && _hoveredSplitZone) ? _arrowHotBrush : _arrowNormalBrush)
+                        : _arrowDisabledBrush;
                     int ax = item.SplitDropBounds.Left + item.SplitDropBounds.Width / 2;
                     int ay = iconRect.Top + iconRect.Height / 2 + 2;
-                    using (SolidBrush arrBr = new SolidBrush(arrowCol))
-                    {
-                        g.FillPolygon(arrBr, new PointF[]
-                        {
-                            new PointF(ax - 3.6f, ay - 2.0f),
-                            new PointF(ax + 3.6f, ay - 2.0f),
-                            new PointF(ax, ay + 2.4f)
-                        });
-                    }
+                    _chevronPoints[0].X = ax - 3.6f;
+                    _chevronPoints[0].Y = ay - 2.0f;
+                    _chevronPoints[1].X = ax + 3.6f;
+                    _chevronPoints[1].Y = ay - 2.0f;
+                    _chevronPoints[2].X = ax;
+                    _chevronPoints[2].Y = ay + 2.4f;
+                    g.FillPolygon(arrBr, _chevronPoints);
                 }
 
                 Color txtCol = item.Enabled
@@ -839,6 +869,7 @@ namespace ShihabMehediIDM
         {
             if (disposing)
             {
+                DisposeRibbonGdiCache();
                 ClearIconBitmapCache();
                 if (_cachedLabelFont != null)
                 {

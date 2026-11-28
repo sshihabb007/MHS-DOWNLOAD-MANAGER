@@ -835,6 +835,13 @@ namespace ShihabMehediIDM
         private string _mehediSpeedLabel = "Drop URL";
         private Bitmap _dropLogoBitmap;
         private Font _dropSubFont;
+        private ContextMenuStrip _dropContextMenu;
+        private LinearGradientBrush _cachedBgBrush;
+        private Rectangle _cachedBgRect;
+        private Pen _cachedBorderPen;
+        private SolidBrush _cachedTextBrush;
+        private SolidBrush _cachedTitleBrush;
+        private int _cachedThemeVersion = -1;
 
         public MehediFloatingDropTargetForm(
             Action<string> shihabOnUrlDropped,
@@ -916,16 +923,53 @@ namespace ShihabMehediIDM
                 }
             };
 
-            ContextMenuStrip shihabCtx = new ContextMenuStrip();
-            shihabCtx.Renderer = new MehediDarkToolStripRenderer(true, false);
-            shihabCtx.Items.Add("Hide Drop Target", null, delegate { Hide(); });
-            ContextMenuStrip = shihabCtx;
+            _dropContextMenu = new ContextMenuStrip();
+            _dropContextMenu.Renderer = new MehediDarkToolStripRenderer(true, false);
+            _dropContextMenu.Items.Add("Hide Drop Target", null, delegate { Hide(); });
+            ContextMenuStrip = _dropContextMenu;
+        }
+
+        private void EnsureDropTargetGdiCache(Rectangle bounds)
+        {
+            int curVer = ShihabThemePalette.ThemePaletteVersion;
+            bool themeChanged = (_cachedThemeVersion != curVer);
+            if (themeChanged)
+            {
+                DisposeDropTargetGdiCache();
+                _cachedThemeVersion = curVer;
+            }
+
+            if (_cachedBgBrush == null || _cachedBgRect != bounds)
+            {
+                if (_cachedBgBrush != null) { _cachedBgBrush.Dispose(); _cachedBgBrush = null; }
+                _cachedBgRect = bounds;
+                _cachedBgBrush = new LinearGradientBrush(bounds, Color.FromArgb(18, 19, 25), Color.FromArgb(26, 29, 44), 45f);
+            }
+            if (_cachedBorderPen == null) _cachedBorderPen = new Pen(Color.FromArgb(124, 92, 255), 2f);
+            if (_cachedTextBrush == null) _cachedTextBrush = new SolidBrush(Color.FromArgb(230, 234, 245));
+            if (_cachedTitleBrush == null) _cachedTitleBrush = new SolidBrush(Color.FromArgb(196, 181, 253));
+        }
+
+        private void DisposeDropTargetGdiCache()
+        {
+            if (_cachedBgBrush != null) { _cachedBgBrush.Dispose(); _cachedBgBrush = null; }
+            _cachedBgRect = Rectangle.Empty;
+            if (_cachedBorderPen != null) { _cachedBorderPen.Dispose(); _cachedBorderPen = null; }
+            if (_cachedTextBrush != null) { _cachedTextBrush.Dispose(); _cachedTextBrush = null; }
+            if (_cachedTitleBrush != null) { _cachedTitleBrush.Dispose(); _cachedTitleBrush = null; }
         }
 
         protected override void Dispose(bool disposing)
         {
             if (disposing)
             {
+                DisposeDropTargetGdiCache();
+                if (_dropContextMenu != null)
+                {
+                    if (ContextMenuStrip == _dropContextMenu) ContextMenuStrip = null;
+                    _dropContextMenu.Dispose();
+                    _dropContextMenu = null;
+                }
                 if (_dropLogoBitmap != null) { _dropLogoBitmap.Dispose(); _dropLogoBitmap = null; }
                 if (_dropSubFont != null) { _dropSubFont.Dispose(); _dropSubFont = null; }
             }
@@ -946,26 +990,21 @@ namespace ShihabMehediIDM
 
         protected override void OnPaint(PaintEventArgs shihabE)
         {
+            Rectangle rect = ClientRectangle;
+            if (rect.Width <= 0 || rect.Height <= 0) return;
+
+            EnsureDropTargetGdiCache(rect);
+
             Graphics mehediG = shihabE.Graphics;
             mehediG.SmoothingMode = SmoothingMode.AntiAlias;
-            using (LinearGradientBrush shihabBg = new LinearGradientBrush(ClientRectangle, Color.FromArgb(18, 19, 25), Color.FromArgb(26, 29, 44), 45f))
+            mehediG.FillRectangle(_cachedBgBrush, rect);
+            mehediG.DrawRectangle(_cachedBorderPen, 1, 1, Width - 2, Height - 2);
+            if (_dropLogoBitmap != null)
             {
-                mehediG.FillRectangle(shihabBg, ClientRectangle);
+                mehediG.DrawImage(_dropLogoBitmap, (Width - 34) / 2, 7, 34, 34);
             }
-            using (Pen mehediBorder = new Pen(Color.FromArgb(124, 92, 255), 2f))
-            {
-                mehediG.DrawRectangle(mehediBorder, 1, 1, Width - 2, Height - 2);
-            }
-            using (SolidBrush shihabBrush = new SolidBrush(Color.FromArgb(230, 234, 245)))
-            using (SolidBrush mehediViolet = new SolidBrush(Color.FromArgb(196, 181, 253)))
-            {
-                if (_dropLogoBitmap != null)
-                {
-                    mehediG.DrawImage(_dropLogoBitmap, (Width - 34) / 2, 7, 34, 34);
-                }
-                mehediG.DrawString("MHS DM", ShihabThemePalette.UiBold78Font, mehediViolet, 19, 44);
-                mehediG.DrawString(_mehediSpeedLabel, _dropSubFont, shihabBrush, 14, 62);
-            }
+            mehediG.DrawString("MHS DM", ShihabThemePalette.UiBold78Font, _cachedTitleBrush, 19, 44);
+            mehediG.DrawString(_mehediSpeedLabel, _dropSubFont, _cachedTextBrush, 14, 62);
         }
     }
 }

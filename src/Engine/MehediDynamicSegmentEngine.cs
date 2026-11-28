@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -14,14 +15,20 @@ namespace ShihabMehediIDM
         private readonly ShihabStateStore _shihabStore;
         private readonly MehediAppConfiguration _mehediConfig;
         private readonly List<ShihabDownloadItem> _shihabDownloads;
+        private readonly Dictionary<string, ShihabDownloadItem> _itemsById;
         private readonly Dictionary<string, ActiveDownloadHandle> _mehediActiveDownloads;
-        private readonly Dictionary<string, object> _segmentLocks;
+        private readonly ConcurrentDictionary<string, object> _segmentLocks;
+        private readonly ConcurrentDictionary<string, byte> _debridUnlockedItemIds;
         private readonly HashSet<string> _explicitlyPausedIds;
         private readonly Dictionary<string, DateTime> _nextRetryAfterUtc;
         private readonly Dictionary<string, int> _adaptiveHostConcurrencyCaps;
         private readonly Dictionary<string, DateTime> _hostRetryCooldownUntilUtc;
         private readonly object _shihabEngineLock = new object();
         private readonly object _mehediRateLock = new object();
+        private readonly object _persistLock = new object();
+        private readonly object _persistTimerLock = new object();
+        private Timer _debouncedSaveTimer;
+        private int _debouncedSavePending;
         private double _globalTokenBucketBytes = 0.0;
         private long _globalLastBucketTickMs = 0L;
         private readonly Stopwatch _globalRateStopwatch = Stopwatch.StartNew();
@@ -40,12 +47,24 @@ namespace ShihabMehediIDM
             _shihabStore = shihabStore;
             _mehediConfig = mehediConfig;
             _shihabDownloads = shihabDownloads ?? new List<ShihabDownloadItem>();
+            _itemsById = new Dictionary<string, ShihabDownloadItem>(_shihabDownloads.Count, StringComparer.Ordinal);
+            for (int i = 0; i < _shihabDownloads.Count; i++)
+            {
+                ShihabDownloadItem it = _shihabDownloads[i];
+                if (it != null && !string.IsNullOrEmpty(it.ShihabId))
+                {
+                    _itemsById[it.ShihabId] = it;
+                }
+            }
             _mehediActiveDownloads = new Dictionary<string, ActiveDownloadHandle>(StringComparer.Ordinal);
-            _segmentLocks = new Dictionary<string, object>(StringComparer.Ordinal);
+            _segmentLocks = new ConcurrentDictionary<string, object>(StringComparer.Ordinal);
+            _debridUnlockedItemIds = new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
             _explicitlyPausedIds = new HashSet<string>(StringComparer.Ordinal);
             _nextRetryAfterUtc = new Dictionary<string, DateTime>(StringComparer.Ordinal);
             _adaptiveHostConcurrencyCaps = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             _hostRetryCooldownUntilUtc = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
+
+            InitializePeriodicSyncTimestampsOnStartup();
 
             ShihabLocalNetworkRelay.RegisterActiveConfig(_mehediConfig);
             ShihabLocalNetworkRelay.OnVpnKillSwitchTripped += HandleVpnKillSwitchTripped;
@@ -69,26 +88,43 @@ namespace ShihabMehediIDM
             }
         }
 
+        public ShihabDownloadItem GetItemById(string shihabItemId)
+        {
+            if (string.IsNullOrEmpty(shihabItemId)) return null;
+            lock (_shihabEngineLock)
+            {
+                ShihabDownloadItem found;
+                return _itemsById.TryGetValue(shihabItemId, out found) ? found : null;
+            }
+        }
+
+        public ShihabDownloadItem FindItemById(string shihabItemId)
+        {
+            return GetItemById(shihabItemId);
+        }
+
         private object GetItemSegmentLock(ShihabDownloadItem item)
         {
             if (item == null || string.IsNullOrEmpty(item.ShihabId))
             {
                 return new object();
             }
-            lock (_shihabEngineLock)
+            object segLock;
+            if (!_segmentLocks.TryGetValue(item.ShihabId, out segLock))
             {
-                object segLock;
-                if (!_segmentLocks.TryGetValue(item.ShihabId, out segLock))
-                {
-                    segLock = new object();
-                    _segmentLocks[item.ShihabId] = segLock;
-                }
-                if (item.MehediSegments == null)
-                {
-                    item.MehediSegments = new List<MehediSegmentChunk>();
-                }
-                return segLock;
+                segLock = _segmentLocks.GetOrAdd(item.ShihabId, delegate(string k) { return new object(); });
             }
+            if (item.MehediSegments == null)
+            {
+                lock (segLock)
+                {
+                    if (item.MehediSegments == null)
+                    {
+                        item.MehediSegments = new List<MehediSegmentChunk>();
+                    }
+                }
+            }
+            return segLock;
         }
 
         private void HandleVpnKillSwitchTripped(string reason)
@@ -249,12 +285,12 @@ namespace ShihabMehediIDM
                     ShihabDownloadItem tmp = _shihabDownloads[currentIdx];
                     _shihabDownloads[currentIdx] = _shihabDownloads[neighborIdx];
                     _shihabDownloads[neighborIdx] = tmp;
-                    _shihabStore.SaveShihabDownloads(_shihabDownloads);
                     moved = true;
                 }
             }
             if (moved)
             {
+                ScheduleDebouncedDownloadsSave();
                 NotifyShihabItemChanged(item);
             }
             return moved;
@@ -266,8 +302,12 @@ namespace ShihabMehediIDM
             lock (_shihabEngineLock)
             {
                 _shihabDownloads.Insert(0, mehediItem);
-                _shihabStore.SaveShihabDownloads(_shihabDownloads);
+                if (!string.IsNullOrEmpty(mehediItem.ShihabId))
+                {
+                    _itemsById[mehediItem.ShihabId] = mehediItem;
+                }
             }
+            ScheduleDebouncedDownloadsSave();
             NotifyShihabItemChanged(mehediItem);
             if (shihabStartImmediately)
             {
@@ -422,63 +462,120 @@ namespace ShihabMehediIDM
         public void RemoveShihabDownload(ShihabDownloadItem mehediItem, bool shihabDeleteCompletedDiskFile)
         {
             if (mehediItem == null) return;
-            ActiveDownloadHandle activeHandle = PauseShihabDownloadInternal(mehediItem, true);
-            if (activeHandle != null && activeHandle.WorkerTask != null)
-            {
-                try { activeHandle.WorkerTask.Wait(4000); } catch { }
-            }
+            ActiveDownloadHandle activeHandle = null;
+            string itemId = mehediItem.ShihabId;
 
             lock (_shihabEngineLock)
             {
                 _shihabDownloads.Remove(mehediItem);
-                if (!string.IsNullOrEmpty(mehediItem.ShihabId))
+                if (!string.IsNullOrEmpty(itemId))
                 {
-                    _segmentLocks.Remove(mehediItem.ShihabId);
-                    _explicitlyPausedIds.Remove(mehediItem.ShihabId);
-                    _nextRetryAfterUtc.Remove(mehediItem.ShihabId);
-                }
-                _shihabStore.SaveShihabDownloads(_shihabDownloads);
-            }
-            try
-            {
-                string mehediPartDir = GetShihabItemTempFolder(mehediItem);
-                if (!string.IsNullOrEmpty(mehediPartDir) && Directory.Exists(mehediPartDir))
-                {
-                    Directory.Delete(mehediPartDir, true);
-                }
-                string shihabTarget = mehediItem.GetShihabFullTargetPath();
-                string sparsePart = !string.IsNullOrWhiteSpace(mehediItem.ShihabPartFilePath)
-                    ? mehediItem.ShihabPartFilePath
-                    : (shihabTarget + ".mhs.part");
-                if (File.Exists(sparsePart))
-                {
-                    try { File.Delete(sparsePart); } catch { }
-                }
-                if (shihabDeleteCompletedDiskFile)
-                {
-                    if (File.Exists(shihabTarget))
+                    _itemsById.Remove(itemId);
+                    _explicitlyPausedIds.Remove(itemId);
+                    _nextRetryAfterUtc.Remove(itemId);
+                    if (_mehediActiveDownloads.TryGetValue(itemId, out activeHandle))
                     {
-                        File.Delete(shihabTarget);
+                        _mehediActiveDownloads.Remove(itemId);
                     }
-                    else if (mehediItem.ShihabIsTorrent && Directory.Exists(shihabTarget))
+                }
+            }
+
+            if (!string.IsNullOrEmpty(itemId))
+            {
+                object removedLock;
+                _segmentLocks.TryRemove(itemId, out removedLock);
+                byte removedDebrid;
+                _debridUnlockedItemIds.TryRemove(itemId, out removedDebrid);
+            }
+
+            if (activeHandle != null && activeHandle.Cts != null)
+            {
+                try { activeHandle.Cts.Cancel(); } catch (ObjectDisposedException) { }
+            }
+            UpdateSleepStateForActiveDownloads();
+
+            if (mehediItem.ShihabIsTorrent && !string.IsNullOrEmpty(itemId))
+            {
+                ShihabTorrentLiveTelemetry.Clear(itemId);
+            }
+
+            ScheduleDebouncedDownloadsSave();
+            NotifyShihabItemChanged(mehediItem);
+
+            string mehediPartDir = GetShihabItemTempFolder(mehediItem);
+            string shihabTarget = mehediItem.GetShihabFullTargetPath();
+            string sparsePart = !string.IsNullOrWhiteSpace(mehediItem.ShihabPartFilePath)
+                ? mehediItem.ShihabPartFilePath
+                : (shihabTarget + ".mhs.part");
+            string saveDir = mehediItem.MehediSaveDirectory;
+            bool isTorrent = mehediItem.ShihabIsTorrent;
+
+            Task.Run(delegate
+            {
+                if (activeHandle != null && activeHandle.WorkerTask != null)
+                {
+                    try { activeHandle.WorkerTask.Wait(4000); } catch { }
+                }
+                try
+                {
+                    bool targetReclaimedByNewItem = false;
+                    bool sparseReclaimedByNewItem = false;
+                    lock (_shihabEngineLock)
                     {
-                        FileAttributes attrs = File.GetAttributes(shihabTarget);
-                        if ((attrs & FileAttributes.ReparsePoint) == 0 &&
-                            !ShihabProcessAndPathSafety.HasReparsePointUnderRoot(mehediItem.MehediSaveDirectory, shihabTarget))
+                        for (int i = 0; i < _shihabDownloads.Count; i++)
                         {
-                            Directory.Delete(shihabTarget, true);
+                            ShihabDownloadItem other = _shihabDownloads[i];
+                            if (other == null) continue;
+                            string otherTarget = other.GetShihabFullTargetPath();
+                            string otherSparse = !string.IsNullOrWhiteSpace(other.ShihabPartFilePath)
+                                ? other.ShihabPartFilePath
+                                : (otherTarget + ".mhs.part");
+                            if (!string.IsNullOrWhiteSpace(shihabTarget) &&
+                                string.Equals(otherTarget, shihabTarget, StringComparison.OrdinalIgnoreCase))
+                            {
+                                targetReclaimedByNewItem = true;
+                            }
+                            if (!string.IsNullOrWhiteSpace(sparsePart) &&
+                                string.Equals(otherSparse, sparsePart, StringComparison.OrdinalIgnoreCase))
+                            {
+                                sparseReclaimedByNewItem = true;
+                            }
                         }
                     }
+
+                    if (!string.IsNullOrEmpty(mehediPartDir) && Directory.Exists(mehediPartDir))
+                    {
+                        ShihabProcessAndPathSafety.SafeDeleteDirectoryNoFollow(mehediPartDir);
+                    }
+                    if (!sparseReclaimedByNewItem && !string.IsNullOrWhiteSpace(sparsePart) && File.Exists(sparsePart))
+                    {
+                        try { File.Delete(sparsePart); } catch { }
+                    }
+                    if (shihabDeleteCompletedDiskFile && !targetReclaimedByNewItem && !string.IsNullOrWhiteSpace(shihabTarget))
+                    {
+                        if (File.Exists(shihabTarget))
+                        {
+                            File.Delete(shihabTarget);
+                        }
+                        else if (isTorrent && Directory.Exists(shihabTarget))
+                        {
+                            FileAttributes attrs = File.GetAttributes(shihabTarget);
+                            if ((attrs & FileAttributes.ReparsePoint) == 0 &&
+                                !ShihabProcessAndPathSafety.HasReparsePointUnderRoot(saveDir, shihabTarget))
+                            {
+                                ShihabProcessAndPathSafety.SafeDeleteDirectoryNoFollow(shihabTarget);
+                            }
+                        }
+                    }
+                    if (isTorrent && !targetReclaimedByNewItem)
+                    {
+                        TryCleanupTorrentStateFiles(mehediItem);
+                    }
                 }
-                if (mehediItem.ShihabIsTorrent)
+                catch
                 {
-                    TryCleanupTorrentStateFiles(mehediItem);
-                    ShihabTorrentLiveTelemetry.Clear(mehediItem.ShihabId);
                 }
-            }
-            catch
-            {
-            }
+            });
         }
 
         internal static void TryCleanupTorrentStateFiles(ShihabDownloadItem item)
@@ -598,6 +695,11 @@ namespace ShihabMehediIDM
 
                 shihabItem.ShihabTransientUnlockedUrl = "";
                 shihabItem.ShihabTransientMaxChunks = 0;
+                if (!string.IsNullOrEmpty(shihabItem.ShihabId))
+                {
+                    byte ignoredDebrid;
+                    _debridUnlockedItemIds.TryRemove(shihabItem.ShihabId, out ignoredDebrid);
+                }
 
                 ShihabProbeMetadata mehediProbe = ProbeMehediUrl(shihabItem.MehediUrl, shihabItem);
                 if (mehediToken.IsCancellationRequested) return;
@@ -1210,12 +1312,56 @@ namespace ShihabMehediIDM
             }
         }
 
+        internal void ScheduleDebouncedDownloadsSave()
+        {
+            Interlocked.Exchange(ref _debouncedSavePending, 1);
+            lock (_persistTimerLock)
+            {
+                if (_debouncedSaveTimer == null)
+                {
+                    _debouncedSaveTimer = new Timer(OnDebouncedDownloadsSaveTimer, null, 400, Timeout.Infinite);
+                }
+                else
+                {
+                    try { _debouncedSaveTimer.Change(400, Timeout.Infinite); } catch { }
+                }
+            }
+        }
+
+        private void OnDebouncedDownloadsSaveTimer(object state)
+        {
+            if (Interlocked.Exchange(ref _debouncedSavePending, 0) == 0)
+            {
+                return;
+            }
+            PersistDownloadsSnapshotOffLock();
+        }
+
+        private void PersistDownloadsSnapshotOffLock()
+        {
+            bool keepPrivate = _mehediConfig != null && _mehediConfig.ShihabKeepPrivateDownloads;
+            lock (_persistLock)
+            {
+                List<ShihabDownloadItem> snapshot;
+                lock (_shihabEngineLock)
+                {
+                    snapshot = new List<ShihabDownloadItem>(_shihabDownloads);
+                }
+                _shihabStore.SaveShihabDownloads(snapshot, keepPrivate);
+            }
+        }
+
         public void PersistShihabState()
         {
-            lock (_shihabEngineLock)
+            Interlocked.Exchange(ref _debouncedSavePending, 0);
+            lock (_persistTimerLock)
             {
-                _shihabStore.SaveShihabDownloads(_shihabDownloads, _mehediConfig != null && _mehediConfig.ShihabKeepPrivateDownloads);
+                if (_debouncedSaveTimer != null)
+                {
+                    try { _debouncedSaveTimer.Change(Timeout.Infinite, Timeout.Infinite); } catch { }
+                }
             }
+            PersistDownloadsSnapshotOffLock();
         }
 
         private void NotifyShihabItemChanged(ShihabDownloadItem mehediItem)

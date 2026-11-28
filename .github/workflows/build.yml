@@ -12,7 +12,12 @@ on:
   workflow_dispatch:
     inputs:
       publish_release:
-        description: "Publish/refresh GitHub Release for current manifest version"
+        description: "Publish/refresh GitHub Release for current manifest version (main branch only)"
+        required: false
+        default: false
+        type: boolean
+      force_recreate_release:
+        description: "Delete and recreate existing tag release (WARNING: resets SmartScreen SHA-256 prevalence)"
         required: false
         default: false
         type: boolean
@@ -22,16 +27,21 @@ concurrency:
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/v') }}
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build-windows-x64-installer:
-    name: Build, Verify & Release Windows x64 Setup
+    name: Build & Verify Windows x64 Setup
     runs-on: windows-latest
+    outputs:
+      tag_ver: ${{ steps.stage.outputs.tag_ver }}
+      ver_clean: ${{ steps.stage.outputs.ver_clean }}
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Validate Browser Extension Manifest & JS Syntax
         shell: pwsh
@@ -42,8 +52,8 @@ jobs:
           if ($Manifest.manifest_version -ne 3) {
             throw "Expected Manifest V3 in extension/manifest.json, got $($Manifest.manifest_version)"
           }
-          if ([string]::IsNullOrWhiteSpace($Manifest.version)) {
-            throw "Missing version in extension/manifest.json"
+          if ([string]::IsNullOrWhiteSpace($Manifest.version) -or ($Manifest.version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$')) {
+            throw "Invalid SemVer version in extension/manifest.json: $($Manifest.version)"
           }
           $FirefoxManifestPath = Join-Path $PWD "extension\manifest.firefox.json"
           $FirefoxManifest = Get-Content -LiteralPath $FirefoxManifestPath -Raw | ConvertFrom-Json
@@ -67,12 +77,41 @@ jobs:
             }
           }
 
-      - name: Compile mdm.exe & Setup Installer via build.ps1
+      - name: Compile mdm.exe, Uninstall.exe & Setup Installer (with Optional Authenticode Signing)
         shell: pwsh
+        env:
+          SIGN_CERT_PFX_B64: ${{ secrets.MHS_CODESIGN_PFX_BASE64 }}
+          SIGN_CERT_PASSWORD: ${{ secrets.MHS_CODESIGN_PFX_PASSWORD }}
+          SIGN_TIMESTAMP_URL: ${{ vars.MHS_CODESIGN_TIMESTAMP_URL }}
         run: |
-          powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
+          $ErrorActionPreference = 'Stop'
+          $TempPfx = ''
+          try {
+            $BuildArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', '.\build.ps1')
+            if (-not [string]::IsNullOrWhiteSpace($env:SIGN_CERT_PFX_B64)) {
+              $TempPfx = Join-Path $env:RUNNER_TEMP "mhs_codesign_$([Guid]::NewGuid().ToString('N')).pfx"
+              [System.IO.File]::WriteAllBytes($TempPfx, [System.Convert]::FromBase64String($env:SIGN_CERT_PFX_B64.Trim()))
+              $TsUrl = if (-not [string]::IsNullOrWhiteSpace($env:SIGN_TIMESTAMP_URL)) { $env:SIGN_TIMESTAMP_URL.Trim() } else { 'http://timestamp.digicert.com' }
+              $env:MHS_SIGN_PFX_PATH = $TempPfx
+              $env:MHS_SIGN_PFX_PASSWORD = $env:SIGN_CERT_PASSWORD
+              $BuildArgs += @('-TimestampUrl', $TsUrl)
+              Write-Host "Authenticode signing enabled via repository secret (RFC 3161 timestamp: $TsUrl)."
+            } else {
+              Write-Host "No MHS_CODESIGN_PFX_BASE64 secret configured; building unsigned CI artifacts. See docs/CODE_SIGNING_AND_TRUST.md."
+            }
+            powershell @BuildArgs
+            if ($LASTEXITCODE -ne 0) {
+              throw "build.ps1 failed with exit code $LASTEXITCODE"
+            }
+          } finally {
+            $env:MHS_SIGN_PFX_PATH = ''
+            $env:MHS_SIGN_PFX_PASSWORD = ''
+            if (-not [string]::IsNullOrWhiteSpace($TempPfx) -and (Test-Path -LiteralPath $TempPfx)) {
+              Remove-Item -LiteralPath $TempPfx -Force -ErrorAction SilentlyContinue
+            }
+          }
 
-      - name: Smoke-Test Setup Installer, CLI & Extension Layout
+      - name: Smoke-Test Setup Installer, CLI, PE Hygiene & Extension Layout
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -124,13 +163,19 @@ jobs:
             }
           }
 
+          # Ensure Uninstall.exe is the dedicated tiny payload-free binary (not a self-copy of Setup.exe)
+          $UninstSize = (Get-Item -LiteralPath (Join-Path $VerifyInstallDir "Uninstall.exe")).Length
+          if ($UninstSize -ge $SetupExe.Length) {
+            throw "Expected dedicated payload-free Uninstall.exe ($UninstSize bytes < $($SetupExe.Length) bytes)"
+          }
+
           $InstalledExe = Join-Path $VerifyInstallDir "mdm.exe"
           $CliOut = & $InstalledExe --cli status 2>&1 | Out-String
           if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($CliOut)) {
             throw "Installed mdm.exe --cli status failed (exit=$LASTEXITCODE): $CliOut"
           }
 
-          Write-Host "Verified $($RequiredInstalledFiles.Count) installed files and mdm.exe --cli status"
+          Write-Host "Verified $($RequiredInstalledFiles.Count) installed files, dedicated Uninstall.exe ($UninstSize bytes), and mdm.exe --cli status"
 
           $UninstProc = Start-Process -FilePath $SetupExe.FullName -ArgumentList @(
             "--shihab-uninstall",
@@ -147,6 +192,7 @@ jobs:
           }
 
       - name: Stage Official Release Assets & SHA-256 Manifest
+        id: stage
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -157,6 +203,9 @@ jobs:
 
           $Manifest = Get-Content -LiteralPath (Join-Path $PWD "extension\manifest.json") -Raw | ConvertFrom-Json
           $VerClean = if ($env:GITHUB_REF_NAME -like 'v*') { $env:GITHUB_REF_NAME.TrimStart('v') } else { $Manifest.version }
+          if ($VerClean -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$') {
+            throw "Invalid SemVer release version: $VerClean"
+          }
           $TagVer = "v$VerClean"
 
           $SetupExeName = "MHS-Download-Manager-Setup-$VerClean-x64.exe"
@@ -212,10 +261,10 @@ jobs:
             "> **All Releases (Reverse Chronological — Newest First):** View all installers, changelogs, and bug fixes on the [**GitHub Releases page**](https://github.com/sshihabb007/MHS-DOWNLOAD-MANAGER/releases) or in [**CHANGELOG.md**](https://github.com/sshihabb007/MHS-DOWNLOAD-MANAGER/blob/main/CHANGELOG.md).",
             "",
             "### Release Downloads",
-            "- **``$SetupExeName``** *(Recommended)* — Official Windows x64 Setup Installer. Installs ``mdm.exe``, ``Uninstall.exe``, shortcuts, Native Messaging host, and keeps the ready-to-load **``extension\``** folder directly inside your installation directory (``<InstallDir>\extension``).",
+            "- **``$SetupExeName``** *(Recommended)* — Official Windows x64 Setup Installer. Installs ``mdm.exe``, dedicated ``Uninstall.exe``, shortcuts, Native Messaging host, and keeps the ready-to-load **``extension\``** folder directly inside your installation directory (``<InstallDir>\extension``).",
             "- **``$PortableExeName``** — Standalone Portable Windows x64 Executable (``mdm.exe``). Run directly from any folder with zero installation.",
             "- **``$ExtArchiveName``** — Standalone Unpacked Browser Extension ZIP (for Portable users; Setup Installer users already get ``<InstallDir>\extension`` automatically).",
-            "- **``SHA256SUMS.txt``** — Official SHA-256 verification checksums.",
+            "- **``SHA256SUMS.txt``** — Official SHA-256 verification checksums (plus GitHub SLSA Build Provenance Attestations).",
             "",
             "### How to Install & Load the Browser Extension from Your Installation Directory",
             "1. Download and run **``$SetupExeName``** (default install folder: ``C:\Program Files (x86)\MHS Download Manager``).",
@@ -243,7 +292,7 @@ jobs:
             "### SHA-256 Checksums ($TagVer)",
             "| Release File | Purpose | SHA-256 |",
             "| :--- | :--- | :--- |",
-            "| ``$SetupExeName`` | Windows x64 Setup Installer (includes ``mdm.exe`` + ``<InstallDir>\extension``) | ``$SetupSha`` |",
+            "| ``$SetupExeName`` | Windows x64 Setup Installer (includes ``mdm.exe`` + ``Uninstall.exe`` + ``<InstallDir>\extension``) | ``$SetupSha`` |",
             "| ``$PortableExeName`` | Standalone Portable x64 Executable (zero-install ``mdm.exe``) | ``$PortableSha`` |",
             "| ``$ExtArchiveName`` | Unpacked Browser Extension Archive (Chrome / Brave / Edge / Opera) | ``$ExtZipSha`` |",
             "",
@@ -270,10 +319,11 @@ jobs:
             }
           }
           Set-Content -Path (Join-Path $PWD "release-dist\RELEASE_NOTES.md") -Value ($NotesLines -join "`r`n") -Encoding UTF8
-          Write-Output "TAG_VER=$TagVer" >> $env:GITHUB_ENV
+          "tag_ver=$TagVer" >> $env:GITHUB_OUTPUT
+          "ver_clean=$VerClean" >> $env:GITHUB_OUTPUT
 
       - name: Upload CI Build Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: MHS-Download-Manager-${{ github.ref_name }}-Windows-x64
           path: |
@@ -284,28 +334,49 @@ jobs:
             release-dist/RELEASE_NOTES.md
           if-no-files-found: error
 
-      - name: Clean Duplicate Setup Assets & Previous Tag Release
-        if: startsWith(github.ref, 'refs/tags/v') || inputs.publish_release == true
-        shell: pwsh
+  publish-github-release:
+    name: Attest Provenance & Publish GitHub Release
+    needs: build-windows-x64-installer
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish_release == true && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+
+    steps:
+      - name: Download Verified Build Artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: MHS-Download-Manager-${{ github.ref_name }}-Windows-x64
+          path: release-dist
+
+      - name: Generate GitHub SLSA Build Provenance Attestations
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: |
+            release-dist/MHS-Download-Manager-Setup-*-x64.exe
+            release-dist/MHS-Download-Manager-Portable-*-x64.exe
+            release-dist/MHS-Browser-Extension-*.zip
+            release-dist/SHA256SUMS.txt
+
+      - name: Optional Recreate Release Only When Explicitly Requested
+        if: github.event_name == 'workflow_dispatch' && inputs.force_recreate_release == true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_VER: ${{ needs.build-windows-x64-installer.outputs.tag_ver }}
         run: |
-          foreach ($OldTag in @("v1.0.1", "v1.0.2")) {
-            gh release delete-asset $OldTag "MHS-Download-Manager-Setup-x64.exe" --yes *> $null
-            $global:LASTEXITCODE = 0
-          }
-          gh release view "$env:TAG_VER" *> $null
-          if ($LASTEXITCODE -eq 0) {
-            gh release delete "$env:TAG_VER" --yes
-          }
-          $global:LASTEXITCODE = 0
+          if gh release view "$TAG_VER" >/dev/null 2>&1; then
+            gh release delete "$TAG_VER" --yes
+          fi
 
       - name: Publish Latest GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v') || inputs.publish_release == true
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
-          tag_name: ${{ env.TAG_VER }}
-          name: "MHS Download Manager ${{ env.TAG_VER }} (Mehedi Hasan Shihab)"
+          tag_name: ${{ needs.build-windows-x64-installer.outputs.tag_ver }}
+          name: "MHS Download Manager ${{ needs.build-windows-x64-installer.outputs.tag_ver }} (Mehedi Hasan Shihab)"
           body_path: release-dist/RELEASE_NOTES.md
           make_latest: "true"
           files: |

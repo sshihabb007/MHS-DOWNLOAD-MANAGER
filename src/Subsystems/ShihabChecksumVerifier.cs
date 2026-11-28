@@ -12,7 +12,7 @@ namespace ShihabMehediIDM
         private static readonly TimeSpan ChecksumRegexTimeout = TimeSpan.FromMilliseconds(250);
         private static readonly Regex BsdChecksumRegex = new Regex(
             @"^(CRC32|MD5|SHA-?1|SHA-?256|SHA-?512)\s*\([^)]+\)\s*=\s*([0-9A-Fa-f]{8,128})$",
-            RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant,
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
             ChecksumRegexTimeout);
 
         private static readonly uint[] Crc32Table = BuildCrc32Table();
@@ -271,7 +271,7 @@ namespace ShihabMehediIDM
             {
                 return "";
             }
-            using (FileStream fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 131072))
+            using (FileStream fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 65536))
             {
                 return ComputeStreamChecksumHex(fs, algorithm);
             }

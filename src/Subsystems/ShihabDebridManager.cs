@@ -17,47 +17,47 @@ namespace ShihabMehediIDM
 
         private static readonly Regex DomainTokenRegex = new Regex(
             "\"([a-z0-9\\-]+\\.[a-z0-9\\.\\-]+)\"",
-            RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant,
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
             DebridRegexTimeout);
         private static readonly Regex DocsPathRegex = new Regex(
             @"/(document|spreadsheets|presentation)/d/([a-zA-Z0-9_\-]+)",
-            RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant,
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
             DebridRegexTimeout);
         private static readonly Regex DrivePathIdRegex = new Regex(
             @"/file/d/([a-zA-Z0-9_\-]+)",
-            RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant,
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
             DebridRegexTimeout);
         private static readonly Regex DriveFolderPathRegex = new Regex(
             @"/drive/(?:u/\d+/)?folders/([a-zA-Z0-9_\-]+)",
-            RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant,
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
             DebridRegexTimeout);
         private static readonly Regex DriveQueryIdRegex = new Regex(
             @"[?&](?:id|docid)=([a-zA-Z0-9_\-]+)",
-            RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant,
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
             DebridRegexTimeout);
         private static readonly Regex GdriveFormRegex = new Regex(
             @"<form[^>]*id=[""']download-form[""'][^>]*action=[""']([^""']+)[""']",
-            RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant,
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
             DebridRegexTimeout);
         private static readonly Regex GdriveHiddenInputRegex = new Regex(
             @"<input[^>]*type=[""']hidden[""'][^>]*>",
-            RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant,
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
             DebridRegexTimeout);
         private static readonly Regex GdriveAttrNameRegex = new Regex(
             @"name=[""']([^""']+)[""']",
-            RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant,
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
             DebridRegexTimeout);
         private static readonly Regex GdriveAttrValueRegex = new Regex(
             @"value=[""']([^""']*)[""']",
-            RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant,
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
             DebridRegexTimeout);
         private static readonly Regex GdriveConfirmHrefRegex = new Regex(
             @"href=[""']([^""']*confirm=[^""']+)[""']",
-            RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant,
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
             DebridRegexTimeout);
         private static readonly Regex RdLinksRegex = new Regex(
             "\"links\"\\s*:\\s*\\[\\s*\"([^\"\\\\]*(?:\\\\.[^\"\\\\]*)*)\"",
-            RegexOptions.Compiled | RegexOptions.CultureInvariant,
+            RegexOptions.CultureInvariant,
             DebridRegexTimeout);
 
         private static readonly string[] SupportedPremiumHostKeywords = new string[]
@@ -262,6 +262,34 @@ namespace ShihabMehediIDM
             return true;
         }
 
+        private static bool IsAllowedGoogleDriveDownloadUri(Uri baseUri, string rawUrl, out string normalizedUrl)
+        {
+            normalizedUrl = "";
+            string safeUrl;
+            if (!IsSafeResolvedExternalUrl(baseUri, rawUrl, out safeUrl))
+            {
+                return false;
+            }
+            Uri parsed;
+            if (!Uri.TryCreate(safeUrl, UriKind.Absolute, out parsed))
+            {
+                return false;
+            }
+            if (!string.Equals(parsed.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+            string host = (parsed.Host ?? "").ToLowerInvariant();
+            if (host != "drive.google.com" &&
+                host != "drive.usercontent.google.com" &&
+                host != "docs.google.com")
+            {
+                return false;
+            }
+            normalizedUrl = parsed.AbsoluteUri;
+            return true;
+        }
+
         public static bool TryParseGoogleDriveConfirmationHtml(string htmlBody, Uri baseUri, out string confirmedDownloadUrl)
         {
             confirmedDownloadUrl = "";
@@ -300,7 +328,7 @@ namespace ShihabMehediIDM
                     {
                         string cand = action + (action.IndexOf('?') >= 0 ? "&" : "?") + string.Join("&", qParams.ToArray());
                         string safeUrl;
-                        if (IsSafeResolvedExternalUrl(baseUri, cand, out safeUrl))
+                        if (IsAllowedGoogleDriveDownloadUri(baseUri, cand, out safeUrl))
                         {
                             confirmedDownloadUrl = safeUrl;
                             return true;
@@ -313,7 +341,7 @@ namespace ShihabMehediIDM
                 {
                     string rawHref = WebUtility.HtmlDecode(hrefM.Groups[1].Value);
                     string safeUrl;
-                    if (IsSafeResolvedExternalUrl(baseUri, rawHref, out safeUrl))
+                    if (IsAllowedGoogleDriveDownloadUri(baseUri, rawHref, out safeUrl))
                     {
                         confirmedDownloadUrl = safeUrl;
                         return true;
@@ -344,6 +372,19 @@ namespace ShihabMehediIDM
             out string providerUsed,
             out int maxChunks)
         {
+            return TryUnrestrictUrl(originalUrl, linkPassword, cfg, CancellationToken.None, out unrestrictedUrl, out unlockedFileName, out providerUsed, out maxChunks);
+        }
+
+        public static bool TryUnrestrictUrl(
+            string originalUrl,
+            string linkPassword,
+            MehediAppConfiguration cfg,
+            CancellationToken cancelToken,
+            out string unrestrictedUrl,
+            out string unlockedFileName,
+            out string providerUsed,
+            out int maxChunks)
+        {
             unrestrictedUrl = originalUrl;
             unlockedFileName = "";
             providerUsed = "";
@@ -359,6 +400,7 @@ namespace ShihabMehediIDM
 
             for (int i = 0; i < cfg.ShihabDebridAccounts.Count; i++)
             {
+                if (cancelToken.IsCancellationRequested) return false;
                 ShihabDebridAccount acct = cfg.ShihabDebridAccounts[i];
                 if (acct == null || !acct.MehediEnabled) continue;
                 string apiKey = ShihabSecretsVault.UnprotectSecret(acct.MehediEncryptedApiToken);
@@ -382,7 +424,7 @@ namespace ShihabMehediIDM
                     }
                     else if (string.Equals(acct.ShihabProvider, "AllDebrid", StringComparison.OrdinalIgnoreCase))
                     {
-                        if (UnrestrictWithAllDebrid(originalUrl, linkPassword, apiKey, cfg, out candUrl, out candName, out candChunks) &&
+                        if (UnrestrictWithAllDebrid(originalUrl, linkPassword, apiKey, cfg, cancelToken, out candUrl, out candName, out candChunks) &&
                             IsSafeResolvedExternalUrl(null, candUrl, out unrestrictedUrl))
                         {
                             unlockedFileName = candName;
@@ -437,6 +479,17 @@ namespace ShihabMehediIDM
             out string unlockedFileName,
             out string providerUsed)
         {
+            return TryUnlockTorrentOrMagnetWithDebrid(magnetOrTorrent, cfg, CancellationToken.None, out unlockedDirectUrl, out unlockedFileName, out providerUsed);
+        }
+
+        public static bool TryUnlockTorrentOrMagnetWithDebrid(
+            string magnetOrTorrent,
+            MehediAppConfiguration cfg,
+            CancellationToken cancelToken,
+            out string unlockedDirectUrl,
+            out string unlockedFileName,
+            out string providerUsed)
+        {
             unlockedDirectUrl = "";
             unlockedFileName = "";
             providerUsed = "";
@@ -445,6 +498,7 @@ namespace ShihabMehediIDM
 
             for (int i = 0; i < cfg.ShihabDebridAccounts.Count; i++)
             {
+                if (cancelToken.IsCancellationRequested) return false;
                 ShihabDebridAccount acct = cfg.ShihabDebridAccounts[i];
                 if (acct == null || !acct.MehediEnabled) continue;
                 string token = ShihabSecretsVault.UnprotectSecret(acct.MehediEncryptedApiToken);
@@ -488,7 +542,7 @@ namespace ShihabMehediIDM
 
                             for (int rdPoll = 0; rdPoll < 5; rdPoll++)
                             {
-                                if (rdPoll > 0) Thread.Sleep(1500);
+                                if (rdPoll > 0 && cancelToken.WaitHandle.WaitOne(1500)) return false;
                                 HttpWebRequest infoReq = (HttpWebRequest)WebRequest.Create("https://api.real-debrid.com/rest/1.0/torrents/info/" + Uri.EscapeDataString(torrentId));
                                 infoReq.AllowAutoRedirect = false;
                                 infoReq.Headers["Authorization"] = "Bearer " + token.Trim();
@@ -528,7 +582,7 @@ namespace ShihabMehediIDM
                     {
                         string candUrl;
                         string candName;
-                        if (UnlockMagnetWithAllDebrid(magnetOrTorrent, token, cfg, out candUrl, out candName) &&
+                        if (UnlockMagnetWithAllDebrid(magnetOrTorrent, token, cfg, cancelToken, out candUrl, out candName) &&
                             IsSafeResolvedExternalUrl(null, candUrl, out unlockedDirectUrl))
                         {
                             unlockedFileName = candName;
@@ -540,7 +594,7 @@ namespace ShihabMehediIDM
                     {
                         string candUrl;
                         string candName;
-                        if (UnlockMagnetWithTorBox(magnetOrTorrent, token, cfg, out candUrl, out candName) &&
+                        if (UnlockMagnetWithTorBox(magnetOrTorrent, token, cfg, cancelToken, out candUrl, out candName) &&
                             IsSafeResolvedExternalUrl(null, candUrl, out unlockedDirectUrl))
                         {
                             unlockedFileName = candName;
@@ -608,6 +662,7 @@ namespace ShihabMehediIDM
             string password,
             string apiKey,
             MehediAppConfiguration cfg,
+            CancellationToken cancelToken,
             out string directUrl,
             out string fileName,
             out int maxChunks)
@@ -643,7 +698,7 @@ namespace ShihabMehediIDM
                 {
                     for (int poll = 0; poll < 6; poll++)
                     {
-                        Thread.Sleep(1500);
+                        if (cancelToken.WaitHandle.WaitOne(1500)) return false;
                         string pollUrl = "https://api.alldebrid.com/v4/link/delayed?agent=MHS-Download-Manager&id=" + Uri.EscapeDataString(delayedId);
                         HttpWebRequest pReq = (HttpWebRequest)WebRequest.Create(pollUrl);
                         pReq.AllowAutoRedirect = false;
@@ -730,8 +785,8 @@ namespace ShihabMehediIDM
             }
             if (webId <= 0) return false;
 
-            string dlEp = "https://api.torbox.app/v1/api/webdl/requestdl?token=" + Uri.EscapeDataString(apiKey.Trim()) +
-                "&web_id=" + webId.ToString(CultureInfo.InvariantCulture) + "&zip_link=false";
+            string dlEp = "https://api.torbox.app/v1/api/webdl/requestdl?web_id=" +
+                webId.ToString(CultureInfo.InvariantCulture) + "&zip_link=false";
             HttpWebRequest dlReq = (HttpWebRequest)WebRequest.Create(dlEp);
             dlReq.Method = "GET";
             dlReq.AllowAutoRedirect = false;
@@ -752,6 +807,7 @@ namespace ShihabMehediIDM
             string magnet,
             string apiKey,
             MehediAppConfiguration cfg,
+            CancellationToken cancelToken,
             out string directUrl,
             out string fileName)
         {
@@ -782,9 +838,9 @@ namespace ShihabMehediIDM
 
             for (int poll = 0; poll < 5; poll++)
             {
-                if (poll > 0) Thread.Sleep(1500);
-                string dlEp = "https://api.torbox.app/v1/api/torrents/requestdl?token=" + Uri.EscapeDataString(apiKey.Trim()) +
-                    "&torrent_id=" + torId.ToString(CultureInfo.InvariantCulture) + "&zip_link=true";
+                if (poll > 0 && cancelToken.WaitHandle.WaitOne(1500)) return false;
+                string dlEp = "https://api.torbox.app/v1/api/torrents/requestdl?torrent_id=" +
+                    torId.ToString(CultureInfo.InvariantCulture) + "&zip_link=true";
                 HttpWebRequest dlReq = (HttpWebRequest)WebRequest.Create(dlEp);
                 dlReq.Method = "GET";
                 dlReq.AllowAutoRedirect = false;
@@ -810,6 +866,7 @@ namespace ShihabMehediIDM
             string magnet,
             string apiKey,
             MehediAppConfiguration cfg,
+            CancellationToken cancelToken,
             out string directUrl,
             out string fileName)
         {
@@ -839,7 +896,7 @@ namespace ShihabMehediIDM
 
             for (int poll = 0; poll < 5; poll++)
             {
-                if (poll > 0) Thread.Sleep(1500);
+                if (poll > 0 && cancelToken.WaitHandle.WaitOne(1500)) return false;
                 string stUrl = "https://api.alldebrid.com/v4/magnet/status?agent=MHS-Download-Manager&id=" + magId.ToString(CultureInfo.InvariantCulture);
                 HttpWebRequest stReq = (HttpWebRequest)WebRequest.Create(stUrl);
                 stReq.AllowAutoRedirect = false;
@@ -856,7 +913,7 @@ namespace ShihabMehediIDM
                         int chunks;
                         string candUrl;
                         string candName;
-                        if (UnrestrictWithAllDebrid(hostLink, "", apiKey, cfg, out candUrl, out candName, out chunks))
+                        if (UnrestrictWithAllDebrid(hostLink, "", apiKey, cfg, cancelToken, out candUrl, out candName, out chunks))
                         {
                             directUrl = candUrl;
                             if (!string.IsNullOrWhiteSpace(candName)) fileName = candName;

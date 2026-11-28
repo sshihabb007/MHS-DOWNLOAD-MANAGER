@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Net;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Security;
 using System.Text;
@@ -20,14 +22,48 @@ namespace ShihabMehediIDM
         private const int MOVEFILE_WRITE_THROUGH = 0x8;
         private const int MaxHttpRedirects = 10;
         private const int MaxHostRateEntries = 1024;
+        private const int MaxMetadataDnsCacheEntries = 512;
+
+        private sealed class MetadataDnsCacheEntry
+        {
+            public long ExpiresUtcTicks;
+            public bool IsBlocked;
+        }
+
+        private sealed class CancelableHttpResponse : IDisposable
+        {
+            public readonly HttpWebResponse Response;
+            public readonly HttpWebRequest Request;
+            private CancellationTokenRegistration _cancelReg;
+
+            public CancelableHttpResponse(HttpWebResponse response, HttpWebRequest request, CancellationTokenRegistration cancelReg)
+            {
+                Response = response;
+                Request = request;
+                _cancelReg = cancelReg;
+            }
+
+            public void Dispose()
+            {
+                try { _cancelReg.Dispose(); } catch { }
+                _cancelReg = default(CancellationTokenRegistration);
+                if (Response != null)
+                {
+                    try { Response.Close(); } catch { }
+                }
+            }
+        }
+
+        private static readonly ConcurrentDictionary<string, MetadataDnsCacheEntry> MetadataDnsBlockCache =
+            new ConcurrentDictionary<string, MetadataDnsCacheEntry>(StringComparer.OrdinalIgnoreCase);
 
         private static readonly TimeSpan TransportRegexTimeout = TimeSpan.FromMilliseconds(250);
-        private static readonly Regex GdriveAnchorTitleRegex = new Regex(@"<a[^>]+href=""[^""]*""[^>]*>([^<]{2,180})</a>", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant, TransportRegexTimeout);
-        private static readonly Regex ContentRangeTotalRegex = new Regex(@"/(\d+)", RegexOptions.Compiled | RegexOptions.CultureInvariant, TransportRegexTimeout);
-        private static readonly Regex CdExtParamRegex = new Regex(@"filename\*\s*=\s*(?:""([^""]+)""|([^;\r\n]+))", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant, TransportRegexTimeout);
-        private static readonly Regex CdQuotedRegex = new Regex(@"filename\s*=\s*""((?:\\.|[^""])+)""", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant, TransportRegexTimeout);
-        private static readonly Regex CdUnquotedRegex = new Regex(@"filename\s*=\s*([^;\r\n]+)", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant, TransportRegexTimeout);
-        private static readonly Regex Rfc2047WordRegex = new Regex(@"=\?([^?\r\n]+)\?([BbQq])\?([^?\r\n]+)\?=", RegexOptions.Compiled | RegexOptions.CultureInvariant, TransportRegexTimeout);
+        private static readonly Regex GdriveAnchorTitleRegex = new Regex(@"<a[^>]+href=""[^""]*""[^>]*>([^<]{2,180})</a>", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TransportRegexTimeout);
+        private static readonly Regex ContentRangeTotalRegex = new Regex(@"/(\d+)", RegexOptions.CultureInvariant, TransportRegexTimeout);
+        private static readonly Regex CdExtParamRegex = new Regex(@"filename\*\s*=\s*(?:""([^""]+)""|([^;\r\n]+))", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TransportRegexTimeout);
+        private static readonly Regex CdQuotedRegex = new Regex(@"filename\s*=\s*""((?:\\.|[^""])+)""", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TransportRegexTimeout);
+        private static readonly Regex CdUnquotedRegex = new Regex(@"filename\s*=\s*([^;\r\n]+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TransportRegexTimeout);
+        private static readonly Regex Rfc2047WordRegex = new Regex(@"=\?([^?\r\n]+)\?([BbQq])\?([^?\r\n]+)\?=", RegexOptions.CultureInvariant, TransportRegexTimeout);
 
         private int GetAdaptiveEffectiveConnections(string hostName, ShihabDownloadItem item)
         {
@@ -446,6 +482,106 @@ namespace ShihabMehediIDM
             return false;
         }
 
+        private static bool IsGoogleDriveHost(Uri uri)
+        {
+            if (uri == null || !uri.IsAbsoluteUri) return false;
+            if (!string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)) return false;
+            string host = (uri.Host ?? "").TrimEnd('.').ToLowerInvariant();
+            return host == "drive.google.com" ||
+                   host == "drive.usercontent.google.com" ||
+                   host == "docs.google.com";
+        }
+
+        private static bool HasAnyConfiguredDebridAccount(MehediAppConfiguration cfg)
+        {
+            if (cfg == null || cfg.ShihabDebridAccounts == null || cfg.ShihabDebridAccounts.Count == 0)
+            {
+                return false;
+            }
+            for (int i = 0; i < cfg.ShihabDebridAccounts.Count; i++)
+            {
+                ShihabDebridAccount acct = cfg.ShihabDebridAccounts[i];
+                if (acct != null && acct.MehediEnabled && !string.IsNullOrWhiteSpace(acct.MehediEncryptedApiToken))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static bool TryResolveGoogleDriveViaDebridManager(
+            string url,
+            MehediAppConfiguration cfg,
+            out string resolvedUrl,
+            out string hintName)
+        {
+            return ShihabDebridManager.TryResolveGoogleDriveOrDocsUrl(url, cfg, out resolvedUrl, out hintName);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static bool TryUnrestrictViaDebridManager(
+            string url,
+            string linkPwd,
+            MehediAppConfiguration cfg,
+            out string unrestrictedUrl,
+            out string debridFileName,
+            out string debridProvider,
+            out int debridMaxChunks)
+        {
+            return ShihabDebridManager.TryUnrestrictUrl(url, linkPwd, cfg, out unrestrictedUrl, out debridFileName, out debridProvider, out debridMaxChunks);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static bool TryParseGoogleDriveConfirmationViaDebridManager(string html, Uri baseUriObj, out string confirmedUrl)
+        {
+            return ShihabDebridManager.TryParseGoogleDriveConfirmationHtml(html, baseUriObj, out confirmedUrl);
+        }
+
+        private static bool IsMetadataOrLinkLocalIp(IPAddress addr)
+        {
+            if (addr == null) return true;
+            if (addr.IsIPv4MappedToIPv6) addr = addr.MapToIPv4();
+            if (addr.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+            {
+                byte[] b = addr.GetAddressBytes();
+                if (b.Length == 4)
+                {
+                    // Always block unspecified (0.0.0.0/8), link-local / cloud metadata (169.254.0.0/16),
+                    // and Alibaba Cloud metadata (100.100.100.200)
+                    if (b[0] == 0) return true;
+                    if (b[0] == 169 && b[1] == 254) return true;
+                    if (b[0] == 100 && b[1] == 100 && b[2] == 100 && b[3] == 200) return true;
+                }
+            }
+            else if (addr.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6)
+            {
+                if (addr.IsIPv6LinkLocal || addr.Equals(IPAddress.IPv6Any) || addr.Equals(IPAddress.IPv6None)) return true;
+                byte[] v6 = addr.GetAddressBytes();
+                if (v6.Length == 16)
+                {
+                    // Amazon / cloud IPv6 metadata fd00:ec2::254 (fd00:ec2::/32)
+                    if (v6[0] == 0xfd && v6[1] == 0x00 && v6[2] == 0x0e && v6[3] == 0xc2) return true;
+                    // IPv4-compatible ::w.x.y.z
+                    bool firstZero = true;
+                    for (int i = 0; i < 12; i++)
+                    {
+                        if (v6[i] != 0)
+                        {
+                            firstZero = false;
+                            break;
+                        }
+                    }
+                    if (firstZero)
+                    {
+                        byte[] mapped = new byte[4] { v6[12], v6[13], v6[14], v6[15] };
+                        return IsMetadataOrLinkLocalIp(new IPAddress(mapped));
+                    }
+                }
+            }
+            return false;
+        }
+
         private static bool IsAlwaysBlockedMetadataOrInternalHost(Uri targetUri)
         {
             if (targetUri == null) return true;
@@ -460,22 +596,49 @@ namespace ShihabMehediIDM
             IPAddress literal;
             if (IPAddress.TryParse(clean, out literal))
             {
-                if (literal.IsIPv4MappedToIPv6) literal = literal.MapToIPv4();
-                if (literal.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
-                {
-                    byte[] b = literal.GetAddressBytes();
-                    // Always block link-local / cloud metadata (169.254.0.0/16) and unspecified (0.0.0.0/8)
-                    if (b.Length == 4 && (b[0] == 0 || (b[0] == 169 && b[1] == 254))) return true;
-                }
-                else if (literal.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6)
-                {
-                    if (literal.IsIPv6LinkLocal || literal.Equals(IPAddress.IPv6Any) || literal.Equals(IPAddress.IPv6None)) return true;
-                    byte[] v6 = literal.GetAddressBytes();
-                    // Amazon / cloud IPv6 metadata fd00:ec2::254
-                    if (v6.Length == 16 && v6[0] == 0xfd && v6[1] == 0x00 && v6[2] == 0x0e && v6[3] == 0xc2) return true;
-                }
+                return IsMetadataOrLinkLocalIp(literal);
             }
-            return false;
+            if (lower == "localhost" || lower.EndsWith(".localhost", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            long nowTicks = DateTime.UtcNow.Ticks;
+            MetadataDnsCacheEntry cached;
+            if (MetadataDnsBlockCache.TryGetValue(lower, out cached) && cached != null && cached.ExpiresUtcTicks > nowTicks)
+            {
+                return cached.IsBlocked;
+            }
+
+            bool blocked = false;
+            try
+            {
+                IPAddress[] addrs = Dns.GetHostAddresses(lower);
+                if (addrs != null)
+                {
+                    for (int i = 0; i < addrs.Length; i++)
+                    {
+                        if (IsMetadataOrLinkLocalIp(addrs[i]))
+                        {
+                            blocked = true;
+                            break;
+                        }
+                    }
+                }
+                if (MetadataDnsBlockCache.Count >= MaxMetadataDnsCacheEntries)
+                {
+                    MetadataDnsBlockCache.Clear();
+                }
+                MetadataDnsBlockCache[lower] = new MetadataDnsCacheEntry
+                {
+                    ExpiresUtcTicks = nowTicks + (TimeSpan.TicksPerSecond * 30L),
+                    IsBlocked = blocked
+                };
+            }
+            catch
+            {
+            }
+            return blocked;
         }
 
         private static string StripUserInfoFromUri(Uri uri)
@@ -660,7 +823,105 @@ namespace ShihabMehediIDM
             CancellationToken cancelToken,
             out HttpWebRequest finalActiveRequest)
         {
+            return GetResponseWithSafeRedirects(
+                initialUrl,
+                httpMethod,
+                ctxItem,
+                rangeStart,
+                rangeEnd,
+                ifRangeValidator,
+                cancelToken,
+                out finalActiveRequest,
+                false);
+        }
+
+        private HttpWebResponse GetResponseWithSafeRedirects(
+            string initialUrl,
+            string httpMethod,
+            ShihabDownloadItem ctxItem,
+            long rangeStart,
+            long rangeEnd,
+            string ifRangeValidator,
+            CancellationToken cancelToken,
+            out HttpWebRequest finalActiveRequest,
+            bool forceStripCreds)
+        {
+            CancellationTokenRegistration reg;
+            HttpWebResponse resp = GetResponseWithSafeRedirectsCore(
+                initialUrl,
+                httpMethod,
+                ctxItem,
+                rangeStart,
+                rangeEnd,
+                ifRangeValidator,
+                cancelToken,
+                forceStripCreds,
+                out finalActiveRequest,
+                out reg);
+            try { reg.Dispose(); } catch { }
+            return resp;
+        }
+
+        private CancelableHttpResponse GetCancelableResponseWithSafeRedirects(
+            string initialUrl,
+            string httpMethod,
+            ShihabDownloadItem ctxItem,
+            long rangeStart,
+            long rangeEnd,
+            string ifRangeValidator,
+            CancellationToken cancelToken)
+        {
+            return GetCancelableResponseWithSafeRedirects(
+                initialUrl,
+                httpMethod,
+                ctxItem,
+                rangeStart,
+                rangeEnd,
+                ifRangeValidator,
+                cancelToken,
+                false);
+        }
+
+        private CancelableHttpResponse GetCancelableResponseWithSafeRedirects(
+            string initialUrl,
+            string httpMethod,
+            ShihabDownloadItem ctxItem,
+            long rangeStart,
+            long rangeEnd,
+            string ifRangeValidator,
+            CancellationToken cancelToken,
+            bool forceStripCreds)
+        {
+            HttpWebRequest finalReq;
+            CancellationTokenRegistration cancelReg;
+            HttpWebResponse resp = GetResponseWithSafeRedirectsCore(
+                initialUrl,
+                httpMethod,
+                ctxItem,
+                rangeStart,
+                rangeEnd,
+                ifRangeValidator,
+                cancelToken,
+                forceStripCreds,
+                out finalReq,
+                out cancelReg);
+            return new CancelableHttpResponse(resp, finalReq, cancelReg);
+        }
+
+        private HttpWebResponse GetResponseWithSafeRedirectsCore(
+            string initialUrl,
+            string httpMethod,
+            ShihabDownloadItem ctxItem,
+            long rangeStart,
+            long rangeEnd,
+            string ifRangeValidator,
+            CancellationToken cancelToken,
+            bool forceStripCreds,
+            out HttpWebRequest finalActiveRequest,
+            out CancellationTokenRegistration activeCancelReg)
+        {
             finalActiveRequest = null;
+            activeCancelReg = default(CancellationTokenRegistration);
             Uri initialUri;
             if (!ShihabProcessAndPathSafety.TryValidateHttpUrl(initialUrl, false, out initialUri))
             {
@@ -674,8 +935,20 @@ namespace ShihabMehediIDM
             bool initialWasLocalOrPrivate = ShihabProcessAndPathSafety.IsHostDisallowedForOutboundSsrf(initialUri.Host, true);
             string currentUrl = initialUri.AbsoluteUri;
             string currentMethod = httpMethod;
-            bool stripCreds = false;
-            string activeCookies = (ctxItem != null && !ctxItem.MehediOmitCookies) ? (ctxItem.ShihabCookies ?? "") : "";
+
+            Uri itemOriginUri = null;
+            if (ctxItem != null && !string.IsNullOrWhiteSpace(ctxItem.MehediUrl))
+            {
+                Uri.TryCreate(ctxItem.MehediUrl, UriKind.Absolute, out itemOriginUri);
+            }
+            bool isDebridItem = forceStripCreds ||
+                (ctxItem != null && !string.IsNullOrEmpty(ctxItem.ShihabId) && _debridUnlockedItemIds.ContainsKey(ctxItem.ShihabId));
+            // Allow cookies across trusted same-cluster subdomains (e.g. drive.google.com -> drive.usercontent.google.com,
+            // archive.org -> *.archive.org, fbcdn/googlevideo edge hosts) while stripping cross-origin cookies & auth.
+            bool sameClusterInitial = itemOriginUri == null || IsTrustedSameClusterCookieRedirect(itemOriginUri, initialUri);
+            bool stripAuthOnly = !isDebridItem && sameClusterInitial && itemOriginUri != null && !IsSameHttpOrigin(itemOriginUri, initialUri);
+            bool stripCreds = isDebridItem || !sameClusterInitial;
+            string activeCookies = (!stripCreds && ctxItem != null && !ctxItem.MehediOmitCookies) ? (ctxItem.ShihabCookies ?? "") : "";
             string activeUaOverride = null;
             bool triedOwnUaFallback = false;
 
@@ -696,22 +969,25 @@ namespace ShihabMehediIDM
                     ctxItem,
                     rangeStart,
                     rangeEnd,
-                    stripCreds,
+                    stripCreds || stripAuthOnly,
                     ifRangeValidator,
                     stripCreds ? "" : activeCookies,
                     activeUaOverride);
                 finalActiveRequest = req;
 
                 HttpWebResponse resp = null;
+                CancellationTokenRegistration hopReg = default(CancellationTokenRegistration);
                 try
                 {
-                    using (cancelToken.Register(delegate { try { req.Abort(); } catch { } }))
+                    if (cancelToken.CanBeCanceled)
                     {
-                        resp = (HttpWebResponse)req.GetResponse();
+                        hopReg = cancelToken.Register(delegate { try { req.Abort(); } catch { } });
                     }
+                    resp = (HttpWebResponse)req.GetResponse();
                 }
                 catch (WebException wex)
                 {
+                    try { hopReg.Dispose(); } catch { }
                     HttpWebResponse errResp = wex.Response as HttpWebResponse;
                     int errCode = 0;
                     if (errResp != null)
@@ -744,10 +1020,16 @@ namespace ShihabMehediIDM
                     }
                     throw;
                 }
+                catch
+                {
+                    try { hopReg.Dispose(); } catch { }
+                    throw;
+                }
 
                 int code = (int)resp.StatusCode;
                 if (code == 301 || code == 302 || code == 303 || code == 307 || code == 308)
                 {
+                    try { hopReg.Dispose(); } catch { }
                     string loc = resp.Headers["Location"];
                     WebHeaderCollection respHdrs = resp.Headers;
                     if (!stripCreds && (ctxItem == null || !ctxItem.MehediOmitCookies))
@@ -793,6 +1075,7 @@ namespace ShihabMehediIDM
                     currentUrl = nextUri.AbsoluteUri;
                     continue;
                 }
+                activeCancelReg = hopReg;
                 return resp;
             }
             throw new IOException("Too many HTTP redirects (> " + MaxHttpRedirects + ").");
@@ -805,28 +1088,34 @@ namespace ShihabMehediIDM
             shihabMeta.ShihabContentLength = -1;
             shihabMeta.MehediSuggestedFileName = ShihabFormatHelpers.ExtractMehediFileNameFromUrl(shihabUrl);
 
-            string gdriveResolvedUrl, gdriveHintName;
-            if (ShihabDebridManager.TryResolveGoogleDriveOrDocsUrl(shihabUrl, _mehediConfig, out gdriveResolvedUrl, out gdriveHintName) &&
-                !string.IsNullOrWhiteSpace(gdriveResolvedUrl))
+            Uri initialGdriveCheckUri;
+            if (Uri.TryCreate(shihabUrl, UriKind.Absolute, out initialGdriveCheckUri) && IsGoogleDriveHost(initialGdriveCheckUri))
             {
-                shihabUrl = gdriveResolvedUrl;
-                shihabMeta.ShihabFinalUrl = gdriveResolvedUrl;
-                if (!string.IsNullOrWhiteSpace(gdriveHintName))
+                string gdriveResolvedUrl, gdriveHintName;
+                if (TryResolveGoogleDriveViaDebridManager(shihabUrl, _mehediConfig, out gdriveResolvedUrl, out gdriveHintName) &&
+                    !string.IsNullOrWhiteSpace(gdriveResolvedUrl))
                 {
-                    shihabMeta.MehediSuggestedFileName = ShihabFormatHelpers.SanitizeShihabFileName(gdriveHintName);
+                    shihabUrl = gdriveResolvedUrl;
+                    shihabMeta.ShihabFinalUrl = gdriveResolvedUrl;
+                    if (!string.IsNullOrWhiteSpace(gdriveHintName))
+                    {
+                        shihabMeta.MehediSuggestedFileName = ShihabFormatHelpers.SanitizeShihabFileName(gdriveHintName);
+                    }
                 }
             }
 
+            bool unlockedByDebrid = false;
             bool bypassDebrid = mehediContextItem != null && mehediContextItem.ShihabBypassDebrid;
-            if (!bypassDebrid)
+            if (!bypassDebrid && HasAnyConfiguredDebridAccount(_mehediConfig))
             {
                 string linkPwd = mehediContextItem != null ? (mehediContextItem.ShihabArchivePassword ?? "") : "";
                 string unrestrictedUrl, debridFileName, debridProvider;
                 int debridMaxChunks;
-                if (ShihabDebridManager.TryUnrestrictUrl(shihabUrl, linkPwd, _mehediConfig, out unrestrictedUrl, out debridFileName, out debridProvider, out debridMaxChunks) &&
+                if (TryUnrestrictViaDebridManager(shihabUrl, linkPwd, _mehediConfig, out unrestrictedUrl, out debridFileName, out debridProvider, out debridMaxChunks) &&
                     !string.IsNullOrWhiteSpace(unrestrictedUrl))
                 {
                     EmitShihabLog(string.Format("[Debrid] Unlocked via {0} (maxChunks={1}): {2}", debridProvider, debridMaxChunks, debridFileName));
+                    unlockedByDebrid = true;
                     shihabUrl = unrestrictedUrl;
                     shihabMeta.ShihabFinalUrl = unrestrictedUrl;
                     if (!string.IsNullOrWhiteSpace(debridFileName))
@@ -837,6 +1126,10 @@ namespace ShihabMehediIDM
                     {
                         mehediContextItem.ShihabTransientUnlockedUrl = unrestrictedUrl;
                         mehediContextItem.ShihabTransientMaxChunks = debridMaxChunks;
+                        if (!string.IsNullOrEmpty(mehediContextItem.ShihabId))
+                        {
+                            _debridUnlockedItemIds[mehediContextItem.ShihabId] = 1;
+                        }
                     }
                 }
             }
@@ -963,13 +1256,14 @@ namespace ShihabMehediIDM
             try
             {
                 HttpWebRequest mehediRangeProbe;
-                using (HttpWebResponse shihabResp = GetResponseWithSafeRedirects(shihabUrl, "GET", mehediContextItem, 0, 0, null, CancellationToken.None, out mehediRangeProbe))
+                using (HttpWebResponse shihabResp = GetResponseWithSafeRedirects(shihabUrl, "GET", mehediContextItem, 0, 0, null, CancellationToken.None, out mehediRangeProbe, unlockedByDebrid))
                 {
                     PopulateShihabProbeFromResponse(shihabMeta, shihabResp);
                 }
+                Uri gdriveCheckUri;
                 if (shihabMeta.ShihabIsHtmlPage &&
-                    (shihabUrl.IndexOf("drive.google.com", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                     shihabUrl.IndexOf("drive.usercontent.google.com", StringComparison.OrdinalIgnoreCase) >= 0))
+                    Uri.TryCreate(shihabUrl, UriKind.Absolute, out gdriveCheckUri) &&
+                    IsGoogleDriveHost(gdriveCheckUri))
                 {
                     TryFollowGoogleDriveConfirmationPage(shihabUrl, mehediContextItem, shihabMeta);
                 }
@@ -983,13 +1277,14 @@ namespace ShihabMehediIDM
             try
             {
                 HttpWebRequest shihabHeadReq;
-                using (HttpWebResponse mehediResp = GetResponseWithSafeRedirects(shihabUrl, "HEAD", mehediContextItem, -1, -1, null, CancellationToken.None, out shihabHeadReq))
+                using (HttpWebResponse mehediResp = GetResponseWithSafeRedirects(shihabUrl, "HEAD", mehediContextItem, -1, -1, null, CancellationToken.None, out shihabHeadReq, unlockedByDebrid))
                 {
                     PopulateShihabProbeFromResponse(shihabMeta, mehediResp);
                 }
+                Uri gdriveCheckUri;
                 if (shihabMeta.ShihabIsHtmlPage &&
-                    (shihabUrl.IndexOf("drive.google.com", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                     shihabUrl.IndexOf("drive.usercontent.google.com", StringComparison.OrdinalIgnoreCase) >= 0))
+                    Uri.TryCreate(shihabUrl, UriKind.Absolute, out gdriveCheckUri) &&
+                    IsGoogleDriveHost(gdriveCheckUri))
                 {
                     TryFollowGoogleDriveConfirmationPage(shihabUrl, mehediContextItem, shihabMeta);
                 }
@@ -1008,6 +1303,11 @@ namespace ShihabMehediIDM
         {
             try
             {
+                Uri gdInitialUri;
+                if (!Uri.TryCreate(gdriveUrl, UriKind.Absolute, out gdInitialUri) || !IsGoogleDriveHost(gdInitialUri))
+                {
+                    return;
+                }
                 HttpWebRequest htmlReq;
                 string html = "";
                 string respBaseUrl = gdriveUrl;
@@ -1017,7 +1317,7 @@ namespace ShihabMehediIDM
                     if (htmlResp.ResponseUri != null) respBaseUrl = htmlResp.ResponseUri.AbsoluteUri;
                     if (rs != null)
                     {
-                        byte[] cap = new byte[131072];
+                        byte[] cap = new byte[65536];
                         int total = 0;
                         while (total < cap.Length)
                         {
@@ -1030,11 +1330,11 @@ namespace ShihabMehediIDM
                 }
                 string confirmedUrl;
                 Uri baseUriObj;
-                if (!Uri.TryCreate(respBaseUrl, UriKind.Absolute, out baseUriObj))
+                if (!Uri.TryCreate(respBaseUrl, UriKind.Absolute, out baseUriObj) || !IsGoogleDriveHost(baseUriObj))
                 {
                     baseUriObj = new Uri("https://drive.usercontent.google.com/");
                 }
-                if (ShihabDebridManager.TryParseGoogleDriveConfirmationHtml(html, baseUriObj, out confirmedUrl) &&
+                if (TryParseGoogleDriveConfirmationViaDebridManager(html, baseUriObj, out confirmedUrl) &&
                     !string.IsNullOrWhiteSpace(confirmedUrl))
                 {
                     string confirmedName = "";

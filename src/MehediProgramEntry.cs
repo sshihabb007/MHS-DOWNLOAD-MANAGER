@@ -2,19 +2,21 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
+using System.Resources;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
-[assembly: AssemblyTitle("MHS Download Manager 1.2.2 (Mehedi Hasan Shihab)")]
-[assembly: AssemblyDescription("MHS Download Manager 1.2.2 (Mehedi Hasan Shihab) — Multi-Segment Download Accelerator, BitTorrent P2P & Browser Video Suite")]
+[assembly: AssemblyTitle("MHS Download Manager 1.2.3 (Mehedi Hasan Shihab)")]
+[assembly: AssemblyDescription("MHS Download Manager 1.2.3 (Mehedi Hasan Shihab) — Multi-Segment Download Accelerator, BitTorrent P2P & Browser Video Suite")]
 [assembly: AssemblyCompany("Mehedi Hasan Shihab (sshihabb007)")]
-[assembly: AssemblyProduct("MHS Download Manager 1.2.2 (Mehedi Hasan Shihab)")]
+[assembly: AssemblyProduct("MHS Download Manager 1.2.3 (Mehedi Hasan Shihab)")]
 [assembly: AssemblyCopyright("Copyright © Mehedi Hasan Shihab — https://sshihabb007.github.io/")]
-[assembly: AssemblyVersion("1.2.2.0")]
-[assembly: AssemblyFileVersion("1.2.2.0")]
-[assembly: AssemblyInformationalVersion("1.2.2")]
+[assembly: AssemblyVersion("1.2.3.0")]
+[assembly: AssemblyFileVersion("1.2.3.0")]
+[assembly: AssemblyInformationalVersion("1.2.3")]
+[assembly: NeutralResourcesLanguage("en-US")]
 
 namespace ShihabMehediIDM
 {

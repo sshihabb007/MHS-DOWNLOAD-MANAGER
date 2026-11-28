@@ -230,7 +230,7 @@ namespace ShihabMehediIDM
                 }
 
                 string user = cfg.ShihabProxyUser ?? "";
-                string pass = cfg.MehediProxyPassword ?? "";
+                string pass = ShihabSecretsVault.UnprotectSecret(cfg.MehediProxyPassword ?? "");
                 bool hasAuth = !string.IsNullOrEmpty(user) || !string.IsNullOrEmpty(pass);
 
                 using (NetworkStream ns = new NetworkStream(sock, false))
@@ -674,10 +674,12 @@ namespace ShihabMehediIDM
         private readonly bool[] _pieceDone;
         private readonly object _pieceLock;
         private readonly object _diskLock;
+        private readonly TorrentDiskIoCache _diskIo;
         private readonly Action<int> _onUploadedBytes;
         private readonly Action<ShihabTorrentPeerTelemetry> _onPeerUpdated;
         private TcpListener _listener;
         private CancellationTokenSource _cts;
+        private CancellationTokenRegistration _listenerCancelReg;
         private int _activeIncoming;
         private long _totalUploaded;
 
@@ -694,6 +696,20 @@ namespace ShihabMehediIDM
             object diskLock,
             Action<int> onUploadedBytes,
             Action<ShihabTorrentPeerTelemetry> onPeerUpdated)
+            : this(meta, peerId20, rootSaveDir, pieceDone, pieceLock, diskLock, null, onUploadedBytes, onPeerUpdated)
+        {
+        }
+
+        public ShihabTorrentSeedServer(
+            ShihabTorrentMetadata meta,
+            byte[] peerId20,
+            string rootSaveDir,
+            bool[] pieceDone,
+            object pieceLock,
+            object diskLock,
+            TorrentDiskIoCache diskIo,
+            Action<int> onUploadedBytes,
+            Action<ShihabTorrentPeerTelemetry> onPeerUpdated)
         {
             _meta = meta;
             _peerId20 = peerId20;
@@ -701,6 +717,7 @@ namespace ShihabMehediIDM
             _pieceDone = pieceDone;
             _pieceLock = pieceLock;
             _diskLock = diskLock;
+            _diskIo = diskIo;
             _onUploadedBytes = onUploadedBytes;
             _onPeerUpdated = onPeerUpdated;
         }
@@ -749,9 +766,15 @@ namespace ShihabMehediIDM
             ListenPort = ((IPEndPoint)_listener.LocalEndpoint).Port;
             _cts = CancellationTokenSource.CreateLinkedTokenSource(externalCancel);
             CancellationToken ct = _cts.Token;
-            ct.Register(delegate { try { if (_listener != null) _listener.Stop(); } catch { } });
+            _listenerCancelReg = ct.Register(delegate { try { if (_listener != null) _listener.Stop(); } catch { } });
 
-            Task.Run(delegate { AcceptLoop(ct); });
+            Thread acceptThread = new Thread(delegate()
+            {
+                AcceptLoop(ct);
+            });
+            acceptThread.IsBackground = true;
+            acceptThread.Name = "MHS-TorrentSeedAccept";
+            acceptThread.Start();
             return ListenPort > 0;
         }
 
@@ -817,26 +840,43 @@ namespace ShihabMehediIDM
                     if (bfPkt != null) ns.Write(bfPkt, 0, bfPkt.Length);
 
                     // Unchoke immediately to serve seeding requests
-                    ns.Write(new byte[] { 0, 0, 0, 1, 1 }, 0, 5);
+                    byte[] unchokeMsg = new byte[] { 0, 0, 0, 1, 1 };
+                    ns.Write(unchokeMsg, 0, 5);
 
                     int peerUtMetaId = 0;
                     string peerClient = ShihabTorrentManager.DecodePeerClientName(peerHs);
                     ReportPeer(remoteLabel, peerClient, "U", 0, 0);
 
+                    byte[] lenBuf = new byte[4];
+                    byte[] wireBuf = new byte[16384 + 9];
+                    byte[] pieceSendBuf = new byte[16384 + 13];
+
                     while (!ct.IsCancellationRequested)
                     {
-                        byte[] lb = ShihabTorrentManager.ReadExactStreamPublic(ns, 4);
-                        uint mLen = ShihabTorrentManager.ReadBeUInt32Public(lb, 0);
+                        ShihabTorrentManager.ReadExactStreamPublic(ns, lenBuf, 0, 4, ct);
+                        uint mLen = ShihabTorrentManager.ReadBeUInt32Public(lenBuf, 0);
                         if (mLen == 0) continue;
                         if (mLen > 2 * 1024 * 1024) break;
-                        byte[] payload = ShihabTorrentManager.ReadExactStreamPublic(ns, (int)mLen);
+
+                        int payloadLen = (int)mLen;
+                        byte[] payload;
+                        if (payloadLen <= wireBuf.Length)
+                        {
+                            ShihabTorrentManager.ReadExactStreamPublic(ns, wireBuf, 0, payloadLen, ct);
+                            payload = wireBuf;
+                        }
+                        else
+                        {
+                            payload = new byte[payloadLen];
+                            ShihabTorrentManager.ReadExactStreamPublic(ns, payload, 0, payloadLen, ct);
+                        }
                         byte msgId = payload[0];
 
                         if (msgId == 2) // Interested -> ensure unchoked
                         {
-                            ns.Write(new byte[] { 0, 0, 0, 1, 1 }, 0, 5);
+                            ns.Write(unchokeMsg, 0, 5);
                         }
-                        else if (msgId == 6 && payload.Length >= 13) // Request (piece, begin, length)
+                        else if (msgId == 6 && payloadLen >= 13) // Request (piece, begin, length)
                         {
                             int pIdx = (int)ShihabTorrentManager.ReadBeUInt32Public(payload, 1);
                             int begin = (int)ShihabTorrentManager.ReadBeUInt32Public(payload, 5);
@@ -850,16 +890,14 @@ namespace ShihabMehediIDM
                             }
                             if (!havePiece) continue;
 
-                            byte[] block = ShihabTorrentManager.ReadPieceSliceFromDisk(_meta, pIdx, begin, reqLen, _rootSaveDir, _diskLock);
-                            if (block != null && block.Length == reqLen)
+                            byte[] sendBuf = (reqLen <= 16384) ? pieceSendBuf : new byte[13 + reqLen];
+                            if (ShihabTorrentManager.ReadPieceSliceIntoBuffer(_meta, pIdx, begin, reqLen, _rootSaveDir, _diskLock, _diskIo, sendBuf, 13))
                             {
-                                byte[] pieceMsg = new byte[13 + reqLen];
-                                ShihabTorrentManager.WriteBeUInt32Public(pieceMsg, 0, (uint)(9 + reqLen));
-                                pieceMsg[4] = 7;
-                                ShihabTorrentManager.WriteBeUInt32Public(pieceMsg, 5, (uint)pIdx);
-                                ShihabTorrentManager.WriteBeUInt32Public(pieceMsg, 9, (uint)begin);
-                                Buffer.BlockCopy(block, 0, pieceMsg, 13, reqLen);
-                                ns.Write(pieceMsg, 0, pieceMsg.Length);
+                                ShihabTorrentManager.WriteBeUInt32Public(sendBuf, 0, (uint)(9 + reqLen));
+                                sendBuf[4] = 7;
+                                ShihabTorrentManager.WriteBeUInt32Public(sendBuf, 5, (uint)pIdx);
+                                ShihabTorrentManager.WriteBeUInt32Public(sendBuf, 9, (uint)begin);
+                                ns.Write(sendBuf, 0, 13 + reqLen);
 
                                 peerUploaded += reqLen;
                                 Interlocked.Add(ref _totalUploaded, reqLen);
@@ -867,13 +905,19 @@ namespace ShihabMehediIDM
                                 ReportPeer(remoteLabel, peerClient, "U", 0, peerUploaded);
                             }
                         }
-                        else if (msgId == 20 && payload.Length >= 2) // BEP-10 / BEP-9 ut_metadata serving
+                        else if (msgId == 20 && payloadLen >= 2) // BEP-10 / BEP-9 ut_metadata serving
                         {
-                            byte extId = payload[1];
+                            byte[] extPayload = payload;
+                            if (object.ReferenceEquals(payload, wireBuf) && payloadLen != wireBuf.Length)
+                            {
+                                extPayload = new byte[payloadLen];
+                                Buffer.BlockCopy(wireBuf, 0, extPayload, 0, payloadLen);
+                            }
+                            byte extId = extPayload[1];
                             if (extId == 0)
                             {
                                 int pos = 2;
-                                ShihabBencodeNode d = ShihabBencodeParser.Parse(payload, ref pos);
+                                ShihabBencodeNode d = ShihabBencodeParser.Parse(extPayload, ref pos);
                                 if (d != null && d.DictValue != null)
                                 {
                                     ShihabBencodeNode mNode, utNode, vNode;
@@ -890,7 +934,7 @@ namespace ShihabMehediIDM
                             }
                             else if (extId == 2 && peerUtMetaId > 0 && _meta.RawInfoBytes != null && _meta.RawInfoBytes.Length > 0)
                             {
-                                HandleUtMetadataRequest(ns, payload, (byte)peerUtMetaId, _meta.RawInfoBytes);
+                                HandleUtMetadataRequest(ns, extPayload, (byte)peerUtMetaId, _meta.RawInfoBytes);
                             }
                         }
                     }
@@ -906,15 +950,18 @@ namespace ShihabMehediIDM
 
         internal static void HandleUtMetadataRequest(Stream ns, byte[] payload, byte peerUtMetaId, byte[] rawInfoBytes)
         {
+            if (rawInfoBytes == null) return;
             int pos = 2;
             ShihabBencodeNode req = ShihabBencodeParser.Parse(payload, ref pos);
             if (req == null || req.DictValue == null) return;
             ShihabBencodeNode mtNode, pcNode;
             if (!req.DictValue.TryGetValue("msg_type", out mtNode) || mtNode == null || mtNode.IntValue != 0) return;
             if (!req.DictValue.TryGetValue("piece", out pcNode) || pcNode == null) return;
-            int piece = (int)pcNode.IntValue;
-            int offset = piece * 16384;
-            if (piece < 0 || offset >= rawInfoBytes.Length)
+            long pieceLong = pcNode.IntValue;
+            if (pieceLong < 0L || pieceLong > (long)int.MaxValue) return;
+            int piece = (int)pieceLong;
+            long offsetLong = (long)piece * 16384L;
+            if (offsetLong >= (long)rawInfoBytes.Length)
             {
                 Dictionary<string, object> rej = new Dictionary<string, object>(StringComparer.Ordinal);
                 rej["msg_type"] = 2;
@@ -928,6 +975,7 @@ namespace ShihabMehediIDM
                 ns.Write(rejPkt, 0, rejPkt.Length);
                 return;
             }
+            int offset = (int)offsetLong;
             int chunkLen = Math.Min(16384, rawInfoBytes.Length - offset);
             Dictionary<string, object> hdr = new Dictionary<string, object>(StringComparer.Ordinal);
             hdr["msg_type"] = 1;
@@ -980,13 +1028,20 @@ namespace ShihabMehediIDM
             });
         }
 
-        public void Dispose()
+        public void Stop()
         {
+            try { _listenerCancelReg.Dispose(); } catch { }
+            _listenerCancelReg = default(CancellationTokenRegistration);
             try { if (_cts != null) _cts.Cancel(); } catch { }
             try { if (_listener != null) _listener.Stop(); } catch { }
             try { if (_cts != null) _cts.Dispose(); } catch { }
             _listener = null;
             _cts = null;
+        }
+
+        public void Dispose()
+        {
+            Stop();
         }
     }
 }
